@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox=".625 .625 4.75 4.75" fill="none">
+<linearGradient id="a">
+<stop offset="0" stop-color="#f80"/>
+<stop offset=".25" stop-color="#f80" stop-opacity=".3"/>
+<stop offset=".25" stop-color="#f80"/>
+<stop offset=".75" stop-color="#80f"/>
+<stop offset=".75" stop-color="#80f" stop-opacity=".3"/>
+<stop offset="1" stop-color="#80f"/>
+</linearGradient>
+<path stroke="url(#a)" stroke-width=".75" d="M2 3a1 1 0 1 0 1 1V2a1 1 0 1 1 1 1z"/>
+</svg>
