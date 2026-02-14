@@ -42,7 +42,7 @@ Flux.__index = Flux
 function Flux.cleanup(obj: any)
 	local objType = typeof(obj)
 	if objType == "Instance" then
-		obj:Destroy()
+		pcall(game.Destroy, obj)
 	elseif objType == "RBXScriptConnection" then
 		if obj.Connected then
 			obj:Disconnect()
