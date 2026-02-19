@@ -191,7 +191,7 @@ end)
 --- Checks if the state has any dependencies that are deferred for an update
 function State:_dependencyUpdating()
 	for state: State<any> in self._dependencies do
-		if deferredUpdates[state] or state:_dependencyUpdating() then
+		if deferredUpdates[state] or (state._dependencyUpdating and state:_dependencyUpdating()) then
 			return true
 		end
 	end
