@@ -103,6 +103,7 @@ function State:_updateDependence()
 	end
 	return self
 end
+
 local updateDependence = State._updateDependence
 
 --- Update the value of the state respecting springs and tweens
@@ -395,6 +396,7 @@ end
 --- Destroys the state, clearing all dependencies and bindings
 function State:Destroy()
 	setmetatable(self, nil)
+	deferredUpdates[self] = nil
 
 	for dependency in self._dependencies do
 		self._dependencies[dependency] = nil
@@ -419,7 +421,10 @@ function State:Destroy()
 		table.clear(self._binds)
 	end
 
-	table.clear(self._dependents)
+	for dependent in self._dependents do
+		dependent:Destroy()
+	end
+
 	table.clear(self)
 end
 
