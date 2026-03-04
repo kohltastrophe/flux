@@ -19,6 +19,8 @@ export type BaseConstructors =
 	& New<"TextLabel", TextLabel>
 	& New<"UIAspectRatioConstraint", UIAspectRatioConstraint>
 	& New<"UICorner", UICorner>
+	& New<"UIDragDetector", UIDragDetector>
+	& New<"UIFlexItem", UIFlexItem>
 	& New<"UIGradient", UIGradient>
 	& New<"UIGridLayout", UIGridLayout>
 	& New<"UIListLayout", UIListLayout>
