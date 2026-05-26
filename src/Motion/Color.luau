@@ -1,5 +1,6 @@
---!optimize 2
+--!strict
 --!native
+--!optimize 2
 
 local sRGB = {}
 
