@@ -347,6 +347,18 @@ function Node.Destroy<T>(self: Node<T>)
 		table.clear(self._sources)
 	end
 
+	-- Sever downstream observers' references to us so they don't recurse into a cleared node
+	if self._observers ~= nil then
+		for observer in self._observers do
+			local observerSources = observer._sources
+			if observerSources ~= nil and observerSources[self] ~= nil then
+				observerSources[self] = nil
+				observer._sourcesN -= 1
+			end
+		end
+		table.clear(self._observers)
+	end
+
 	if self._cleanup ~= nil then
 		for _, fn in self._cleanup do
 			fn(self.value)

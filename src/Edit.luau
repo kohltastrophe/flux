@@ -16,19 +16,19 @@ local function edit(instance: Instance, properties: Type.Map<any>, scope: any): 
 	local actions = {}
 	local signals = {}
 
+	-- Read special keys non-destructively: the same `properties` table may be
+	-- reused (e.g. a selector matching multiple instances re-enters edit on each).
 	local __ATTR = properties.__ATTR
 	local __CLEAN = properties.__CLEAN or {}
 	local __EVENT = properties.__EVENT
 	local __REF = properties.__REF
 	local parent = properties.Parent
 
-	properties.__ATTR = nil
-	properties.__CLEAN = nil
-	properties.__EVENT = nil
-	properties.__REF = nil
-	properties.parent = nil
-
 	for property, value in properties do
+		if property == "__ATTR" or property == "__CLEAN" or property == "__EVENT" or property == "__REF" or property == "Parent" then
+			continue -- handled outside the loop
+		end
+
 		if type(property) == "number" and property == math.floor(property) then -- numeric index
 			if typeof(value) == "Instance" then -- child
 				if value:IsA("GuiObject") and value.LayoutOrder == 0 then
@@ -90,10 +90,11 @@ local function edit(instance: Instance, properties: Type.Map<any>, scope: any): 
 
 	if __EVENT ~= nil then
 		local __EVENT_ATTR = __EVENT.__ATTR
-		__EVENT.__ATTR = nil
 
 		for property, value in __EVENT do
-			if isNode(value) == true then -- value <== instance.property
+			if property == "__ATTR" then
+				continue -- handled below
+			elseif isNode(value) == true then -- value <== instance.property
 				table.insert(__CLEAN, bindFrom(value, instance, property))
 			elseif typeof((instance :: any)[property]) == "RBXScriptSignal" then -- instance.signal:Connect()
 				signals[(instance :: any)[property]] = value
