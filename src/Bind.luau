@@ -39,8 +39,16 @@ local function processBinds<T>(node: Graph.Node<T>)
 	local children = if type(value) == "table" then value else { value }
 	local count = 0
 
+	-- Build a set of incoming children so the orphan check stays O(n) for large lists
+	local incoming: { [Instance]: true } = {}
+	for _, child in children do
+		if typeof(child) == "Instance" then
+			incoming[child] = true
+		end
+	end
+
 	for _, child in list do
-		if child and child.Parent == parent and table.find(children, child) == nil then
+		if child and child.Parent == parent and incoming[child] == nil then
 			child.Parent = nil
 		end
 	end
