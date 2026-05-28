@@ -51,7 +51,7 @@ local function async<T>(fn: () -> T, initialValue: T?): Async<T>
 		_fetchId = 0,
 	}
 
-	self.effect = new(function()
+	self._effect = new(function()
 		self._fetchId += 1
 		local currentId = self._fetchId
 

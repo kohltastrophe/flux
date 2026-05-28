@@ -16,6 +16,8 @@ local function edit(instance: Instance, properties: Type.Map<any>, scope: any): 
 	local actions = {}
 	local signals = {}
 
+	-- Read special keys non-destructively: the same `properties` table may be
+	-- reused (e.g. a selector matching multiple instances re-enters edit on each).
 	local __ATTR = properties.__ATTR
 	local __CLEAN = properties.__CLEAN or {}
 	local __EVENT = properties.__EVENT
@@ -26,7 +28,7 @@ local function edit(instance: Instance, properties: Type.Map<any>, scope: any): 
 	properties.__CLEAN = nil
 	properties.__EVENT = nil
 	properties.__REF = nil
-	properties.parent = nil
+	properties.Parent = nil
 
 	for property, value in properties do
 		if type(property) == "number" and property == math.floor(property) then -- numeric index
@@ -79,6 +81,7 @@ local function edit(instance: Instance, properties: Type.Map<any>, scope: any): 
 	end
 
 	if __ATTR ~= nil then
+		properties.__ATTR = __ATTR
 		for attrName, attrVal in __ATTR do
 			if isNode(attrVal) == true then -- instance.attr <== value
 				table.insert(__CLEAN, bindTo(attrVal, instance, attrName, true))
@@ -89,6 +92,7 @@ local function edit(instance: Instance, properties: Type.Map<any>, scope: any): 
 	end
 
 	if __EVENT ~= nil then
+		properties.__EVENT = __EVENT
 		local __EVENT_ATTR = __EVENT.__ATTR
 		__EVENT.__ATTR = nil
 
@@ -103,6 +107,7 @@ local function edit(instance: Instance, properties: Type.Map<any>, scope: any): 
 		end
 
 		if __EVENT_ATTR ~= nil then
+			__EVENT.__ATTR = __EVENT_ATTR
 			for attribute, value in __EVENT_ATTR do
 				if isNode(value) == true then -- value <== instance.attr
 					table.insert(__CLEAN, bindFrom(value, instance, "$" .. attribute))
@@ -114,6 +119,7 @@ local function edit(instance: Instance, properties: Type.Map<any>, scope: any): 
 	end
 
 	if __REF ~= nil then
+		properties.__REF = __REF
 		if type(__REF) == "function" then -- pass reference to callback
 			table.insert(__CLEAN, (__REF :: any)(instance))
 		elseif isNode(__REF) == true then -- pass reference to value node
@@ -142,6 +148,7 @@ local function edit(instance: Instance, properties: Type.Map<any>, scope: any): 
 	end
 
 	if parent ~= nil then
+		properties.Parent = parent
 		if isNode(properties.Parent) == true then -- reactively drive instance.Parent from node value
 			table.insert(__CLEAN, bindTo(parent, instance, "Parent"))
 		else -- set Parent last so all children are configured before the instance enters the tree

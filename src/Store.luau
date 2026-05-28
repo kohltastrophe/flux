@@ -16,6 +16,7 @@ local proxyToNodes = {} :: { [any]: { Graph.Node<any> } }
 local STORE_SYMBOL: any = table.freeze({})
 
 local StoreMetatable
+local destroyProxy: (proxy: any) -> ()
 
 local function createProxy<T>(target: T): T
 	if proxyCache[target] then
@@ -59,6 +60,14 @@ StoreMetatable = {
 		local oldValue = rawget(target, key)
 
 		if oldValue ~= rawValue or type(rawValue) == "table" then
+			-- Tear down the displaced nested proxy so its cache entries and nodes don't outlive it
+			if type(oldValue) == "table" and oldValue ~= rawValue then
+				local oldProxy = proxyCache[oldValue]
+				if oldProxy ~= nil then
+					destroyProxy(oldProxy)
+				end
+			end
+
 			rawset(target, key, rawValue)
 
 			local nodes = proxyToNodes[proxy]
@@ -110,7 +119,7 @@ function Store.new<T>(initialState: T): T
 	return createProxy(initialState)
 end
 
-function Store.destroy<T>(proxy: T)
+function destroyProxy(proxy: any)
 	local target = proxyToRaw[proxy]
 	if not target then
 		return
@@ -132,10 +141,14 @@ function Store.destroy<T>(proxy: T)
 		if type(value) == "table" then
 			local nestedProxy = proxyCache[value]
 			if nestedProxy then
-				Store.destroy(nestedProxy)
+				destroyProxy(nestedProxy)
 			end
 		end
 	end
+end
+
+function Store.destroy<T>(proxy: T)
+	destroyProxy(proxy)
 end
 
 function Store.unwrap<T>(proxy: T): T
