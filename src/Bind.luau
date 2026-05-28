@@ -15,6 +15,9 @@ local function processBinds<T>(node: Graph.Node<T>)
 	local bind = bindData[node]
 	local value = node.value
 
+	-- Listeners follow RBXScriptSignal:Connect semantics: each runs in its own
+	-- thread so callbacks may yield without blocking siblings. For synchronous
+	-- reactive observation, use an effect instead of Bind.listen.
 	for fn in bind.fn do
 		task.spawn(fn, value)
 	end
@@ -36,32 +39,52 @@ local function processBinds<T>(node: Graph.Node<T>)
 	local list = data.list
 	local parent = data.parent
 	local layoutOrder = data.order or 1
-	local children = if type(value) == "table" then value else { value }
-	local count = 0
 
-	-- Build a set of incoming children so the orphan check stays O(n) for large lists
-	local incoming: { [Instance]: true } = {}
-	for _, child in children do
-		if typeof(child) == "Instance" then
-			incoming[child] = true
+	-- Skip the orphan-check set and per-child bookkeeping when there's only one
+	-- incoming child (common case for single-instance bindings)
+	if type(value) == "table" then
+		local children = value :: { any }
+		local count = 0
+
+		local incoming: { [Instance]: true } = {}
+		for _, child in children do
+			if typeof(child) == "Instance" then
+				incoming[child] = true
+			end
 		end
-	end
 
-	for _, child in list do
-		if child and child.Parent == parent and incoming[child] == nil then
-			child.Parent = nil
+		for _, child in list do
+			if child and child.Parent == parent and incoming[child] == nil then
+				child.Parent = nil
+			end
 		end
-	end
-	table.clear(list)
+		table.clear(list)
 
-	for _, child in children do
-		if typeof(child) == "Instance" then
+		for _, child in children do
+			if typeof(child) == "Instance" then
+				if child:IsA("GuiObject") and child.LayoutOrder == 0 then
+					child.LayoutOrder = layoutOrder
+					layoutOrder += 1
+				end
+				count += 1
+				list[count] = child
+				child.Parent = parent
+			end
+		end
+	else
+		for _, child in list do
+			if child and child.Parent == parent and child ~= value then
+				child.Parent = nil
+			end
+		end
+		table.clear(list)
+
+		if typeof(value) == "Instance" then
+			local child = value :: Instance
 			if child:IsA("GuiObject") and child.LayoutOrder == 0 then
 				child.LayoutOrder = layoutOrder
-				layoutOrder += 1
 			end
-			count += 1
-			list[count] = child
+			list[1] = child
 			child.Parent = parent
 		end
 	end
@@ -143,6 +166,10 @@ function Bind.children<T>(node: Graph.Node<T>, parent: Instance, layoutOrder: nu
 	return disconnectBind
 end
 
+--- Registers `fn` to run on each update of `node`, with `RBXScriptSignal:Connect`
+--- semantics — each invocation runs on its own thread (via `task.spawn`), so
+--- callbacks may yield freely. For synchronous reactive observation, use an
+--- effect instead.
 function Bind.listen<T>(node: Graph.Node<T>, fn: (value: T) -> ()): () -> ()
 	local fnData = getBindData(node).fn
 	fnData[fn] = true
