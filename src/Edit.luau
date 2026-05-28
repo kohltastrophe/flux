@@ -5,7 +5,7 @@ local Find = require("./Find")
 local Type = require("./Type")
 
 local FIND_SYMBOL = Find.Symbol
-local NODE_SYMBOL = Graph.Node.NODE_SYMBOL
+local NODE_SYMBOL = Graph.NODE_SYMBOL
 
 local bindFrom = Bind.from
 local bindTo = Bind.to
