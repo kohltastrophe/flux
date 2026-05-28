@@ -11,10 +11,9 @@ export default defineConfig({
 	title: "Flux",
 	description: "A next-generation reactive framework for Roblox Luau.",
 
-	base: "/flux/",
 	cleanUrls: true,
 	head: [
-		["link", { rel: "icon", href: "/flux/logo.svg" }],
+		["link", { rel: "icon", href: "logo.svg" }],
 		["meta", { property: "og:site_name", content: "Flux" }],
 		[
 			"meta",
