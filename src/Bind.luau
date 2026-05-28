@@ -1,3 +1,6 @@
+--!strict
+--!optimize 2
+
 local Graph = require("./Graph")
 
 local get = Graph.get
@@ -11,6 +14,7 @@ type BindData = {
 
 local bindData: { [Graph.Node<any>]: BindData } = {}
 
+@native
 local function processBinds<T>(node: Graph.Node<T>)
 	local bind = bindData[node]
 	local value = node.value
@@ -90,6 +94,7 @@ local function processBinds<T>(node: Graph.Node<T>)
 	end
 end
 
+@native
 local function cleanupChildrenBind<T>(node: Graph.Node<T>, parent: Instance?)
 	local data = bindData[node]
 	if data and data.children then
@@ -114,9 +119,9 @@ local function cleanupChildrenBind<T>(node: Graph.Node<T>, parent: Instance?)
 end
 
 local function getBindData<T>(node: Graph.Node<T>)
-	local data = bindData[node]
+	local data: any = bindData[node]
 
-	if not data then
+	if data == nil then
 		data = { fn = {}, rbx = {}, children = nil :: any }
 		bindData[node] = data
 

@@ -1,3 +1,7 @@
+--!strict
+--!native
+--!optimize 2
+
 local Bind = require("./Bind")
 local Clean = require("./Clean")
 local Graph = require("./Graph")
@@ -121,7 +125,7 @@ local function edit(instance: Instance, properties: Type.Map<any>, scope: any): 
 	if __REF ~= nil then
 		properties.__REF = __REF
 		if type(__REF) == "function" then -- pass reference to callback
-			table.insert(__CLEAN, (__REF :: any)(instance))
+			table.insert(__CLEAN, (__REF :: any)(instance) :: any)
 		elseif isNode(__REF) == true then -- pass reference to value node
 			__REF:set(instance)
 		end
@@ -132,7 +136,7 @@ local function edit(instance: Instance, properties: Type.Map<any>, scope: any): 
 	end
 
 	for signal, callback in signals do
-		table.insert(__CLEAN, signal:Connect(callback))
+		table.insert(__CLEAN, signal:Connect(callback) :: any)
 	end
 	table.clear(signals)
 

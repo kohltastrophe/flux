@@ -1,3 +1,7 @@
+--!strict
+--!native
+--!optimize 2
+
 local Graph = require("./Graph")
 
 local isNode = Graph.isNode

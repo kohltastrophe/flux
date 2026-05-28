@@ -1,3 +1,6 @@
+--!strict
+--!optimize 2
+
 local Defaults = require("./Defaults")
 local Flags = require("./Flags")
 local Graph = require("./Graph")
@@ -14,7 +17,11 @@ local Wrap = require("./Wrap")
 local new = Graph.new
 
 export type Node<T> = Graph.Node<T>
-export type Scope = { cleanup: { any }, constructors: any, [any]: any }
+export type Scope = {
+	cleanup: { Clean.Cleanable },
+	constructors: { [string]: (properties: Type.Map<any>) -> Instance },
+	[any]: any,
+}
 
 local Scope = {
 	__call = function<T>(self: Scope, obj: (() -> T) | T, effectOrProperty: boolean? | string?): Node<T>
@@ -31,7 +38,7 @@ local Scope = {
 }
 Scope.__index = Scope
 
-function Scope.Destroy(self)
+function Scope.Destroy(self: Scope)
 	setmetatable(self, nil)
 	setmetatable(self.constructors, nil)
 	Clean(self.cleanup)
@@ -83,7 +90,7 @@ function Scope.wrap(self: Scope, obj: { [any]: any }): { [any]: Node<any> }
 end
 
 local ConstructorsMetatable = {
-	__index = function(self, class: string)
+	__index = function(self: Scope, class: string)
 		if type(class) ~= "string" then
 			error(`String expected, got {typeof(class)}`)
 		end
@@ -107,7 +114,7 @@ local ConstructorsMetatable = {
 		end
 
 		return self[class]
-	end :: { [string]: (properties: Type.Map<any>) -> Instance },
+	end,
 }
 
 Scope.ConstructorsMetatable = ConstructorsMetatable
