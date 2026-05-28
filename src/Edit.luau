@@ -24,11 +24,13 @@ local function edit(instance: Instance, properties: Type.Map<any>, scope: any): 
 	local __REF = properties.__REF
 	local parent = properties.Parent
 
-	for property, value in properties do
-		if property == "__ATTR" or property == "__CLEAN" or property == "__EVENT" or property == "__REF" or property == "Parent" then
-			continue -- handled outside the loop
-		end
+	properties.__ATTR = nil
+	properties.__CLEAN = nil
+	properties.__EVENT = nil
+	properties.__REF = nil
+	properties.Parent = nil
 
+	for property, value in properties do
 		if type(property) == "number" and property == math.floor(property) then -- numeric index
 			if typeof(value) == "Instance" then -- child
 				if value:IsA("GuiObject") and value.LayoutOrder == 0 then
@@ -79,6 +81,7 @@ local function edit(instance: Instance, properties: Type.Map<any>, scope: any): 
 	end
 
 	if __ATTR ~= nil then
+		properties.__ATTR = __ATTR
 		for attrName, attrVal in __ATTR do
 			if isNode(attrVal) == true then -- instance.attr <== value
 				table.insert(__CLEAN, bindTo(attrVal, instance, attrName, true))
@@ -89,12 +92,12 @@ local function edit(instance: Instance, properties: Type.Map<any>, scope: any): 
 	end
 
 	if __EVENT ~= nil then
+		properties.__EVENT = __EVENT
 		local __EVENT_ATTR = __EVENT.__ATTR
+		__EVENT.__ATTR = nil
 
 		for property, value in __EVENT do
-			if property == "__ATTR" then
-				continue -- handled below
-			elseif isNode(value) == true then -- value <== instance.property
+			if isNode(value) == true then -- value <== instance.property
 				table.insert(__CLEAN, bindFrom(value, instance, property))
 			elseif typeof((instance :: any)[property]) == "RBXScriptSignal" then -- instance.signal:Connect()
 				signals[(instance :: any)[property]] = value
@@ -104,6 +107,7 @@ local function edit(instance: Instance, properties: Type.Map<any>, scope: any): 
 		end
 
 		if __EVENT_ATTR ~= nil then
+			__EVENT.__ATTR = __EVENT_ATTR
 			for attribute, value in __EVENT_ATTR do
 				if isNode(value) == true then -- value <== instance.attr
 					table.insert(__CLEAN, bindFrom(value, instance, "$" .. attribute))
@@ -115,6 +119,7 @@ local function edit(instance: Instance, properties: Type.Map<any>, scope: any): 
 	end
 
 	if __REF ~= nil then
+		properties.__REF = __REF
 		if type(__REF) == "function" then -- pass reference to callback
 			table.insert(__CLEAN, (__REF :: any)(instance))
 		elseif isNode(__REF) == true then -- pass reference to value node
@@ -143,6 +148,7 @@ local function edit(instance: Instance, properties: Type.Map<any>, scope: any): 
 	end
 
 	if parent ~= nil then
+		properties.Parent = parent
 		if isNode(properties.Parent) == true then -- reactively drive instance.Parent from node value
 			table.insert(__CLEAN, bindTo(parent, instance, "Parent"))
 		else -- set Parent last so all children are configured before the instance enters the tree
