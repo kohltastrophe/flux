@@ -1,3 +1,5 @@
+--!strict
+
 local Type = require("./Type")
 
 local Symbol = table.freeze({ type = "Symbol" }) :: Type.Symbol
