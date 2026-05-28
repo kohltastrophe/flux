@@ -207,7 +207,15 @@ end
 --- Binds a Node's value to a specific attribute or property on a Roblox Instance.
 function Bind.to<T>(node: Graph.Node<T>, instance: Instance, property: string, isAttribute: boolean?)
 	local data = getBindData(node)
-	local index = if isAttribute then 1 else 2
+	local index
+
+	if isAttribute then
+		index = 1
+		instance:SetAttribute(property, get(node))
+	else
+		index = 2
+		(instance :: any)[property] = get(node)
+	end
 
 	local binds = data.rbx[instance]
 	if binds == nil then
