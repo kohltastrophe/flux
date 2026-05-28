@@ -141,7 +141,9 @@ local function update<T>(node: Node<T>)
 	currentReaction = prevReaction
 
 	-- Handle diamond dependencies: if we've changed, mark children dirty
-	if node._observers ~= nil and oldValue ~= node.value then
+	local equals = node.equals
+	local changed = if equals ~= nil then not equals(oldValue, node.value) else oldValue ~= node.value
+	if node._observers ~= nil and changed then
 		for observer in node._observers do
 			observer.state = STATE_DIRTY
 		end
@@ -198,7 +200,8 @@ local function get<T>(node: Node<T>): T
 		-- else: already seen this run, dedupe
 	end
 
-	if node.fn then
+	-- State check is cheaper than `node.fn` nil-test and skips for value nodes (always CLEAN)
+	if node.state ~= STATE_CLEAN then
 		updateIfNecessary(node)
 	end
 
@@ -225,7 +228,9 @@ local function set<T, U>(node: Node<T>, fnOrValue: U | () -> U, force: boolean?)
 			effectSwapQueue[node] = nil
 		end
 
-		if node.value ~= fnOrValue or force then
+		local equals = node.equals
+		local changed = if equals ~= nil then not equals(node.value, fnOrValue :: any) else node.value ~= fnOrValue
+		if changed or force then
 			node.value = fnOrValue
 			if node._observers ~= nil then
 				for observer in node._observers do
@@ -249,7 +254,7 @@ end
 --- Evaluates the value of a Node without registering it as a reactive dependency. Returns primitive values as-is.
 local function raw(obj: any): any
 	if type(obj) == "table" and obj.type == NODE_SYMBOL then
-		if obj.fn then
+		if obj.state ~= STATE_CLEAN then
 			updateIfNecessary(obj)
 		end
 		return obj.value
@@ -295,6 +300,7 @@ type NodeData<T> = {
 	fn: (() -> T)?,
 	state: NodeState,
 	effect: boolean?,
+	equals: ((a: T, b: T) -> boolean)?,
 	_sourcesN: number,
 	_sources: { [Node<T>]: number },
 	_observers: { [Node<T>]: boolean },
@@ -302,18 +308,33 @@ type NodeData<T> = {
 	_destroy: { (Node<T>) -> () },
 }
 
+export type NodeOptions<T> = {
+	effect: boolean?,
+	equals: ((a: T, b: T) -> boolean)?,
+}
+
 export type Node<T> = setmetatable<NodeData<T>, typeof(Node)>
 
 --- Creates a new reactive Node.
 --- @param obj: any - The initial value, a computation function, or a Roblox Instance.
---- @param effectOrProperty: boolean? | string? - If `obj` is a function, a boolean indicating if it's an effect. If `obj` is an Instance, the property/attribute to bind to.
+--- @param effectOrOptions: (boolean | NodeOptions<T>)? - If `obj` is a function, either a boolean (effect flag) or a `NodeOptions` table: `{ effect: boolean?, equals: ((a, b) -> boolean)? }`. The `equals` callback short-circuits propagation when a new value is considered equal to the previous one. If `obj` is an Instance, the property/attribute name to bind to (handled at a higher layer).
 --- @return Node - The newly created reactive Node.
-local function createNode<T>(obj: (() -> T) | T, effect: boolean?): Node<T>
+local function createNode<T>(obj: (() -> T) | T, effectOrOptions: (boolean | NodeOptions<T>)?): Node<T>
 	if isNode(obj) then
 		return obj :: T
 	end
 
 	local isFn = type(obj) == "function"
+
+	-- effectOrOptions stays back-compatible: boolean keeps old shape, table opts in to equals
+	local effect: boolean?
+	local equals: ((a: T, b: T) -> boolean)?
+	if type(effectOrOptions) == "table" then
+		effect = (effectOrOptions :: NodeOptions<T>).effect
+		equals = (effectOrOptions :: NodeOptions<T>).equals
+	else
+		effect = effectOrOptions :: boolean?
+	end
 
 	local data = {
 		type = NODE_SYMBOL,
@@ -321,6 +342,7 @@ local function createNode<T>(obj: (() -> T) | T, effect: boolean?): Node<T>
 		fn = if isFn then obj :: () -> T else nil,
 		state = if isFn then STATE_DIRTY else STATE_CLEAN,
 		effect = effect,
+		equals = equals,
 		_sourcesN = nil :: any,
 		_sources = nil :: any,
 		_observers = nil :: any,
