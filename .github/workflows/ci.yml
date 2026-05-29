@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  Lint:
+    environment: testing
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: CompeyDev/setup-rokit@v0.1.2
+        with:
+          version: "*"
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check tool versions
+        run: |
+          rokit --version
+          luau-lsp --version
+          rojo --version
+          stylua --version
+
+      - name: Generate sourcemap
+        run: rojo sourcemap --output sourcemap.json --include-non-scripts
+
+      - name: Analyze
+        run: |
+          curl -sO https://raw.githubusercontent.com/JohnnyMorganz/luau-lsp/main/scripts/globalTypes.d.luau
+          echo '{"luau-lsp.fflags.enableNewSolver": true}' > .luau-temp-settings.json
+          luau-lsp analyze --settings=.luau-temp-settings.json --defs=globalTypes.d.luau src/ test/
+          rm globalTypes.d.luau .luau-temp-settings.json
+
+      - name: Format
+        run: stylua --check src/ test/
+
+  Test:
+    environment: testing
+    runs-on: ubuntu-latest
+    concurrency:
+      group: luau-execution
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: CompeyDev/setup-rokit@v0.1.2
+        with:
+          version: "*"
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run tests
+        run: set -e && rojo build ./test/default.project.json --output dist.rbxl && python3 ./test/upload_and_run_task.py dist.rbxl $TEST_TASK_FILE && rm dist.rbxl
+        env:
+          ROBLOX_API_KEY: ${{ secrets.ROBLOX_API_KEY }}
+          ROBLOX_UNIVERSE_ID: ${{ secrets.ROBLOX_TEST_UNIVERSE_ID }}
+          ROBLOX_PLACE_ID: ${{ secrets.ROBLOX_TEST_PLACE_ID }}
+          TEST_TASK_FILE: test/task.client.luau
