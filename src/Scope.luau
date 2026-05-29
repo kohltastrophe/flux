@@ -66,13 +66,13 @@ function Scope.async<T, U>(self: Scope, fn: () -> T, initialValue: T?): Async.As
 end
 
 function Scope.forIndex<T, U>(self: Scope, list: Node<T> | T, mapFn: (index: number, item: Node<T>) -> U): Node<U>
-	local node = For.index(list, mapFn)
+	local node = For.index(list, mapFn :: any)
 	table.insert(self.cleanup, node)
 	return node
 end
 
 function Scope.forValue<T, U>(self: Scope, list: Node<T> | T, mapFn: (index: Node<number>, value: T) -> U): Node<U>
-	local node = For.value(list, mapFn)
+	local node = For.value(list, mapFn :: any)
 	table.insert(self.cleanup, node)
 	return node
 end
