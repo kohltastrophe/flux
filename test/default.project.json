@@ -1,0 +1,12 @@
+{
+	"name": "Test Flux",
+	"emitLegacyScripts": false,
+	"tree": {
+		"$className": "DataModel",
+		"ReplicatedStorage": {
+			"Flux": {
+				"$path": "../src"
+			}
+		}
+	}
+}
