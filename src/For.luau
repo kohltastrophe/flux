@@ -12,28 +12,28 @@ export type Node<T> = Graph.Node<T>
 local module = {}
 
 local keyed: (...any) -> () = function(arr, cache, nodes, currentKeys, mapFn, result)
-	for nodeValue, key in arr do
-		currentKeys[key] = true
-		if nodes[key] ~= nil then
-			nodes[key]:set(nodeValue)
+	for index, value in arr do
+		currentKeys[value] = true
+		if nodes[value] ~= nil then
+			nodes[value]:set(index)
 		else
-			nodes[key] = new(nodeValue)
-			cache[key] = mapFn(key, nodes[key])
+			nodes[value] = new(index)
+			cache[value] = mapFn(nodes[value], value)
 		end
-		result[nodeValue] = cache[key]
+		result[index] = cache[value]
 	end
 end
 
 local unkeyed: (...any) -> () = function(arr, cache, nodes, currentKeys, mapFn, result)
-	for key, nodeValue in arr do
-		currentKeys[key] = true
-		if nodes[key] ~= nil then
-			nodes[key]:set(nodeValue)
+	for index, value in arr do
+		currentKeys[index] = true
+		if nodes[index] ~= nil then
+			nodes[index]:set(value)
 		else
-			nodes[key] = new(nodeValue)
-			cache[key] = mapFn(key, nodes[key])
+			nodes[index] = new(value)
+			cache[index] = mapFn(index, nodes[index])
 		end
-		result[key] = cache[key]
+		result[index] = cache[index]
 	end
 end
 
@@ -72,6 +72,9 @@ local function createMapper<T>(list: Node<T> | T, mapFn: any, isKeyedByValue: bo
 		for _, node in nodes do
 			node:Destroy()
 		end
+		for _, cachedResult in cache do
+			Clean(cachedResult)
+		end
 		table.clear(nodes)
 		table.clear(cache)
 	end)
@@ -84,7 +87,7 @@ end
 --- @param list Node<T> | T - The reactive array to map over.
 --- @param mapFn (index: number, value: Node<T>) -> U - The mapping function.
 --- @return Node<U> - A reactive Node containing the mapped results.
-function module.index<T, U>(list: Node<T> | T, mapFn: (index: any, item: Node<T>) -> U): Node<U>
+function module.index<T, U>(list: Node<{ T }> | { T }, mapFn: (index: any, item: Node<T>) -> U): Node<{ U }>
 	return createMapper(list, mapFn, false)
 end
 
@@ -93,7 +96,7 @@ end
 --- @param list Node<{T}> | {T} - The reactive array to map over.
 --- @param mapFn (index: Node<number>, value: T) -> U - The mapping function.
 --- @return Node<U> - A reactive Node containing the mapped results.
-function module.value<T, U>(list: Node<T> | T, mapFn: (index: Node<any>, value: T) -> U): Node<U>
+function module.value<T, U>(list: Node<{ T }> | { T }, mapFn: (index: Node<number>, value: T) -> U): Node<{ U }>
 	return createMapper(list, mapFn, true)
 end
 
