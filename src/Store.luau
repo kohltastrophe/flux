@@ -155,4 +155,57 @@ function Store.unwrap<T>(proxy: T): T
 	return (proxyToRaw[proxy] or proxy) :: T
 end
 
+function Store.insert(proxy: any, posOrValue: any, value: any?)
+	local target = proxyToRaw[proxy]
+
+	-- Fallback if the user accidentally passes a non-proxy standard table
+	if not target then
+		if value == nil then
+			table.insert(proxy, posOrValue)
+		else
+			table.insert(proxy, posOrValue, value)
+		end
+		return
+	end
+
+	local pos: number
+	local val: any
+	if value == nil then
+		pos = #target + 1
+		val = posOrValue
+	else
+		pos = posOrValue
+		val = value
+	end
+
+	-- Prevent proxy-in-proxy nesting
+	local rawValue = proxyToRaw[val] or val
+
+	table.insert(target, pos, rawValue)
+
+	local nodes = proxyToNodes[proxy]
+
+	-- If inserted in the middle, we must update the specific nodes for all shifted elements.
+	-- If appended to the end, we only check the newly created index.
+	if pos <= #target - 1 then
+		for i = pos, #target do
+			local node = nodes[i]
+			if node then
+				set(node, target[i])
+			end
+		end
+	else
+		local node = nodes[pos]
+		if node then
+			set(node, rawValue)
+		end
+	end
+
+	-- Always fire the STORE_SYMBOL so length operators (#) and __iter loops update
+	local tracker = nodes[STORE_SYMBOL]
+	if tracker then
+		set(tracker, target, true)
+	end
+end
+
 return table.freeze(Store)
