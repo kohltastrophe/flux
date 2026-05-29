@@ -309,33 +309,19 @@ type NodeData<T> = {
 	_destroy: { (Node<T>) -> () },
 }
 
-export type NodeOptions<T> = {
-	effect: boolean?,
-	equals: ((a: T, b: T) -> boolean)?,
-}
-
 export type Node<T> = setmetatable<NodeData<T>, typeof(Node)>
 
 --- Creates a new reactive Node.
 --- @param obj: any - The initial value, a computation function, or a Roblox Instance.
---- @param effectOrOptions: (boolean | NodeOptions<T>)? - If `obj` is a function, either a boolean (effect flag) or a `NodeOptions` table: `{ effect: boolean?, equals: ((a, b) -> boolean)? }`. The `equals` callback short-circuits propagation when a new value is considered equal to the previous one. If `obj` is an Instance, the property/attribute name to bind to (handled at a higher layer).
+--- @param effect: boolean? - If `obj` is a function, a boolean effect flag
+--- @param equals: ((a: T, b: T) -> boolean)? - If `obj` is a function, an optional equals callback to short-circuit propagation when a new value is considered equal to the previous one.
 --- @return Node - The newly created reactive Node.
-local function createNode<T>(obj: (() -> T) | T, effectOrOptions: (boolean | NodeOptions<T>)?): Node<T>
+local function createNode<T>(obj: (() -> T) | T, effect: boolean?, equals: ((a: T, b: T) -> boolean)?): Node<T>
 	if isNode(obj) then
 		return obj :: T
 	end
 
 	local isFn = type(obj) == "function"
-
-	-- effectOrOptions stays back-compatible: boolean keeps old shape, table opts in to equals
-	local effect: boolean?
-	local equals: ((a: T, b: T) -> boolean)?
-	if type(effectOrOptions) == "table" then
-		effect = (effectOrOptions :: NodeOptions<T>).effect
-		equals = (effectOrOptions :: NodeOptions<T>).equals
-	else
-		effect = effectOrOptions :: boolean?
-	end
 
 	local data = {
 		type = NODE_SYMBOL,
