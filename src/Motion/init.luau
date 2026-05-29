@@ -11,14 +11,6 @@ local isNode = Graph.isNode
 local raw = Graph.raw
 local read = Graph.read
 
-local Motion = {
-	Color = Color,
-	DataType = DataType,
-	Engine = Engine,
-
-	step = Engine.step,
-}
-
 local tempArray = { 0, 0, 0, 0, 0, 0, 0 }
 
 local NodeToMotion: { [Graph.Node<any>]: Engine.Spring | Engine.Tween } = {}
@@ -54,6 +46,15 @@ function MotionStateMetatable:Destroy()
 	Engine.destroy(motion)
 	Graph.Node.Destroy(self)
 end
+
+local Motion = {
+	Color = Color,
+	DataType = DataType,
+	Engine = Engine,
+	NodeToMotion = NodeToMotion,
+
+	step = Engine.step,
+}
 
 function Motion.spring<T>(target: T, frequency: number?, damping: number?): Graph.Node<T>
 	local initialVal = raw(target)
