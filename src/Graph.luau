@@ -288,8 +288,9 @@ local Node = {
 	__idiv = function(a: any, b: any): number return read(a) // read(b) end,
 	__mod = function(a: any, b: any): number return read(a) % read(b) end,
 	__pow = function(a: any, b: any): number return read(a) ^ read(b) end,
-	__lt = function(a: any, b: any): boolean return read(a) < read(b) end,
-	__le = function(a: any, b: any): boolean return read(a) <= read(b) end,
+	-- comparisons only work directly against other reactive state
+	__lt = function(a: any, b: any): boolean return get(a) < get(b) end,
+	__le = function(a: any, b: any): boolean return get(a) <= get(b) end,
 	--stylua: ignore end
 }
 Node.__index = Node
