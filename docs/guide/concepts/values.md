@@ -42,12 +42,16 @@ local count = Flux(5)
 
 print(count * 2)   --> 10
 print(count + 10)  --> 15
-print(count > 3)   --> true
 print(-count)      --> -5
 print(count .. "x") --> "5x"
+
+print(count > 3)   --> attempt to compare table < number [!code error]
 ```
 
 These overloads call `:get()`{luau} under the hood, so they also register the node as a reactive dependency when evaluated inside a computation.
+
+> [!NOTE]
+> Due to a Luau restriction with relational metamethods (`__lt` and `__le`), comparison operators like `<`, `>`, `<=`, and `>=` can only be used to compare a node against another node. If you try to compare a node directly against a primitive value _(like a number)_, Luau **will** throw an error.
 
 ## Updating a Value
 
