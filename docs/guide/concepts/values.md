@@ -12,14 +12,25 @@ If you are coming from other reactive frameworks, you can think of Values as _si
 
 ## Creating a Value
 
-Call the main `Flux` function with an initial value. Any non-function argument creates a Value node.
+Call the main `Flux` function, with an initial value. Any non-function argument implicitly creates a Value node.
+
+> [!NOTE]
+> You can also use `Flux.value`{lua} to explicitly create a Value node.
 
 ```luau
 local Flux = require(ReplicatedStorage.Flux)
 
+-- Create Values implicitly
 local count     = Flux(0)
 local name      = Flux("Roblox")
 local isVisible = Flux(true)
+
+OR
+
+-- Create Values explicitly
+local count = Flux.value(0)
+local name  = Flux.value("Roblox")
+local isVisible = Flux.value(true)
 ```
 
 ## Reading a Value

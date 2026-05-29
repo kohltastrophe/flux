@@ -14,7 +14,7 @@ If you are coming from other frameworks, you can think of Effects as `createEffe
 
 ## Creating an Effect
 
-You create an Effect by calling the main `Flux` function, passing your callback as the first argument and `true`{lua} as the second argument to mark it as an Effect.
+You create an Effect implicitly by calling the main `Flux` function, passing your callback as the first argument and `true`{lua} as the second argument to mark it as an Effect, or explicitly by using `Flux.effect`{lua}.
 
 Just like Computeds, Effects automatically track any Values or Computeds read inside their execution context.
 
@@ -24,7 +24,7 @@ local Flux = require(ReplicatedStorage.Flux)
 
 local count = Flux(0)
 
--- Create an effect by passing the function and `true`
+-- Create an effect implicitly by passing the function and `true`
 Flux(function()
     -- Prints immediately once, then again whenever 'count' changes
     print("The current count is: " .. count)
