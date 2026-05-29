@@ -42,8 +42,10 @@ Boilerplate kills momentum. Flux minimizes code through `__call` metamethods and
 
 Forget `count:get()` and `count:set(1)`. Just write `count()` and `count(1)`. Arithmetic, comparison, string concatenation, and unary operators all transparently evaluate and track dependencies; reactive expressions read exactly like plain Luau.
 
-##
+### Interested?
+
+Ready to drop the boilerplate and start building? Head over to the **[Getting Started](https://flux.kohl.gg/guide/getting-started)** guide in the documentation to learn the basics, understand the core concepts, and write your first reactive components.
 
 ### License
 
-This project is licensed under the [MIT License](LICENSE.txt).
+This project is licensed under the [MIT License](LICENSE.md).
