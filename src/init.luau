@@ -30,6 +30,7 @@ local Flux = {
 	Flags = Flags,
 	Graph = Graph,
 	Motion = Motion,
+	Store = Store,
 
 	isNode = isNode,
 	listen = Bind.listen,
