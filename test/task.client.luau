@@ -104,11 +104,9 @@ local tests = {
 
 	["04 Value · equals option short-circuits propagation"] = function()
 		-- An `equals` that always reports "equal" means writes never propagate.
-		local v = Flux(10, {
-			equals = function()
-				return true
-			end,
-		})
+		local v = Flux.value(10, function()
+			return true
+		end)
 		local runs = 0
 		local c = Flux(function()
 			runs += 1
