@@ -14,21 +14,20 @@ If you are coming from other reactive frameworks, you can think of Computeds as 
 
 ## Creating a Computed
 
-You create a Computed by calling the main `Flux` function and passing a pure function that returns the derived value.
+You create an implicit Computed by calling the main `Flux` function, and passing a pure function that returns the derived value, or explicitly by using `Flux.computed`{lua}.
 
 ```luau
 local Flux = require(ReplicatedStorage.Flux)
 
 local count = Flux(5)
 
--- Create a computed value
+-- Create a computed value implicitly
 local doubledCount = Flux(function()
     return count * 2  -- operator overloading reads count reactively
 end)
-
 ```
 
-Like Values, Computeds overload Luau's arithmetic and comparison operators, so you can use them naturally in expressions.
+Like [Values](/guide/concepts/values), Computeds overload Luau's arithmetic and comparison operators, so you can use them naturally in expressions.
 
 ## Lazy Evaluation & Caching
 

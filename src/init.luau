@@ -66,6 +66,21 @@ function FluxMT.__call<T>(self: Graph.Node<T>, obj: (() -> T) | T, effectOrPrope
 	end
 end
 
+-- Creates a new reactive value.
+Flux.value = function<T>(value: T, equals: ((a: T, b: T) -> boolean)?): Graph.Node<T>
+	return new(value, nil, equals)
+end
+
+-- Creates a new reactive computation.
+Flux.computed = function<T>(fn: () -> T, equals: ((a: T, b: T) -> boolean)?): Graph.Node<T>
+	return new(fn, nil, equals)
+end
+
+-- Creates a new reactive effect.
+Flux.effect = function<T>(fn: () -> T?, equals: ((a: T, b: T) -> boolean)?): Graph.Node<T>
+	return new(fn, true, equals)
+end
+
 --- Edits an Instance with reactive Flux bindings and other properties.
 Flux.edit = function(instance: Instance, scope: Scope.Scope?)
 	return function(properties: Type.Map<any>)
