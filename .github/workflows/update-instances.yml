@@ -12,17 +12,12 @@ jobs:
   update:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.x"
-
-      - name: Generate Instances.luau
-        run: python .github/scripts/generate_instances.py
-
-      - name: Commit changes
-        uses: stefanzweifel/git-auto-commit-action@v5
+      - run: python .github/scripts/generate_instances.py
+      - uses: stefanzweifel/git-auto-commit-action@v7
         with:
           commit_message: "chore: Update Instances.luau type definitions"
           file_pattern: "src/Type/Instances.luau"
