@@ -1,0 +1,43 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    environment: release
+    name: Build and Publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup Rokit
+        uses: CompeyDev/setup-rokit@1d9390883f7ebce19d48f5b8d006e11d387c92ab
+        with:
+          version: "*"
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build .rbxm
+        run: rojo build default.project.json --output Flux.rbxm
+
+      - name: Create Release and Attach .rbxm
+        uses: softprops/action-gh-release@v3
+        with:
+          files: Flux.rbxm
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish to Wally
+        env:
+          WALLY_AUTH: ${{ secrets.WALLY_AUTH_TOKEN }}
+        run: |
+          mkdir -p ~/.wally
+          echo "$WALLY_AUTH" > ~/.wally/auth.toml
+          wally publish

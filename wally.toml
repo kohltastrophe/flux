@@ -1,0 +1,18 @@
+[package]
+name = "kohltastrophe/flux"
+description = "A declarative, efficient, and flexible Luau library for creating user interfaces."
+authors = ["Kohl <hi@kohl.gg>"]
+version = "0.1.0"
+license = "MIT"
+registry = "https://github.com/UpliftGames/wally-index"
+realm = "shared"
+exclude = ["**"]
+include = [
+	"src",
+	"src/**",
+	"default.project.json",
+	"wally.toml",
+	"LICENSE.md",
+]
+
+[dependencies]
