@@ -29,20 +29,27 @@ jobs:
           rojo --version
           stylua --version
 
-      - name: Generate sourcemap
-        run: rojo sourcemap --output sourcemap.json --include-non-scripts
+      - name: Lint (analyze + format)
+        run: .github/scripts/lint.sh
 
-      - name: Analyze
+  Headless:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Install Luau
         run: |
-          curl -sO https://raw.githubusercontent.com/JohnnyMorganz/luau-lsp/main/scripts/globalTypes.d.luau
-          echo '{"luau-lsp.fflags.enableNewSolver": true}' > .luau-temp-settings.json
-          luau-lsp analyze --settings=.luau-temp-settings.json --defs=globalTypes.d.luau src/ test/
-          rm globalTypes.d.luau .luau-temp-settings.json
+          curl -sL https://github.com/luau-lang/luau/releases/download/0.724/luau-ubuntu.zip -o luau.zip
+          unzip -o luau.zip luau
+          chmod +x ./luau
+          rm luau.zip
 
-      - name: Format
-        run: stylua --check src/ test/
+      - name: Run headless spec
+        run: ./luau test/spec.luau
 
-  Test:
+  Roblox:
     environment: testing
     runs-on: ubuntu-latest
     concurrency:
@@ -64,4 +71,4 @@ jobs:
           ROBLOX_API_KEY: ${{ secrets.ROBLOX_API_KEY }}
           ROBLOX_UNIVERSE_ID: ${{ secrets.ROBLOX_TEST_UNIVERSE_ID }}
           ROBLOX_PLACE_ID: ${{ secrets.ROBLOX_TEST_PLACE_ID }}
-          TEST_TASK_FILE: test/task.client.luau
+          TEST_TASK_FILE: test/spec.luau
