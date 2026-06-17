@@ -288,6 +288,7 @@ export type Creatable = {
 	TextBox: TextBox,
 	TextButton: TextButton,
 	TextChannel: TextChannel,
+	TextChannelWindow: TextChannelWindow,
 	TextChatCommand: TextChatCommand,
 	TextChatMessageProperties: TextChatMessageProperties,
 	TextGenerator: TextGenerator,
