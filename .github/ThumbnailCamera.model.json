@@ -1,0 +1,38 @@
+{
+	"ClassName": "Camera",
+	"Properties": {
+		"CFrame": [2.875, 0, 0, 0, 0, 1, 0, 1, -0, -1, 0, 0],
+		"Focus": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+		"FieldOfView": 70
+	},
+	"Children": [
+		{
+			"Name": "Part",
+			"ClassName": "Part",
+			"Properties": {
+				"Anchored": true,
+				"CanCollide": false,
+				"Size": [4, 4, 0.001],
+				"CFrame": [0, 0, 0, 0, 0, -1, 0, 1, 0, 1, 0, 0],
+				"Transparency": 1,
+				"Material": "SmoothPlastic"
+			},
+			"Children": [
+				{
+					"ClassName": "SurfaceLight",
+					"Properties": {
+						"Angle": 180,
+						"Brightness": 1,
+						"Range": 16
+					}
+				},
+				{
+					"ClassName": "Decal",
+					"Properties": {
+						"Texture": "rbxassetid://125156417622760"
+					}
+				}
+			]
+		}
+	]
+}

@@ -2,9 +2,9 @@ local Graph = require("./Graph")
 local Instances = require("@self/Instances")
 
 export type Action = () -> ()
-export type Consumer = (any) -> ()
-export type Producer = () -> any
-export type Function = (any) -> any
+export type Consumer = (...any) -> ()
+export type Producer = () -> ...any
+export type Function = (...any) -> ...any
 
 export type Map<T> = { [T]: any }
 export type Symbol = { read type: "Symbol" }
@@ -35,7 +35,8 @@ export type function Properties(instance: type?)
 				result:setproperty(i, types.optional(listener))
 				events:setproperty(i, types.optional(listener))
 			elseif v.write then
-				local t = types.optional(types.unionof(v.write, types.newfunction({}, { head = { v.write } })))
+				local t =
+					types.optional(types.unionof(v.write, types.newfunction({}, { head = { v.write } }), GraphNode))
 				result:setproperty(i, t)
 			end
 		end
@@ -65,6 +66,7 @@ type Find_ChildIsA = "Find.ChildIsA"
 type Find_Descendant = "Find.Descendant"
 type Find_Parent = "Find.Parent"
 type Find_Query = "Find.Query"
+type Find_QueryFirst = "Find.QueryFirst"
 
 export type function EditProperties(instance: type?)
 	local result = Properties(instance)
@@ -79,22 +81,14 @@ export type function EditProperties(instance: type?)
 	result:setproperty(Find_Descendant, t)
 	result:setproperty(Find_Parent, t)
 	result:setproperty(Find_Query, t)
+	result:setproperty(Find_QueryFirst, t)
 
 	return result
 end
 
-type FallbackInstances = Instances.Creatable & {
-	[string]: Instance,
-}
+export type Creatable = Instances.Creatable
+export type Editable = Instances.Editable
 
-type Fallback<Name> = index<FallbackInstances, Name>
-type Resolve<Name> = index<Instances.Creatable, Name>
-
--- TODO: use an Instances.Class type with every possible class, GuiObject isn't creatable
-export type ClassSelector = <Name>(Name | keyof<Instances.Creatable>) -> (EditProperties<Fallback<Name>>) -> Selection
-export type Selector = (string) -> (EditProperties<Instance>) -> Selection
-
-export type Edit = <Inst>(Inst & Instance) -> (EditProperties<Inst>) -> Inst
-export type New = <Name>(Name | keyof<Instances.Creatable>) -> (Properties<Resolve<Name>>) -> Resolve<Name>
+export type Resolve<Name> = index<Creatable, Name>
 
 return nil

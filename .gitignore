@@ -3,3 +3,5 @@ node_modules
 docs/.vitepress/dist
 docs/.vitepress/cache
 sourcemap.json
+coverage.out
+coverage-table.txt

@@ -6,9 +6,49 @@ outline: deep
 
 # Error Handling
 
-In highly reactive systems, errors require special attention. Because Flux automatically triggers Computeds, Effects, and UI property bindings in response to state changes, an unhandled error inside one of these can halt an execution thread or leave the UI in an inconsistent state.
+In reactive systems, errors require attention. Because Flux automatically triggers Computeds, Effects, and UI property bindings in response to state changes, an unhandled error inside one of these can halt an execution thread or leave the UI in an inconsistent state.
 
-While web frameworks like SolidJS use concepts like [`<ErrorBoundary>`{ts}](https://docs.solidjs.com/reference/components/error-boundary), Flux relies on Luau's native error handling paradigms combined with reactive state patterns.
+Where web libraries like SolidJS use [`<ErrorBoundary>`{ts}](https://docs.solidjs.com/reference/components/error-boundary), Flux gives you `Flux.safe`{lua} and `Flux.catch`{lua} for structured recovery, backed by Luau's native `pcall`{luau} and reactive node patterns for everything else.
+
+## Structured Error Handling: `Flux.safe`{lua} and `Flux.catch`{lua}
+
+`Flux.safe`{luau} wraps a computation in an error boundary. It evaluates its first function; if that throws, it serves a **fallback** instead of letting the error escape. The fallback can be a plain value or a function that receives the error:
+
+```luau
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Flux = require(ReplicatedStorage.Flux)
+
+local raw = Flux('{"malformed JSON')
+
+-- A computed that can't break the graph: on a parse error it yields the fallback
+local parsed = Flux.safe(function()
+    return game:GetService("HttpService"):JSONDecode(raw())
+end, function(err)
+    warn("parse failed:", err)
+    return nil -- fallback value
+end)
+```
+
+`Flux.safe`{lua} returns an ordinary [Computed](/guide/concepts/computeds) node: bind it, read it, derive from it like any other. It is **self-healing**: the reads the protected function performs before it throws are still tracked as dependencies, so when one of them changes the boundary re-evaluates and recovers automatically. (It also takes an optional `equals` comparator as a third argument, like `Flux.computed`{lua}.)
+
+`Flux.catch`{lua} is the one-shot, non-reactive form: a try/handler that runs immediately and returns a value, useful inside a larger body:
+
+```luau
+local label = Flux(function()
+    local id = userId() -- tracked: label re-runs whenever userId changes
+    local name = Flux.catch(function()
+        return riskyLookup(id)
+    end, function()
+        return "Unknown"
+    end)
+    return "Player: " .. name
+end)
+```
+
+Both functions you pass to `Flux.catch`{lua} (the protected function and the handler) run **untracked**, so reads inside them never subscribe the surrounding computation. Reads in the enclosing body, like `userId()` above, track normally, so `label` still re-runs when `userId` changes. If the handler itself throws, the error propagates.
+
+> [!TIP]
+> Use `Flux.safe`{lua} when you want a reactive node that recovers and re-evaluates on its own; use `Flux.catch`{lua} for a local, immediate try/handler inside another computation.
 
 ## Synchronous Errors (`pcall`{luau})
 
@@ -38,6 +78,9 @@ local parsedData = Flux(function()
     return result
 end)
 ```
+
+> [!NOTE]
+> Setting `jsonError` from inside the Computed is a side effect. It is fine here (the write is idempotent and gives the error its own node for several bindings to read), but when you only need a value-or-fallback, `Flux.safe`{lua} recovers **purely**, without writing to a separate node.
 
 ## Handling Errors in the UI
 
@@ -71,14 +114,12 @@ local dataPanel = new "Frame" {
 
 Handling errors is most important when dealing with yielding operations like network requests or [`DataStore`](https://create.roblox.com/docs/en-us/reference/engine/classes/DataStoreService) calls.
 
-`Flux.async`{lua} handles this for you automatically. The wrapper runs your function inside `pcall`{luau}; if it throws, the error message is placed into the `.error` node and the game remains stable. You never need to wrap `Flux.async`{lua} in a `pcall`{luau} yourself.
+`Flux.async`{lua} handles this for you automatically. The wrapper runs your fetcher inside `pcall`{luau}; if it throws, the error message is placed into the `.error` node and the game remains stable. You never need to wrap `Flux.async`{lua} in a `pcall`{luau} yourself.
 
 ```luau
 local userId = Flux(123)
 
-local profileData = Flux.async(function()
-    local id = userId()  -- read dependency before any yield
-
+local profileData = Flux.async(userId, function(id)
     -- If this throws, profileData.error() will be set;
     -- the thread won't die and the rest of the UI keeps working.
     local raw = game:GetService("HttpService"):GetAsync(`https://api.example.com/users/{id}`)
@@ -101,23 +142,21 @@ local ui = new "TextLabel" {
 
 ## Reactive Graph Errors
 
-Flux's graph protects against two common structural problems at runtime:
+If an [Effect](/guide/concepts/effects)'s body throws while the queue flushes, Flux catches it, prints a traceback via `warn`{luau}, and keeps flushing the remaining effects so a single failing effect can't strand the rest of the frame.
 
-| Problem                                                                      | How Flux handles it                                                                        |
-| :--------------------------------------------------------------------------- | :----------------------------------------------------------------------------------------- |
-| **Cyclic write** - a node sets itself (or a cycle of nodes) while evaluating | The `BUSY` state guard raises `"Cyclic write detected"` immediately with a clear traceback |
-| **Cyclic read** - a computation depends on itself                            | Raises `"Cyclic read detected"` immediately                                                |
+A throwing [Computed](/guide/concepts/computeds) instead **propagates** the error to whoever reads it. Wrap reads that may fail in [`Flux.safe` or `Flux.catch`](#structured-error-handling-flux-safe-and-flux-catch) to recover with a fallback value.
 
-If a Computed or Effect's function throws an unexpected error, Flux catches it with `pcall`{luau}, prints a traceback via `warn`{luau}, and marks the node `DIRTY` so it will retry next time it is read or flushed. The rest of the graph continues running normally.
+> [!WARNING]
+> In normal mode, Flux does **not** detect dependency cycles: a node that reads or writes itself, directly or through a cycle of nodes, recurses until the stack overflows. [Strict mode](/guide/tips/strict) catches cycles and raises a clear error instead, one more reason to develop with it on. Either way, structure your graph so a node never depends on its own output.
 
 ## Scope Safety
 
-Sometimes an unexpected error leaves a component in a broken state. If you built that system with a **Scope**, you have an ultimate failsafe; calling `:Destroy()`{luau} on the scope still wipes all instances, disconnects all signals, and frees all memory, even if the internal reactive graph errored out.
+Sometimes an unexpected error leaves a component in a broken state. If you built that system with a **Scope**, you have a failsafe: calling `:Destroy()`{luau} on the scope still wipes all instances, disconnects all signals, and frees all memory, even if the internal reactive graph errored out.
 
 ```luau
-local roundScope = Flux.scope()
-
--- … complex, potentially error-prone UI generation …
+local roundScope = Flux.scope(function()
+    -- … complex, potentially error-prone UI generation …
+end)
 
 local function endRound()
     -- Guaranteed cleanup regardless of internal errors
@@ -125,4 +164,4 @@ local function endRound()
 end
 ```
 
-By anticipating failure points with `pcall`{luau} and relying on Scopes for memory safety, localised errors can never cascade into game-breaking memory leaks or permanently frozen interfaces.
+By anticipating failure points with `pcall`{luau} and relying on Scopes for memory safety, localized errors can't cascade into memory leaks or frozen interfaces.

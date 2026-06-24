@@ -6,6 +6,15 @@
 		"ReplicatedStorage": {
 			"Flux": {
 				"$path": "../src"
+			},
+			"sert": {
+				"$path": "sert.luau"
+			},
+			"Flux.spec": {
+				"$path": "spec.luau"
+			},
+			"Flux.unit": {
+				"$path": "unit"
 			}
 		}
 	}

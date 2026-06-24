@@ -1,0 +1,32 @@
+name: Lint
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  run:
+    environment: testing
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - uses: CompeyDev/setup-rokit@1d9390883f7ebce19d48f5b8d006e11d387c92ab
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check tool versions
+        run: |
+          rokit --version
+          luau-lsp --version
+          rojo --version
+          stylua --version
+
+      - name: Lint (analyze + format)
+        run: .github/scripts/lint.sh

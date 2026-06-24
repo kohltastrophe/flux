@@ -5,6 +5,7 @@ export interface InlineHighlightOptions {
 	getHighlighter: () => Highlighter;
 	themes?: { light: string; dark: string };
 	langAlias?: Record<string, string>;
+	languages?: string[];
 }
 
 const ANNOTATION = /^\{([\w+#.-]+)\}/;
@@ -17,7 +18,10 @@ export function inlineHighlightPlugin(
 		getHighlighter,
 		themes = { light: "github-light", dark: "github-dark" },
 		langAlias = {},
+		languages = [],
 	} = opts;
+
+	const allowed = new Set(languages);
 
 	md.core.ruler.after("inline", "inline_highlight_annotate", (state) => {
 		for (const block of state.tokens) {
@@ -30,8 +34,11 @@ export function inlineHighlightPlugin(
 				if (!next || next.type !== "text") continue;
 				const m = next.content.match(ANNOTATION);
 				if (!m) continue;
-				tok.info = m[1];
-				next.content = next.content.slice(m[0].length);
+				const resolved = langAlias[m[1]] ?? m[1];
+				if (allowed.size === 0 || allowed.has(resolved)) {
+					tok.info = m[1];
+					next.content = next.content.slice(m[0].length);
+				}
 			}
 		}
 		return true;
@@ -58,7 +65,7 @@ export function inlineHighlightPlugin(
 				lang: useLang,
 				themes,
 				defaultColor: false,
-				structure: "inline", // just colored spans — no <pre>/<code>/line wrappers
+				structure: "inline", // just colored spans, no <pre>/<code>/line wrappers
 			});
 			return `<code class="shiki-inline">${inner}</code>`;
 		} catch {

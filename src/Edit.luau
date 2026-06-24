@@ -1,70 +1,90 @@
 --!strict
---!native
---!optimize 2
 
 local Bind = require("./Bind")
 local Clean = require("./Clean")
+local Compat = require("./Compat")
 local Graph = require("./Graph")
 local Find = require("./Find")
 local Type = require("./Type")
 
 local FIND_SYMBOL = Find.Symbol
-local NODE_SYMBOL = Graph.NODE_SYMBOL
+local MODEL_SYMBOL = Bind.MODEL_SYMBOL
 
 local bindFrom = Bind.from
 local bindTo = Bind.to
 local isNode = Graph.isNode
 local newNode = Graph.new
+local getOwner = Graph.getOwner
+local onDestroy = Graph.onDestroy
 
-local function edit(instance: Instance, properties: Type.Map<any>, scope: any): Instance
+--[[
+Two-way binds `node` to `instance[property]` (or attribute): drives the
+instance from the node first so the authored value wins, then writes the node
+back on every instance-side change. Registers both teardowns on `__CLEAN`.
+]]
+local function bindModel(node: any, instance: Instance, property: string, __CLEAN: { any }, isAttribute: boolean?)
+	table.insert(__CLEAN, bindTo(node, instance, property, isAttribute))
+	local _, disconnect = bindFrom(node, instance, property, isAttribute)
+	table.insert(__CLEAN, disconnect)
+end
+
+local task = Compat.task
+
+local function edit(instance: Instance, properties: Type.Map<any>): Instance
 	local actions = {}
 	local signals = {}
 
-	-- Read special keys non-destructively: the same `properties` table may be
-	-- reused (e.g. a selector matching multiple instances re-enters edit on each).
 	local __ATTR = properties.__ATTR
-	local __CLEAN = properties.__CLEAN or {}
+	local __USER_CLEAN = properties.__CLEAN
+	local __CLEAN = if __USER_CLEAN then table.clone(__USER_CLEAN) else {}
 	local __EVENT = properties.__EVENT
 	local __REF = properties.__REF
 	local parent = properties.Parent
 
-	properties.__ATTR = nil
-	properties.__CLEAN = nil
-	properties.__EVENT = nil
-	properties.__REF = nil
-	properties.Parent = nil
-
 	for property, value in properties do
+		if
+			property == "Parent"
+			or property == "__ATTR"
+			or property == "__CLEAN"
+			or property == "__EVENT"
+			or property == "__REF"
+		then
+			continue
+		end
+
 		if type(property) == "number" and property == math.floor(property) then -- numeric index
 			if typeof(value) == "Instance" then -- child
-				if value:IsA("GuiObject") and value.LayoutOrder == 0 then
-					value.LayoutOrder = property
-				end
+				Bind.applyLayoutOrder(value, property)
 				value.Parent = instance
 			else
 				if type(value) == "function" then -- init action
 					table.insert(actions, value)
 				elseif type(value) == "table" then
 					if value[1] == FIND_SYMBOL then -- selectors
-						local result: any = value[2](instance, value[4])
-						if typeof(result) == "Instance" then
-							edit(result :: Instance, value[3], scope)
-						elseif typeof(result) == "table" then
-							for _, item in result do
-								if typeof(item) ~= "Instance" then
-									warn(`Instance expected for query {value[3]}, got {typeof(item)}`)
-									continue
-								end
-								edit(item :: Instance, value[3], scope)
-							end
-						else
-							warn(`Instance expected for query {value[3]}, got {typeof(result)}`)
-						end
-					elseif value.type == NODE_SYMBOL and value.effect == true then
+						Find.resolve(value, instance, function(found: Instance, props: Type.Map<any>)
+							edit(found, props)
+						end)
+					elseif isNode(value) == true then -- children binder (e.g. forValue/forIndex)
 						table.insert(__CLEAN, Bind.children(value, instance, property))
+					elseif value[1] ~= MODEL_SYMBOL then -- assume plain array of children
+						local order = property
+						for _, child in value do
+							if typeof(child) == "Instance" then
+								order = Bind.applyLayoutOrder(child, order)
+								child.Parent = instance
+							elseif isNode(child) == true then
+								table.insert(__CLEAN, Bind.children(child, instance, order))
+								order += 1
+							end
+						end
 					end
 				end
 			end
+			continue
+		end
+
+		if type(value) == "table" and value[1] == MODEL_SYMBOL then -- two-way binding (Flux.model)
+			bindModel(value[2], instance, property, __CLEAN)
 			continue
 		end
 
@@ -75,6 +95,7 @@ local function edit(instance: Instance, properties: Type.Map<any>, scope: any): 
 				continue
 			end
 			value = newNode(value) -- implicit memo
+			table.insert(__CLEAN, value)
 		end
 
 		if isNode(value) == true then -- instance.property <== value
@@ -84,10 +105,11 @@ local function edit(instance: Instance, properties: Type.Map<any>, scope: any): 
 		end
 	end
 
-	if __ATTR ~= nil then
-		properties.__ATTR = __ATTR
+	if __ATTR then
 		for attrName, attrVal in __ATTR do
-			if isNode(attrVal) == true then -- instance.attr <== value
+			if type(attrVal) == "table" and attrVal[1] == MODEL_SYMBOL then -- two-way binding (Flux.model)
+				bindModel(attrVal[2], instance, attrName, __CLEAN, true)
+			elseif isNode(attrVal) == true then -- instance.attr <== value
 				table.insert(__CLEAN, bindTo(attrVal, instance, attrName, true))
 			else -- assign to attr
 				instance:SetAttribute(attrName, attrVal)
@@ -95,14 +117,14 @@ local function edit(instance: Instance, properties: Type.Map<any>, scope: any): 
 		end
 	end
 
-	if __EVENT ~= nil then
-		properties.__EVENT = __EVENT
+	if __EVENT then
 		local __EVENT_ATTR = __EVENT.__ATTR
 		__EVENT.__ATTR = nil
 
 		for property, value in __EVENT do
 			if isNode(value) == true then -- value <== instance.property
-				table.insert(__CLEAN, bindFrom(value, instance, property))
+				local _, disconnect = bindFrom(value, instance, property)
+				table.insert(__CLEAN, disconnect)
 			elseif typeof((instance :: any)[property]) == "RBXScriptSignal" then -- instance.signal:Connect()
 				signals[(instance :: any)[property]] = value
 			else -- instance.property:Connect()
@@ -110,11 +132,12 @@ local function edit(instance: Instance, properties: Type.Map<any>, scope: any): 
 			end
 		end
 
-		if __EVENT_ATTR ~= nil then
+		if __EVENT_ATTR then
 			__EVENT.__ATTR = __EVENT_ATTR
 			for attribute, value in __EVENT_ATTR do
 				if isNode(value) == true then -- value <== instance.attr
-					table.insert(__CLEAN, bindFrom(value, instance, "$" .. attribute))
+					local _, disconnect = bindFrom(value, instance, attribute, true)
+					table.insert(__CLEAN, disconnect)
 				else -- instance.attr:Connect()
 					table.insert(__CLEAN, instance:GetAttributeChangedSignal(attribute):Connect(value))
 				end
@@ -122,8 +145,7 @@ local function edit(instance: Instance, properties: Type.Map<any>, scope: any): 
 		end
 	end
 
-	if __REF ~= nil then
-		properties.__REF = __REF
+	if __REF then
 		if type(__REF) == "function" then -- pass reference to callback
 			table.insert(__CLEAN, (__REF :: any)(instance) :: any)
 		elseif isNode(__REF) == true then -- pass reference to value node
@@ -138,24 +160,29 @@ local function edit(instance: Instance, properties: Type.Map<any>, scope: any): 
 	for signal, callback in signals do
 		table.insert(__CLEAN, signal:Connect(callback) :: any)
 	end
-	table.clear(signals)
 
-	if next(__CLEAN) then
+	local parentIsNode = isNode(parent) == true
+
+	if parentIsNode or next(__CLEAN) ~= nil then
 		local connection = instance.Destroying:Once(function()
 			Clean(__CLEAN)
+			table.clear(__CLEAN)
 		end)
 
-		if scope ~= nil then
-			table.insert(scope.cleanup, connection)
-			table.insert(scope.cleanup, __CLEAN)
+		if getOwner() then
+			onDestroy(function()
+				connection:Disconnect()
+				Clean(__CLEAN)
+				table.clear(__CLEAN)
+			end)
 		end
 	end
 
-	if parent ~= nil then
-		properties.Parent = parent
-		if isNode(properties.Parent) == true then -- reactively drive instance.Parent from node value
+	if parent then
+		if parentIsNode == true then -- reactively drive instance.Parent from node value
 			table.insert(__CLEAN, bindTo(parent, instance, "Parent"))
-		else -- set Parent last so all children are configured before the instance enters the tree
+		else
+			-- set Parent last so all children are configured before the instance enters the tree
 			instance.Parent = parent
 		end
 	end

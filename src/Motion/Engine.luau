@@ -1,14 +1,13 @@
 --!strict
---!native
---!optimize 2
 
-local TweenService = game:GetService("TweenService")
-
+local Compat = require("../Compat")
 local DataType = require("./DataType")
 local Graph = require("../Graph")
 
-local setNode = Graph.set
-local UNPACK = DataType.unpack
+local TweenService: TweenService = if Compat.isRoblox then game:GetService("TweenService") else nil :: any
+
+local setNode = Graph.Node.set
+local unpackerFor = DataType.unpacker
 
 local Engine = { now = os.clock() }
 
@@ -16,11 +15,15 @@ local TYPE_TWEEN = 1
 local TYPE_SPRING = 2
 local EPSILON = 1e-4
 
+Engine.TYPE_TWEEN = TYPE_TWEEN
+Engine.TYPE_SPRING = TYPE_SPRING
+
 export type Motion = {
 	type: number,
 	count: number,
 	node: Graph.Node<any>,
 	typeString: string,
+	unpack: ({ number }) -> any,
 	target: { number },
 	value: { number },
 	vel: { number },
@@ -47,7 +50,8 @@ function Engine.newSpring(count: number, typeString: string, node: any): Spring
 		type = TYPE_SPRING,
 		count = count,
 		node = node,
-		typeString = typeString or "number",
+		typeString = typeString,
+		unpack = unpackerFor(typeString) :: any,
 
 		target = table.create(count, 0),
 		value = table.create(count, 0),
@@ -63,7 +67,8 @@ function Engine.newTween(count: number, typeString: string, node: any): Tween
 		type = TYPE_TWEEN,
 		count = count,
 		node = node,
-		typeString = typeString or "number",
+		typeString = typeString,
+		unpack = unpackerFor(typeString) :: any,
 
 		start = table.create(count, 0),
 		target = table.create(count, 0),
@@ -84,22 +89,18 @@ function Engine.destroy(motion: Spring | Tween)
 end
 
 function Engine.setupSpring(spring: Spring, frequency: number?, damping: number?)
-	spring.type = TYPE_SPRING
-	spring.frequency = frequency or 1
-	spring.damping = damping or 1
+	spring.frequency = math.max(frequency or 1, EPSILON)
+	spring.damping = math.max(damping or 1, EPSILON)
 
 	activeSprings[spring] = spring.node
 end
 
-function Engine.setupTween(tween: Tween, tweenInfo: TweenInfo)
-	if tweenInfo == nil then
-		tweenInfo = TweenInfo.new(0.3, Enum.EasingStyle.Cubic, Enum.EasingDirection.InOut)
-	end
+function Engine.setupTween(tween: Tween, tweenInfo: TweenInfo?)
+	local info = tweenInfo or TweenInfo.new(0.3, Enum.EasingStyle.Cubic, Enum.EasingDirection.InOut)
 
-	tween.type = TYPE_TWEEN
-	tween.info = tweenInfo
-	tween.startTime = Engine.now + tweenInfo.DelayTime
-	tween.repeatsLeft = tweenInfo.RepeatCount
+	tween.info = info
+	tween.startTime = Engine.now + info.DelayTime
+	tween.repeatsLeft = info.RepeatCount
 	tween.reversing = false
 
 	local start = tween.start
@@ -160,7 +161,23 @@ function Engine.setTarget(motion: Spring | Tween, arr: { number })
 	activeMap[motion] = motion.node
 end
 
-local function stepSpring(motion: Spring, now: number, dt: number)
+function Engine.addVelocity(spring: Spring, arr: { number })
+	local vel = spring.vel
+	for i = 1, math.min(#arr, spring.count) do
+		vel[i] += arr[i]
+	end
+	activeSprings[spring] = spring.node
+end
+
+function Engine.setVelocity(spring: Spring, arr: { number })
+	local vel = spring.vel
+	for i = 1, math.min(#arr, spring.count) do
+		vel[i] = arr[i]
+	end
+	activeSprings[spring] = spring.node
+end
+
+local function stepSpring(motion: Spring, dt: number)
 	local f = motion.frequency
 	local d = motion.damping
 	local w = math.tau * f
@@ -233,7 +250,7 @@ local function stepTween(tween: Tween, now: number)
 		if tInfo.Reverses and not isReversing then
 			tween.reversing = true
 			tween.startTime += duration
-			alpha = (now - tween.startTime) / duration
+			alpha = if duration > 0 then (now - tween.startTime) / duration else 1
 			isReversing = true
 		else
 			if tween.repeatsLeft > 0 or tInfo.RepeatCount < 0 then
@@ -242,7 +259,7 @@ local function stepTween(tween: Tween, now: number)
 				end
 				tween.reversing = false
 				tween.startTime += duration
-				alpha = (now - tween.startTime) / duration
+				alpha = if duration > 0 then (now - tween.startTime) / duration else 1
 				isReversing = false
 			else
 				alpha = 1
@@ -251,6 +268,7 @@ local function stepTween(tween: Tween, now: number)
 		end
 	end
 
+	alpha = math.clamp(alpha, 0, 1)
 	alpha = TweenService:GetValue(alpha, tInfo.EasingStyle, tInfo.EasingDirection)
 	if isReversing then
 		alpha = 1 - alpha
@@ -262,20 +280,22 @@ local function stepTween(tween: Tween, now: number)
 	end
 end
 
-function Engine.step()
-	local now = os.clock()
+function Engine.step(now: number?)
+	now = (now or os.clock()) :: number
 	local dt = now - Engine.now
 	Engine.now = now
 
 	for spring: Spring, node: Graph.Node<any> in activeSprings do
-		stepSpring(spring, now, dt)
-		setNode(node, UNPACK(spring.value, spring.typeString))
+		stepSpring(spring, dt)
+		setNode(node, spring.unpack(spring.value))
 	end
 
 	for tween: Tween, node: Graph.Node<any> in activeTweens do
 		stepTween(tween, now)
-		setNode(node, UNPACK(tween.value, tween.typeString))
+		setNode(node, tween.unpack(tween.value))
 	end
 end
 
+-- not frozen: `Engine.now` is mutable per-frame state, written by `Engine.step`
+-- (and rewound by the test `advance` helper)
 return Engine
