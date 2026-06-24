@@ -25,11 +25,13 @@ _Flux is a declarative Luau library for creating user interfaces. It runs on fin
 
 <picture><img src="docs/public/autocomplete.min.svg" width="396" alt="Editor autocomplete for Flux: choosing the Frame class, completing the inherited Name property, and a type error on an invalid property."></picture>
 
-<p align="justify">
+</div>
+
 Flux exploits Luau's type checker to its absolute limit, if you're going to be lazy, your editor should do the heavy lifting. The moment you declare an instance like a TextLabel or a Frame, you get zero-guesswork autocomplete for every valid property, event, and expected type.
-</p>
 
 ---
+
+<div align ="center">
 
 **Declarative creation** · **Reactive expressions** · **Terse syntax**
 
@@ -55,9 +57,7 @@ new "ScreenGui" {
 }
 ```
 
-<p align="justify">
-Flux cuts boilerplate with <code>__call</code> metamethods and full <b>operator overloading</b> on every reactive node, so your keystrokes can be just as lazy as the engine under the hood. This means you can forget <code>:get()</code> and <code>:set(1)</code>, just use <code>count()</code> to read and <code>count(1)</code> to write. Arithmetic, comparison, and concatenation operators automatically subscribe, so reactive expressions read like the plain Luau around them.
-</p>
+Flux cuts boilerplate with `__call` metamethods and full <b>operator overloading</b> on every reactive node, so your keystrokes can be just as lazy as the engine under the hood. This means you can forget `:get()` and `:set(1)`, just use `count()` to read and `count(1)` to write. Arithmetic, comparison, and concatenation operators automatically subscribe, so reactive expressions read like the plain Luau around them.
 
 </div>
 
@@ -69,11 +69,9 @@ Flux cuts boilerplate with <code>__call</code> metamethods and full <b>operator 
 
 <a href="https://github.com/kohltastrophe/luau-reactivity-benchmark"><img src="https://raw.githubusercontent.com/kohltastrophe/luau-reactivity-benchmark/assets/chart-small.svg" width="100%" alt="Luau reactivity benchmark"></a>
 
-<p align="justify">
-Most reactive libraries lean on topological sorting, dirty-checking, or a virtual DOM, all of which carry real overhead on the Luau VM. Flux avoids that overhead by being uncompromisingly lazy. It evaluates absolutely nothing until a value is explicitly observed, ensuring that only the exact work a change strictly requires is ever calculated. No over-fetching, no premature rendering, and no wasted CPU cycles; just maximum performance through pure, optimal laziness.
-</p>
-
 </div>
+
+Most reactive libraries lean on topological sorting, dirty-checking, or a virtual DOM, all of which carry real overhead on the Luau VM. Flux avoids that overhead by being uncompromisingly lazy. It evaluates absolutely nothing until a value is explicitly observed, ensuring that only the exact work a change strictly requires is ever calculated. No over-fetching, no premature rendering, and no wasted CPU cycles; just maximum performance through pure, optimal laziness.
 
 ---
 
