@@ -1,3 +1,7 @@
+if game == nil then
+	return {} :: { [string]: { [string]: unknown } }
+end
+
 return {
 	Part = {
 		Material = Enum.Material.SmoothPlastic,

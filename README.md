@@ -1,51 +1,109 @@
-<img align="left" src="docs/public/logo.svg" width="128" alt="Flux" />
-<a href="https://github.com/kohltastrophe/Flux/releases"><img align="right" src=".github/img/link-download-dark.svg" alt="Download"></a>
-<a href="http://kohltastrophe.github.io/flux"><img align="right" src=".github/img/link-docs-dark.svg" alt="Docs"></a>
+<div align="right">
+<a href="https://flux.kohl.gg"><img align="left" src="docs/public/logo.svg" width="128" alt="Flux"></a>
+<a href="https://flux.kohl.gg"><picture><source media="(prefers-color-scheme: dark)" srcset=".github/img/link-docs-dark.svg"><img alt="Docs" src=".github/img/link-docs.svg"></picture></a>
+<a href="https://github.com/kohltastrophe/flux/releases"><picture><source media="(prefers-color-scheme: dark)" srcset=".github/img/link-download-dark.svg"><img alt="Download" src=".github/img/link-download.svg"></picture></a>
+<a href="https://create.roblox.com/store/asset/18506925834"><picture><source media="(prefers-color-scheme: dark)" srcset=".github/img/link-creator-dark.svg"><img alt="Get it on the Creator Marketplace" src=".github/img/link-creator.svg"></picture></a>
+</div>
 <br/>
 <br/>
 <br/>
 <br/>
-<br/>
 
-# Write less. Type better. Run faster.
+<div align="center">
 
-_A next-generation reactive framework for Luau. Powered by a heavily optimized graph algorithm, strictly typed for uncompromising IntelliSense, and built with a terse syntax that makes building interfaces genuinely fun._
+# Be lazy. Do more. Go fast.
 
-### Why Flux?
+_Flux is a declarative Luau library for creating user interfaces. It runs on fine-grained lazy reactions, is strictly typed for accurate IntelliSense, and keeps the syntax terse enough that interfaces read almost like plain Luau._
 
-The Roblox open-source ecosystem has incredible UI frameworks. Flux was built by studying them, identifying their pain points, and engineering a solution that puts developer experience, type accuracy, and raw execution speed above all else.
+[![CI](https://img.shields.io/github/actions/workflow/status/kohltastrophe/flux/ci.yml?style=for-the-badge)](https://github.com/kohltastrophe/flux/actions/workflows/ci.yml) [![Coverage](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/kohltastrophe/a15338bf8bb30072e690acf47a8e0266/raw/flux-coverage.json&style=for-the-badge)](https://github.com/kohltastrophe/flux/actions/workflows/ci.yml) [![License](https://img.shields.io/github/license/kohltastrophe/flux?style=for-the-badge)](LICENSE.md) [![GitHub Release](https://img.shields.io/github/v/release/kohltastrophe/flux?style=for-the-badge)](https://github.com/kohltastrophe/flux/releases)
 
-#### Next-Generation Speed (Luau-Tuned)
+---
 
-Most reactive frameworks rely on topological sorting, dirty-checking, or heavy virtual-DOM architectures that carry significant overhead for the Luau VM.
+**Simple errors** · **Smart suggestions** · **Strict autocomplete**
 
-Flux runs on a **modified graph coloring algorithm** tuned specifically for Luau's execution environment. Its four-state cache model (`CLEAN`, `CHECK`, `DIRTY`, `BUSY`) means:
+### Be lazy $$\color{#8888}\text{ yet effective}$$
 
-- **Zero redundant recomputation** - `CLEAN` nodes are skipped instantly without inspecting their function.
-- **Short-circuit propagation** - A `CHECK` node walks its dependency tree and bails out the moment it can prove nothing has changed.
-- **Glitch-free evaluation** - The "diamond problem" is resolved without batching hacks; each node is evaluated at most once per flush cycle.
-- **Cycle detection at zero cost** - The `BUSY` state catches cyclic writes immediately with a clear error rather than silently hanging.
+<picture><img src="docs/public/autocomplete.min.svg" width="396" alt="Editor autocomplete for Flux: choosing the Frame class, completing the inherited Name property, and a type error on an invalid property."></picture>
 
-Effects are batched and flushed in a single `Heartbeat` tick, keeping your UI perfectly in sync without unnecessary intermediate renders.
+<p align="justify">
+Flux exploits Luau's type checker to its absolute limit, if you're going to be lazy, your editor should do the heavy lifting. The moment you declare an instance like a TextLabel or a Frame, you get zero-guesswork autocomplete for every valid property, event, and expected type.
+</p>
 
-#### Uncompromising Type Safety
+---
 
-Luau's type checker struggles with deeply nested dictionary properties, often producing broken autocomplete or cryptic cascade errors. Flux was engineered from the ground up to conquer `--!strict` mode.
+**Declarative creation** · **Reactive expressions** · **Terse syntax**
 
-- **Smart Instance Suggestion:** Flux knows what you're building the moment you name the class.
-- **Strict Property Autocomplete:** Every property, event, and attribute is typed at the point of use.
-- **Relevant Type Errors:** When things go wrong, Flux surfaces accurate, readable errors, not a wall of inference failures.
+### Do more $$\color{#8888}\text{ with less}$$
 
-#### Zero-Boilerplate Syntax
+<div align="left">
 
-Boilerplate kills momentum. Flux minimizes code through `__call` metamethods and complete **operator overloading** on every reactive node.
+```luau
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Flux = require(ReplicatedStorage.Flux)
+local new = Flux.new
 
-Forget `count:get()` and `count:set(1)`. Just write `count()` and `count(1)`. Arithmetic, comparison, string concatenation, and unary operators all transparently evaluate and track dependencies; reactive expressions read exactly like plain Luau.
+local count = Flux(0)
 
-### Interested?
+new "ScreenGui" {
+	Parent = playerGui,
 
-Ready to drop the boilerplate and start building? Head over to the **[Getting Started](https://flux.kohl.gg/guide/getting-started)** guide in the documentation to learn the basics, understand the core concepts, and write your first reactive components.
+	new "TextButton" {
+		Size = UDim2.fromOffset(200, 50),
+		Text = function() return `Clicks: {count}` end,
+		Activated = function() count(count + 1) end,
+	},
+}
+```
 
-### License
+<p align="justify">
+Flux cuts boilerplate with <code>__call</code> metamethods and full <b>operator overloading</b> on every reactive node, so your keystrokes can be just as lazy as the engine under the hood. This means you can forget <code>:get()</code> and <code>:set(1)</code>, just use <code>count()</code> to read and <code>count(1)</code> to write. Arithmetic, comparison, and concatenation operators automatically subscribe, so reactive expressions read like the plain Luau around them.
+</p>
 
-This project is licensed under the [MIT License](LICENSE.md).
+</div>
+
+---
+
+**Aggressively lazy** · **Glitch-free updates** · **Zero wasted effort**
+
+### Go fast $$\color{#8888}\text{ stay lazy}$$
+
+<a href="https://github.com/kohltastrophe/luau-reactivity-benchmark"><img src="https://raw.githubusercontent.com/kohltastrophe/luau-reactivity-benchmark/assets/chart-small.svg" width="100%" alt="Luau reactivity benchmark"></a>
+
+<p align="justify">
+Most reactive libraries lean on topological sorting, dirty-checking, or a virtual DOM, all of which carry real overhead on the Luau VM. Flux avoids that overhead by being uncompromisingly lazy. It evaluates absolutely nothing until a value is explicitly observed, ensuring that only the exact work a change strictly requires is ever calculated. No over-fetching, no premature rendering, and no wasted CPU cycles; just maximum performance through pure, optimal laziness.
+</p>
+
+</div>
+
+---
+
+## Batteries Included
+
+Lazy reactivity is the engine. On top of it, Flux ships the rest of what you need to build interfaces, all strictly typed:
+
+- **Reactive primitives** - [`signal`](https://flux.kohl.gg/guide/concepts/signals), [`computed`](https://flux.kohl.gg/guide/concepts/computeds), and [`effect`](https://flux.kohl.gg/guide/concepts/effects), plus [stores](https://flux.kohl.gg/guide/concepts/stores) and [context](https://flux.kohl.gg/guide/concepts/context) for shared state, and [`wrap`](https://flux.kohl.gg/guide/concepts/wrapping) to turn plain tables into reactive ones.
+- **Declarative instances:** [`new`](https://flux.kohl.gg/guide/roblox/creation) to build and [`edit`](https://flux.kohl.gg/guide/roblox/hydration) to hydrate existing Instances, with scoped lifecycles and cleanup.
+- **Lifecycle & cleanup** - [`scope`](https://flux.kohl.gg/guide/concepts/scopes) tracks every node, instance, and effect it creates and tears them all down with a single `Destroy`, including nested child scopes.
+- **Control flow** - [`show`](https://flux.kohl.gg/guide/concepts/conditionals) and [`switch`](https://flux.kohl.gg/guide/concepts/conditionals) for conditional rendering, [`forValue` / `forIndex`](https://flux.kohl.gg/guide/concepts/mapping) for keyed mapping, and [`selector`](https://flux.kohl.gg/guide/concepts/selectors) for O(1) selection in large lists.
+- **Motion:** physics [springs](https://flux.kohl.gg/guide/motion/spring), [tweens](https://flux.kohl.gg/guide/motion/tween), and perceptual [color](https://flux.kohl.gg/guide/motion/color) interpolation, all stepped once per frame.
+- **Responsive & layout:** [`viewport`, `scale`, and `breakpoint`](https://flux.kohl.gg/guide/utilities/responsive) helpers alongside [`padding`, `list`, `grid`, and `flex`](https://flux.kohl.gg/guide/utilities/layout).
+- **Async & safety:** [`async`](https://flux.kohl.gg/guide/concepts/async) tasks, [error boundaries](https://flux.kohl.gg/guide/tips/errors), and a [`strict` mode](https://flux.kohl.gg/guide/tips/strict) that catches impure computations in development.
+
+## Installation
+
+Download the latest `Flux.rbxm` from [Releases](https://github.com/kohltastrophe/flux/releases), drop it into Roblox Studio, and place the module in `ReplicatedStorage`. Rojo users can sync the `src` directory directly.
+
+From there, the **[Getting Started](https://flux.kohl.gg/guide/getting-started)** guide covers the core concepts and your first reactive components.
+
+## Acknowledgements
+
+Flux is heavily inspired by:
+
+- **[Vide](https://github.com/centau/vide)**
+- **[SolidJS](https://github.com/solidjs/solid)**
+- **[Reactively](https://github.com/milomg/reactively)**
+- **[Fusion](https://github.com/dphfox/Fusion)**
+
+## License
+
+Flux is released under the [MIT License](LICENSE.md).

@@ -1,8 +1,8 @@
 [package]
 name = "kohltastrophe/flux"
-description = "A declarative, efficient, and flexible Luau library for creating user interfaces."
+description = "Lazy fine-grained reactivity for Luau."
 authors = ["Kohl <hi@kohl.gg>"]
-version = "0.1.0"
+version = "0.0.0"
 license = "MIT"
 registry = "https://github.com/UpliftGames/wally-index"
 realm = "shared"

@@ -1,0 +1,9 @@
+{
+	"name": "Flux",
+	"tree": {
+		"$path": "../src",
+		"ThumbnailCamera": {
+			"$path": "ThumbnailCamera.model.json"
+		}
+	}
+}

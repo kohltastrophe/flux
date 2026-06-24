@@ -7,26 +7,52 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 jobs:
+  verify-ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Wait for CI to pass on this commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          while true; do
+            RESULT=$(gh api \
+              "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push" \
+              --jq '.workflow_runs | sort_by(.run_number) | last | "\(.status // "none") \(.conclusion // "none")"') || RESULT="none none"
+            STATUS="${RESULT%% *}"
+            CONCLUSION="${RESULT##* }"
+            echo "CI status=$STATUS conclusion=$CONCLUSION"
+            if [ "$STATUS" = "completed" ]; then
+              [ "$CONCLUSION" = "success" ] && exit 0
+              echo "::error::CI concluded '$CONCLUSION' for $GITHUB_SHA"
+              exit 1
+            fi
+            echo "CI not finished yet; waiting 15s..."
+            sleep 15
+          done
+
   publish:
+    needs: verify-ci
     environment: release
-    name: Build and Publish
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Setup Rokit
-        uses: CompeyDev/setup-rokit@1d9390883f7ebce19d48f5b8d006e11d387c92ab
+      - uses: CompeyDev/setup-rokit@1d9390883f7ebce19d48f5b8d006e11d387c92ab
         with:
-          version: "*"
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build .rbxm
         run: rojo build default.project.json --output Flux.rbxm
 
-      - name: Create Release and Attach .rbxm
+      - name: Build model .rbxm
+        run: rojo build .github/model.project.json --output Flux-Model.rbxm
+
+      - name: Create release and attach .rbxm
         uses: softprops/action-gh-release@v3
         with:
           files: Flux.rbxm
@@ -34,10 +60,42 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Set wally.toml version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          sed -i 's/^version = ".*"$/version = "'"$VERSION"'"/' wally.toml
+
       - name: Publish to Wally
         env:
           WALLY_AUTH: ${{ secrets.WALLY_AUTH_TOKEN }}
         run: |
           mkdir -p ~/.wally
-          echo "$WALLY_AUTH" > ~/.wally/auth.toml
+          printf '[tokens]\n"https://api.wally.run/" = "%s"\n' "$WALLY_AUTH" > ~/.wally/auth.toml
           wally publish
+
+      - name: Commit version bump
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git checkout -f -B main origin/main
+          sed -i 's/^version = ".*"$/version = "'"$VERSION"'"/' wally.toml
+          if git diff --quiet wally.toml; then
+            echo "wally.toml already at $VERSION, nothing to commit"
+          else
+            git add wally.toml
+            git commit -m "chore: bump wally.toml to $VERSION"
+            git push origin main
+          fi
+
+      - name: Publish model to Creator Store
+        env:
+          MODEL_TOKEN: ${{ secrets.MODEL_TOKEN }}
+          MODEL_ASSET_ID: 18506925834
+        run: |
+          curl --fail-with-body -sS -X PATCH \
+            "https://apis.roblox.com/assets/v1/assets/$MODEL_ASSET_ID" \
+            -H "x-api-key: $MODEL_TOKEN" \
+            -F 'request={"assetId":"'"$MODEL_ASSET_ID"'"};type=application/json' \
+            -F "fileContent=@Flux-Model.rbxm;type=model/x-rbxm"

@@ -4,14 +4,20 @@ import { inlineHighlightPlugin } from "./inline-highlight";
 
 const themes = { light: "github-light", dark: "github-dark" };
 
+const languages = ["luau", "lua", "ts"];
+
 let highlighter: Highlighter;
 
 // https://vitepress.dev/reference/site-config
 export default defineConfig({
 	title: "Flux",
-	description: "A next-generation reactive framework for Roblox Luau.",
+	description:
+		"A declarative, efficient, and flexible Luau library for creating user interfaces.",
 
 	cleanUrls: true,
+	lastUpdated: true,
+	sitemap: { hostname: "https://flux.kohl.gg" },
+	srcExclude: ["**/snippets/**"],
 	head: [
 		["link", { rel: "icon", href: "logo.svg" }],
 		["meta", { property: "og:site_name", content: "Flux" }],
@@ -19,7 +25,8 @@ export default defineConfig({
 			"meta",
 			{
 				property: "og:title",
-				content: "Flux - A next-generation reactive framework for Luau.",
+				content:
+					"Flux - A declarative, efficient, and flexible Luau library for creating user interfaces.",
 			},
 		],
 		[
@@ -34,19 +41,16 @@ export default defineConfig({
 			"meta",
 			{
 				property: "og:image",
-				content: "https://kohltastrophe.github.io/flux/logo.svg",
+				content: "https://flux.kohl.gg/logo.png",
 			},
 		],
-		[
-			"meta",
-			{ property: "og:url", content: "https://kohltastrophe.github.io/flux/" },
-		],
+		["meta", { property: "og:url", content: "https://flux.kohl.gg/" }],
 	],
 
 	markdown: {
 		defaultHighlightLang: "luau",
 
-		languages: ["luau", "lua", "ts"],
+		languages,
 
 		theme: themes,
 
@@ -58,6 +62,7 @@ export default defineConfig({
 			md.use(inlineHighlightPlugin, {
 				getHighlighter: () => highlighter,
 				themes,
+				languages,
 			});
 		},
 	},
@@ -70,7 +75,7 @@ export default defineConfig({
 		nav: [
 			{ text: "Home", link: "/" },
 			{ text: "Guide", link: "/guide/" },
-			// { text: "Reference", link: "/api/" },
+			{ text: "Reference", link: "/api/" },
 		],
 
 		sidebar: {
@@ -86,14 +91,30 @@ export default defineConfig({
 				{
 					text: "Concepts",
 					items: [
-						{ text: "Values", link: "/guide/concepts/values" },
+						{ text: "Signals", link: "/guide/concepts/signals" },
 						{ text: "Computeds", link: "/guide/concepts/computeds" },
 						{ text: "Effects", link: "/guide/concepts/effects" },
 						{ text: "Scopes", link: "/guide/concepts/scopes" },
 						{ text: "Async", link: "/guide/concepts/async" },
 						{ text: "Mapping", link: "/guide/concepts/mapping" },
+						{
+							text: "Conditional rendering",
+							link: "/guide/concepts/conditionals",
+						},
+						{ text: "Selectors", link: "/guide/concepts/selectors" },
 						{ text: "Stores", link: "/guide/concepts/stores" },
 						{ text: "Wrapping", link: "/guide/concepts/wrapping" },
+						{ text: "Tracking", link: "/guide/concepts/tracking" },
+						{ text: "Components", link: "/guide/concepts/components" },
+						{ text: "Context", link: "/guide/concepts/context" },
+					],
+				},
+				{
+					text: "Roblox",
+					items: [
+						{ text: "Creation", link: "/guide/roblox/creation" },
+						{ text: "Hydration", link: "/guide/roblox/hydration" },
+						{ text: "Defaults", link: "/guide/roblox/defaults" },
 					],
 				},
 				{
@@ -101,25 +122,32 @@ export default defineConfig({
 					items: [
 						{ text: "Spring", link: "/guide/motion/spring" },
 						{ text: "Tween", link: "/guide/motion/tween" },
+						{ text: "Color", link: "/guide/motion/color" },
 					],
 				},
 				{
-					text: "Roblox",
+					text: "Utilities",
 					items: [
-						{ text: "Hydration", link: "/guide/roblox/hydration" },
-						{ text: "Creation", link: "/guide/roblox/creation" },
+						{ text: "Responsive", link: "/guide/utilities/responsive" },
+						{ text: "Layout", link: "/guide/utilities/layout" },
 					],
 				},
 				{
 					text: "Tips",
 					items: [
-						{ text: "Components", link: "/guide/tips/components" },
 						{ text: "Optimization", link: "/guide/tips/optimization" },
 						{ text: "Error Handling", link: "/guide/tips/errors" },
 						{ text: "Sharing State", link: "/guide/tips/sharing" },
+						{ text: "Testing", link: "/guide/tips/testing" },
+						{ text: "Strict mode", link: "/guide/tips/strict" },
 					],
 				},
 			],
+		},
+
+		editLink: {
+			pattern: "https://github.com/kohltastrophe/flux/edit/main/docs/:path",
+			text: "Edit this page on GitHub",
 		},
 
 		search: {

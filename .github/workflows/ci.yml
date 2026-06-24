@@ -9,30 +9,8 @@ on:
       - main
 
 jobs:
-  Lint:
+  headless:
     environment: testing
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          submodules: recursive
-
-      - uses: CompeyDev/setup-rokit@1d9390883f7ebce19d48f5b8d006e11d387c92ab
-        with:
-          version: "*"
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Check tool versions
-        run: |
-          rokit --version
-          luau-lsp --version
-          rojo --version
-          stylua --version
-
-      - name: Lint (analyze + format)
-        run: .github/scripts/lint.sh
-
-  Headless:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -49,7 +27,34 @@ jobs:
       - name: Run headless spec
         run: ./luau test/spec.luau
 
-  Roblox:
+      - name: Measure coverage
+        id: cov
+        run: |
+          ./luau --coverage test/spec.luau > /dev/null
+          PCT=$(python3 .github/scripts/coverage.py 2> coverage-table.txt)
+          echo "pct=$PCT" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Headless coverage: ${PCT}%"
+            echo ''
+            echo '```'
+            cat coverage-table.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Update coverage badge
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: schneegans/dynamic-badges-action@v1.7.0
+        with:
+          auth: ${{ secrets.GIST_KEY }}
+          gistID: ${{ secrets.GIST_ID }}
+          filename: flux-coverage.json
+          label: coverage
+          message: ${{ steps.cov.outputs.pct }}%
+          valColorRange: ${{ steps.cov.outputs.pct }}
+          minColorRange: 50
+          maxColorRange: 90
+
+  roblox:
     environment: testing
     runs-on: ubuntu-latest
     concurrency:
@@ -62,7 +67,6 @@ jobs:
 
       - uses: CompeyDev/setup-rokit@1d9390883f7ebce19d48f5b8d006e11d387c92ab
         with:
-          version: "*"
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run tests
