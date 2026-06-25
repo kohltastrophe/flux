@@ -19,23 +19,19 @@ _Flux is a declarative Luau library for creating user interfaces. It runs on fin
 
 ---
 
-**Simple errors** · **Smart suggestions** · **Strict autocomplete**
-
-### Be lazy $$\color{#8888}\text{ yet effective}$$
+<picture><source media="(prefers-color-scheme: dark)" srcset=".github/img/h3-lazy-dark.svg"><img alt="Be lazy yet effective" src=".github/img/h3-lazy.svg"></picture>
 
 <picture><img src="docs/public/autocomplete.min.svg" width="396" alt="Editor autocomplete for Flux: choosing the Frame class, completing the inherited Name property, and a type error on an invalid property."></picture>
 
 </div>
 
-Flux exploits Luau's type checker to its absolute limit, if you're going to be lazy, your editor should do the heavy lifting. The moment you declare an instance like a TextLabel or a Frame, you get zero-guesswork autocomplete for every valid property, event, and expected type.
+Flux exploits Luau's type checker to its absolute limit, if you're going to be lazy, your editor should do the heavy lifting. The moment you declare an instance like a `TextLabel` or a `Frame`, you get zero-guesswork autocomplete for every valid property, event, and expected type.
 
 ---
 
 <div align ="center">
 
-**Declarative creation** · **Reactive expressions** · **Terse syntax**
-
-### Do more $$\color{#8888}\text{ with less}$$
+<picture><source media="(prefers-color-scheme: dark)" srcset=".github/img/h3-more-dark.svg"><img alt="Do more with less" src=".github/img/h3-more.svg"></picture>
 
 <div align="left">
 
@@ -63,9 +59,7 @@ Flux cuts boilerplate with `__call` metamethods and full <b>operator overloading
 
 ---
 
-**Aggressively lazy** · **Glitch-free updates** · **Zero wasted effort**
-
-### Go fast $$\color{#8888}\text{ stay lazy}$$
+<picture><source media="(prefers-color-scheme: dark)" srcset=".github/img/h3-fast-dark.svg"><img alt="Go fast stay lazy" src=".github/img/h3-fast.svg"></picture>
 
 <a href="https://github.com/kohltastrophe/luau-reactivity-benchmark"><img src="https://raw.githubusercontent.com/kohltastrophe/luau-reactivity-benchmark/assets/chart-small.svg" width="100%" alt="Luau reactivity benchmark"></a>
 
