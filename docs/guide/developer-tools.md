@@ -63,7 +63,7 @@ return Counter
 
 ### UI Labs
 
-[UI Labs](https://github.com/PepeElToro41/ui-labs) is a modern previewer with live hot-reloading and a typed **controls** panel for tweaking props while the component runs. A story is a `.story.luau`{luau} ModuleScript; its `story`{luau} function mounts into `props.target`{luau} and returns the cleanup:
+[UI Labs](https://github.com/PepeElToro41/ui-labs) is a modern previewer with live hot-reloading and a typed **controls** panel for tweaking props while the component runs. It ships built-in reconcilers for React, Fusion, Vide, and Iris; Flux is none of those, so you write a [generic story](https://ui-labs.luau.page/docs/stories/advanced/generic) for it: a `.story.luau`{luau} ModuleScript returning a table with a `controls`{luau} field and a `render`{luau} function. `render`{luau} receives a `props`{luau} table, mounts into `props.target`{lua}, and returns the cleanup:
 
 ```luau
 -- Counter.story.luau
@@ -72,8 +72,8 @@ local Flux = require(ReplicatedStorage.Flux)
 local Counter = require(script.Parent.Counter)
 
 return {
-    summary = "A reactive counter",
-    story = function(props)
+    controls = {},
+    render = function(props)
         local scope, root = Flux.scope(Counter)
         root.Parent = props.target
         return function()
@@ -83,9 +83,11 @@ return {
 }
 ```
 
+Leave `controls`{luau} empty for a static preview, or populate it to drive the component from the panel (see [Adding controls](#adding-controls) below).
+
 ### Flipbook
 
-[Flipbook](https://github.com/flipbook-labs/flipbook) is an actively maintained storybook with controls and native support for React, Fusion, and Roact. The story table is the same shape; its mount target is `props.container`{luau}:
+[Flipbook](https://github.com/flipbook-labs/flipbook) is an actively maintained storybook with a controls panel and native support for React, Fusion, and Roact. Its story is a table whose `story`{luau} function mounts into `props.container`{lua} and returns the cleanup:
 
 ```luau
 -- Counter.story.luau
@@ -125,3 +127,76 @@ end
 ```
 
 Because this format is the simplest and predates the others, both UI Labs and Flipbook read Hoarcekat stories too, making a bare `function(target)`{luau} story the most portable option.
+
+### Adding controls
+
+UI Labs and Flipbook both render a **controls panel** from a `controls`{luau} table of default values, but they deliver edits differently: Flipbook re-runs the whole story on every change, while UI Labs mounts once and streams new values through `props.subscribe`{lua}. Either way, you funnel the control into a Flux signal your component reads.
+
+First, give `Counter`{luau} a `step`{luau} signal to drive:
+
+```luau
+local function Counter(step)
+    local count = Flux(0)
+    return Flux.new "TextButton" {
+        Size = UDim2.fromOffset(200, 50),
+        Text = function() return `Clicks: {count}` end,
+        Activated = function() count(count + step()) end,
+    }
+end
+```
+
+**Flipbook** re-runs the story whenever a control changes, so read `props.controls`{lua} as you build and let the re-run carry the new value:
+
+```luau
+-- Counter.story.luau
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Flux = require(ReplicatedStorage.Flux)
+local Counter = require(script.Parent.Counter)
+
+return {
+    summary = "A reactive counter",
+    controls = {
+        step = 1,
+    },
+    story = function(props)
+        local step = Flux(props.controls.step)
+        local scope, root = Flux.scope(function()
+            return Counter(step)
+        end)
+        root.Parent = props.container
+        return function()
+            scope:Destroy()
+        end
+    end,
+}
+```
+
+**UI Labs** runs `render`{luau} once, so seed the signal from `props.controls`{lua} and update it from `props.subscribe`{lua}, which fires on every change:
+
+```luau
+-- Counter.story.luau
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Flux = require(ReplicatedStorage.Flux)
+local Counter = require(script.Parent.Counter)
+
+return {
+    controls = {
+        step = 1,
+    },
+    render = function(props)
+        local step = Flux(props.controls.step)
+        props.subscribe(function(values)
+            step(values.step)
+        end)
+        local scope, root = Flux.scope(function()
+            return Counter(step)
+        end)
+        root.Parent = props.target
+        return function()
+            scope:Destroy()
+        end
+    end,
+}
+```
+
+Because Flipbook re-runs the story, the click count resets on each control change; UI Labs updates the signal in place, so it persists. For many controls at once, UI Labs also ships `CreateControlStates`{luau} and `UpdateControlStates`{luau} helpers that map the whole `props.controls`{lua} table to signals in one call, as shown in [Using a custom UI library](https://ui-labs.luau.page/docs/stories/advanced/generic#using-a-custom-ui-library).
