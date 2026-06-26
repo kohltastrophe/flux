@@ -1,3 +1,4 @@
+--!nocheck
 export type Creatable = {
 	Accessory: Accessory,
 	AccessoryDescription: AccessoryDescription,
