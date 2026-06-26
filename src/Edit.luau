@@ -135,7 +135,7 @@ local function edit(instance: Instance, properties: Type.Map<any>): Instance
 				signals[(instance :: any)[property]] = value
 			else -- instance.property:Connect()
 				local disconnect = instance:GetPropertyChangedSignal(property):Connect(function()
-					value(instance[property])
+					value((instance :: any)[property])
 				end)
 				table.insert(__CLEAN, disconnect)
 			end
