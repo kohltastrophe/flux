@@ -2,7 +2,7 @@
 name = "kohltastrophe/flux"
 description = "Lazy fine-grained reactivity for Luau."
 authors = ["Kohl <hi@kohl.gg>"]
-version = "0.1.1"
+version = "0.1.2"
 license = "MIT"
 registry = "https://github.com/UpliftGames/wally-index"
 realm = "shared"
