@@ -12,7 +12,7 @@ local isNode = Graph.isNode
 local raw = Graph.raw
 local read = Graph.read
 
-type motions<T> = {
+type Spring<T> = {
 	impulse: (self: Graph.Node<T>, delta: T) -> (),
 	setVelocity: (self: Graph.Node<T>, velocity: T) -> (),
 }
@@ -159,7 +159,7 @@ subscribe to the live animated value.
 
 [Open Documentation](https://flux.kohl.gg/guide/motion/spring#basic-usage)
 ]]
-function Motion.spring<T, K>(target: T, frequency: number?, damping: number?): Graph.Node<T> & motions<T>
+function Motion.spring<T>(target: T, frequency: number?, damping: number?): Graph.Node<T> & Spring<T>
 	local initialVal = raw(target)
 	local typeStr = typeof(initialVal)
 
