@@ -109,10 +109,16 @@ local function edit(instance: Instance, properties: Type.Map<any>): Instance
 		for attrName, attrVal in __ATTR do
 			if type(attrVal) == "table" and attrVal[1] == MODEL_SYMBOL then -- two-way binding (Flux.model)
 				bindModel(attrVal[2], instance, attrName, __CLEAN, true)
-			elseif isNode(attrVal) == true then -- instance.attr <== value
-				table.insert(__CLEAN, bindTo(attrVal, instance, attrName, true))
-			else -- assign to attr
-				instance:SetAttribute(attrName, attrVal)
+			else
+				if type(attrVal) == "function" then
+					attrVal = newNode(attrVal) -- implicit memo
+					table.insert(__CLEAN, attrVal)
+				end
+				if isNode(attrVal) then -- instance.attr <== value
+					table.insert(__CLEAN, bindTo(attrVal, instance, attrName, true))
+				else -- assign to attr
+					instance:SetAttribute(attrName, attrVal)
+				end
 			end
 		end
 	end
