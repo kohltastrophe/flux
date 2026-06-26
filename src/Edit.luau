@@ -128,6 +128,9 @@ local function edit(instance: Instance, properties: Type.Map<any>): Instance
 			elseif typeof((instance :: any)[property]) == "RBXScriptSignal" then -- instance.signal:Connect()
 				signals[(instance :: any)[property]] = value
 			else -- instance.property:Connect()
+				local disconnect = instance:GetPropertyChangedSignal(property):Connect(function()
+					value(instance[property])
+				end)
 				table.insert(__CLEAN, instance:GetPropertyChangedSignal(property):Connect(value))
 			end
 		end
@@ -139,7 +142,12 @@ local function edit(instance: Instance, properties: Type.Map<any>): Instance
 					local _, disconnect = bindFrom(value, instance, attribute, true)
 					table.insert(__CLEAN, disconnect)
 				else -- instance.attr:Connect()
-					table.insert(__CLEAN, instance:GetAttributeChangedSignal(attribute):Connect(value))
+					table.insert(
+						__CLEAN,
+						instance:GetAttributeChangedSignal(attribute):Connect(function()
+							value(instance:GetAttribute(attribute))
+						end)
+					)
 				end
 			end
 		end
