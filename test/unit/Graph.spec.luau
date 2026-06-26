@@ -541,7 +541,7 @@ test("scope · cascade teardown strips owned reactions like a direct Destroy; si
 	direct() -- evaluate the reaction
 	direct:Destroy()
 	expect(Flux.isNode(direct) == true, "directly destroyed reaction keeps its metatable")
-	expect(direct() == nil and next(direct._) == nil, "its inner table is present but stripped")
+	expect(direct() == nil and next(direct[Flux.Graph.Node.__type]) == nil, "its inner table is present but stripped")
 
 	local leaf, nested, signal
 	local root = Flux.scope(function()
@@ -773,11 +773,11 @@ test("dispose · destroying a source prunes only that source from observers", fu
 
 	a:Destroy()
 
-	local sources = c._[SOURCES]
+	local sources = c[Flux.Graph.Node.__type][SOURCES]
 	local hasLive, hasDead = false, false
 	for _, node in sources do
-		hasLive = hasLive or node == b._
-		hasDead = hasDead or node == a._
+		hasLive = hasLive or node == b[Flux.Graph.Node.__type]
+		hasDead = hasDead or node == a[Flux.Graph.Node.__type]
 	end
 	expect(hasLive, "the live sibling source b is retained")
 	expect(not hasDead, "the destroyed source a is pruned")

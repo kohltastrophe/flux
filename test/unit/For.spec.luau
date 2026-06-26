@@ -173,9 +173,10 @@ test("for · eviction-scan reads stay untracked (no leaked mapper dependency)", 
 	list:set({ "a" }) -- evicts "b"; its cleanup reads dep
 	mapped:get()
 	-- white-box: node deps live at node._[7] (SOURCES), holding source data tables
-	local sources = mapped._[7]
-	expect(sources ~= nil and table.find(sources, dep._) == nil, "cleanup read did not leak into deps")
-	expect(table.find(sources, list._) ~= nil, "list remains the mapper's only dependency")
+	local key = Flux.Graph.Node.__type
+	local sources = mapped[key][7]
+	expect(sources ~= nil and table.find(sources, dep[key]) == nil, "cleanup read did not leak into deps")
+	expect(table.find(sources, list[key]) ~= nil, "list remains the mapper's only dependency")
 end)
 
 test("for · cleanup inside mapFn scopes to the row (Solid <For> per-row root)", function()

@@ -80,8 +80,10 @@ local strict_mode = not is_O2
 local Node
 local update: (node) -> ()
 
+local NODE_KEY = table.freeze({ type = "node" })
+
 local function isNode(object: unknown): boolean
-	return type(object) == "table" and getmetatable(object) == Node
+	return type(object) == "table" and object[NODE_KEY] ~= nil
 end
 
 local function isReactive(): boolean
@@ -451,14 +453,14 @@ end
 
 local function raw(object: any): any
 	if isNode(object) then
-		return peekData(object._)
+		return peekData(object[NODE_KEY])
 	end
 	return object
 end
 
 local function read(object: any): any
 	if isNode(object) then
-		return getData(object._)
+		return getData(object[NODE_KEY])
 	end
 	return object
 end
@@ -545,7 +547,7 @@ end
 
 local function withOwner<T>(node: Node<any>, fn: () -> ...T): T
 	local prevOwner = currentOwner
-	currentOwner = if node then node._ else nil
+	currentOwner = if node then node[NODE_KEY] else nil
 	local ok, result = xpcall(fn, debug.traceback :: any)
 	currentOwner = prevOwner
 	if not ok then
@@ -597,7 +599,7 @@ local function adopt(node: node): node
 end
 
 local function wrap<T>(node: { T }): Node<T>
-	return setmetatable({ _ = node }, Node) :: any
+	return setmetatable({ [NODE_KEY] = node }, Node) :: any
 end
 
 local function scope<T>(fn: (scope: Node<any>) -> T): (Node<any>, T)
@@ -605,7 +607,7 @@ local function scope<T>(fn: (scope: Node<any>) -> T): (Node<any>, T)
 
 	local prevOwner, prevReaction = currentOwner, currentReaction
 	local prevSources, prevSourcesIndex = currentSources, currentSourcesIndex
-	currentOwner, currentReaction = node._, nil
+	currentOwner, currentReaction = node[NODE_KEY], nil
 	currentSources, currentSourcesIndex = nil, 0
 	local ok, result = xpcall(fn, debug.traceback :: any, node)
 	currentOwner, currentReaction = prevOwner, prevReaction
@@ -647,7 +649,7 @@ local function new<T>(obj: T, isEffect: boolean?, equals: ((T, T) -> boolean)?):
 end
 
 local function destroyPublic<T>(node: NodeData<T>)
-	dispose(if isNode(node) then node._ else node :: node)
+	dispose(if isNode(node) then node[NODE_KEY] else node :: node)
 end
 
 type NodeData<T> = { _: { T } }
@@ -658,11 +660,11 @@ Node = {
 	--stylua: ignore start
 	-- callable getter/setter shorthand: node() reads, node(v, force?) writes. node(nil) is a
 	-- READ (can't tell nil-arg from no-arg cheaply); write nil with node(nil, true) or node:set(nil).
-	__call = function<T>(self: NodeData<T>, value: T?, force: any?): T return if force or value ~= nil then setData(self._, value, force) else getData(self._) end,
+	__call = function<T>(self: NodeData<T>, value: T?, force: any?): T return if force or value ~= nil then setData(self[NODE_KEY], value, force) else getData(self[NODE_KEY]) end,
 	--operator overloads to allow Nodes to be used transparently in logic operations
 	__concat = function(a: DataOrString, b: DataOrString): string return read(a) .. read(b) end,
-	__tostring = function<T>(a: NodeData<T>): string return tostring(getData(a._)) end,
-	__unm = function(a: NodeData<number>): number return -getData(a._) end,
+	__tostring = function<T>(a: NodeData<T>): string return tostring(getData(a[NODE_KEY])) end,
+	__unm = function(a: NodeData<number>): number return -getData(a[NODE_KEY]) end,
 	__add = function(a: DataOrNumber, b: DataOrNumber): number return read(a) + read(b) end,
 	__sub = function(a: DataOrNumber, b: DataOrNumber): number return read(a) - read(b) end,
 	__mul = function(a: DataOrNumber, b: DataOrNumber): number return read(a) * read(b) end,
@@ -671,9 +673,10 @@ Node = {
 	__mod = function(a: DataOrNumber, b: DataOrNumber): number return read(a) % read(b) end,
 	__pow = function(a: DataOrNumber, b: DataOrNumber): number return read(a) ^ read(b) end,
 	-- comparisons only work directly against other reactive state
-	__lt = function<T>(a: NodeData<T>, b: NodeData<T>): boolean return getData(a._) < getData(b._) end,
-	__le = function<T>(a: NodeData<T>, b: NodeData<T>): boolean return getData(a._) <= getData(b._) end,
+	__lt = function<T>(a: NodeData<T>, b: NodeData<T>): boolean return getData(a[NODE_KEY]) < getData(b[NODE_KEY]) end,
+	__le = function<T>(a: NodeData<T>, b: NodeData<T>): boolean return getData(a[NODE_KEY]) <= getData(b[NODE_KEY]) end,
 	--stylua: ignore end
+	__type = NODE_KEY,
 }
 Node.__index = Node
 
@@ -685,7 +688,7 @@ Reads a node's up-to-date value WITHOUT subscribing the caller.
 [Open Documentation](https://flux.kohl.gg/guide/concepts/signals#reading-a-signal)
 ]]
 function Node.peek<T>(self: Node<T>): T
-	return peekData(self._)
+	return peekData(self[NODE_KEY])
 end
 
 --[[
@@ -697,7 +700,7 @@ To read without subscribing, use [`node:peek()`](https://flux.kohl.gg/guide/conc
 [Open Documentation](https://flux.kohl.gg/guide/concepts/signals#reading-a-signal)
 ]]
 function Node.get<T>(self: Node<T>): T
-	return getData(self._)
+	return getData(self[NODE_KEY])
 end
 
 --[[
@@ -708,7 +711,7 @@ as `true` to notify dependents anyway, the idiomatic way to push an in-place tab
 [Open Documentation](https://flux.kohl.gg/guide/concepts/signals#updating-a-signal)
 ]]
 function Node.set<T>(self: Node<T>, value: T, force: boolean?): T
-	return setData(self._, value, force)
+	return setData(self[NODE_KEY], value, force)
 end
 
 --[[
@@ -722,7 +725,7 @@ Destroys a node, severing every reactive link to its sources and observers, runn
 [Open Documentation](https://flux.kohl.gg/guide/concepts/signals#destroying-a-signal)
 ]]
 function Node.Destroy<T>(self: Node<T>)
-	dispose(self._ :: node)
+	dispose(self[NODE_KEY] :: node)
 end
 
 --[[
@@ -734,7 +737,7 @@ explicit `node:Destroy()` (otherwise the signal is just GC'd, silently). Stacks 
 [Open Documentation](https://flux.kohl.gg/guide/concepts/signals#destroying-a-signal)
 ]]
 function Node.onDestroy<T>(self: Node<T>, fn: (oldValue: T) -> ())
-	onDestroy(self._, fn)
+	onDestroy(self[NODE_KEY], fn)
 end
 
 local Graph = {
@@ -881,7 +884,7 @@ Destroys a node, severing every reactive link to its sources and observers, runn
 	destroy = destroyPublic,
 	onDestroy = function(fn: () -> (), scope: Node<any>?)
 		if scope then
-			onDestroy(if isNode(scope) then (scope :: Node<any>)._ else scope, fn)
+			onDestroy(if isNode(scope) then (scope :: Node<any>)[NODE_KEY] else scope, fn)
 		elseif currentOwner then
 			onDestroy(currentOwner, fn)
 		end

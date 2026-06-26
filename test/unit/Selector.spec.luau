@@ -121,9 +121,12 @@ test("selector · destroy tears down watcher and per-key nodes", function()
 	end, true)
 	flush()
 	local n1 = sel._nodes[1]
-	expect(next(n1._) ~= nil, "per-key node live")
+	expect(next(n1[Flux.Graph.Node.__type]) ~= nil, "per-key node live")
 	sel:destroy()
-	expect(Flux.isNode(n1) and next(n1._) == nil, "per-key node destroyed (metatable kept, inner table stripped)")
+	expect(
+		Flux.isNode(n1) and next(n1[Flux.Graph.Node.__type]) == nil,
+		"per-key node destroyed (metatable kept, inner table stripped)"
+	)
 	expect((pcall(function()
 		sel(1)
 	end)) == false, "post-destroy read errors")
@@ -143,9 +146,12 @@ test("scope · a selector created in a scope is cleaned up on destroy", function
 	end)
 	flush()
 	local node = sel._nodes[1]
-	expect(next(node._) ~= nil, "selector per-key node live under scope")
+	expect(next(node[Flux.Graph.Node.__type]) ~= nil, "selector per-key node live under scope")
 	s:Destroy()
-	expect(Flux.isNode(node) and next(node._) == nil, "scope:Destroy() stripped the selector's per-key nodes")
+	expect(
+		Flux.isNode(node) and next(node[Flux.Graph.Node.__type]) == nil,
+		"scope:Destroy() stripped the selector's per-key nodes"
+	)
 end)
 
 return {}
