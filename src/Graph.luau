@@ -83,7 +83,7 @@ local update: (node) -> ()
 local NODE_KEY = table.freeze({ type = "node" })
 
 local function isNode(object: unknown): boolean
-	return type(object) == "table" and object[NODE_KEY] ~= nil
+	return type(object) == "table" and (object :: NodeData<any>)[NODE_KEY] ~= nil
 end
 
 local function isReactive(): boolean
@@ -652,7 +652,7 @@ local function destroyPublic<T>(node: NodeData<T>)
 	dispose(if isNode(node) then node[NODE_KEY] else node :: node)
 end
 
-type NodeData<T> = { _: { T } }
+type NodeData<T> = { [typeof(NODE_KEY)]: { T } }
 type DataOrNumber = NodeData<number> | number
 type DataOrString = NodeData<string> | string
 
