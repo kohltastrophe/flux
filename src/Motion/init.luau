@@ -12,6 +12,11 @@ local isNode = Graph.isNode
 local raw = Graph.raw
 local read = Graph.read
 
+type motions<T> = {
+	impulse: (self: Graph.Node<T>, delta: T) -> (),
+	setVelocity: (self: Graph.Node<T>, velocity: T) -> (),
+}
+
 local warn = Compat.warn
 
 local tempArray = { 0, 0, 0, 0, 0, 0, 0 }
@@ -154,7 +159,7 @@ subscribe to the live animated value.
 
 [Open Documentation](https://flux.kohl.gg/guide/motion/spring#basic-usage)
 ]]
-function Motion.spring<T>(target: T, frequency: number?, damping: number?): Graph.Node<T>
+function Motion.spring<T, K>(target: T, frequency: number?, damping: number?): Graph.Node<T> & motions<T>
 	local initialVal = raw(target)
 	local typeStr = typeof(initialVal)
 
@@ -171,6 +176,7 @@ function Motion.spring<T>(target: T, frequency: number?, damping: number?): Grap
 		NodeToMotion[stateNode] = nil
 		Engine.destroy(spring)
 	end
+
 	stateNode:onDestroy(unregister)
 	Graph.onDestroy(unregister)
 	Engine.setCurrent(spring, tempArray)
