@@ -24,6 +24,7 @@ def main():
         bucket.append(cls["Name"])
 
     content = (
+        f"--!nocheck\n\n"
         f"export type Creatable = {{\n{fields(creatable)}}}\n\n"
         f"export type Editable = Creatable & {{\n{fields(plugin_only)}}}\n\n"
         "return nil\n"
