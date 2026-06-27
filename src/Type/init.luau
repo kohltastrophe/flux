@@ -13,6 +13,7 @@ type __ATTR = "__ATTR"
 type __CLEAN = "__CLEAN"
 type __EVENT = "__EVENT"
 type __REF = "__REF"
+type __TAG = "__TAG"
 
 type GraphNode = Graph.Node<any>
 
@@ -48,6 +49,7 @@ export type function Properties(instance: type?)
 	events:setproperty(__ATTR, types.optional(types.newtable(nil, attrEventIndexer)))
 
 	result:setproperty(__ATTR, types.optional(types.newtable(nil, { index = types.string, readresult = types.any })))
+	result:setproperty(__TAG, types.optional(types.newtable(nil, { index = types.number, readresult = types.any })))
 	result:setproperty(__CLEAN, types.optional(types.newtable(nil, { index = types.number, readresult = types.any })))
 	result:setproperty(__EVENT, types.optional(events))
 	result:setproperty(__REF, types.optional(types.unionof(Consumer, GraphNode))) -- Consumer or Flux.State type
