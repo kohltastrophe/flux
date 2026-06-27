@@ -11,8 +11,10 @@ local FIND_SYMBOL = Find.Symbol
 local MODEL_SYMBOL = Bind.MODEL_SYMBOL
 
 local bindFrom = Bind.from
+local bindListen = Bind.listen
 local bindTo = Bind.to
 local isNode = Graph.isNode
+local raw = Graph.raw
 local newNode = Graph.new
 local getOwner = Graph.getOwner
 local onDestroy = Graph.onDestroy
@@ -22,7 +24,13 @@ Two-way binds `node` to `instance[property]` (or attribute): drives the
 instance from the node first so the authored value wins, then writes the node
 back on every instance-side change. Registers both teardowns on `__CLEAN`.
 ]]
-local function bindModel(node: any, instance: Instance, property: string, __CLEAN: { any }, isAttribute: boolean?)
+local function bindModel(
+	node: any,
+	instance: Instance,
+	property: string,
+	__CLEAN: { any },
+	isAttribute: boolean? -- isTag: boolean?
+)
 	table.insert(__CLEAN, bindTo(node, instance, property, isAttribute))
 	local _, disconnect = bindFrom(node, instance, property, isAttribute)
 	table.insert(__CLEAN, disconnect)
@@ -38,12 +46,14 @@ local function edit(instance: Instance, properties: Type.Map<any>): Instance
 	local __USER_CLEAN = properties.__CLEAN
 	local __CLEAN = if __USER_CLEAN then table.clone(__USER_CLEAN) else {}
 	local __EVENT = properties.__EVENT
+	local __TAG = properties.__TAG
 	local __REF = properties.__REF
 	local parent = properties.Parent
 
 	for property, value in properties do
 		if
 			property == "Parent"
+			or property == "__TAG"
 			or property == "__ATTR"
 			or property == "__CLEAN"
 			or property == "__EVENT"
@@ -118,6 +128,49 @@ local function edit(instance: Instance, properties: Type.Map<any>): Instance
 					table.insert(__CLEAN, bindTo(attrVal, instance, attrName, true))
 				else -- assign to attr
 					instance:SetAttribute(attrName, attrVal)
+				end
+			end
+		end
+	end
+
+	if __TAG then
+		for _, tagVal in __TAG do
+			if typeof(tagVal) == "function" then
+				tagVal = newNode(tagVal)
+				table.insert(__CLEAN, tagVal)
+			end
+			if isNode(tagVal) then
+				local previousTag = {}
+				local function updateTags(newTag)
+					if type(newTag) == "table" then
+						local newSet = {}
+						for _, tag in newTag do
+							newSet[tag] = true
+						end
+						for _, tag in previousTag do
+							if newSet[tag] then
+								newSet[tag] = nil
+							else
+								instance:RemoveTag(tag)
+							end
+						end
+						for tag in newSet do
+							instance:AddTag(tag)
+						end
+					else
+						tagVal:RemoveTag(previousTag)
+						tagVal:AddTag(newTag)
+					end
+					previousTag = newTag
+				end
+
+				local disconnect = bindListen(tagVal, updateTags)
+				updateTags(raw(tagVal))
+
+				table.insert(__CLEAN, disconnect)
+			else
+				for _, tag in tagVal do
+					instance:AddTag(tag)
 				end
 			end
 		end
