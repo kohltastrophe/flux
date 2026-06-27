@@ -29,7 +29,7 @@ local function bindModel(
 	instance: Instance,
 	property: string,
 	__CLEAN: { any },
-	isAttribute: boolean? -- isTag: boolean?
+	isAttribute: boolean?
 )
 	table.insert(__CLEAN, bindTo(node, instance, property, isAttribute))
 	local _, disconnect = bindFrom(node, instance, property, isAttribute)
