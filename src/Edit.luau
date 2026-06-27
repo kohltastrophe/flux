@@ -163,9 +163,7 @@ local function edit(instance: Instance, properties: Type.Map<any>): Instance
 
 				table.insert(__CLEAN, disconnect)
 			else
-				for _, tag in tagVal do
-					instance:AddTag(tag)
-				end
+				instance:AddTag(tagVal)
 			end
 		end
 	end
