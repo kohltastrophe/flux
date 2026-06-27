@@ -12,8 +12,10 @@ local MODEL_SYMBOL = Bind.MODEL_SYMBOL
 
 local bindFrom = Bind.from
 local bindListen = Bind.listen
+local bindListen = Bind.listen
 local bindTo = Bind.to
 local isNode = Graph.isNode
+local raw = Graph.raw
 local raw = Graph.raw
 local newNode = Graph.new
 local getOwner = Graph.getOwner
@@ -47,12 +49,14 @@ local function edit(instance: Instance, properties: Type.Map<any>): Instance
 	local __CLEAN = if __USER_CLEAN then table.clone(__USER_CLEAN) else {}
 	local __EVENT = properties.__EVENT
 	local __TAG = properties.__TAG
+	local __TAG = properties.__TAG
 	local __REF = properties.__REF
 	local parent = properties.Parent
 
 	for property, value in properties do
 		if
 			property == "Parent"
+			or property == "__TAG"
 			or property == "__TAG"
 			or property == "__ATTR"
 			or property == "__CLEAN"
