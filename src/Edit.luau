@@ -24,13 +24,7 @@ Two-way binds `node` to `instance[property]` (or attribute): drives the
 instance from the node first so the authored value wins, then writes the node
 back on every instance-side change. Registers both teardowns on `__CLEAN`.
 ]]
-local function bindModel(
-	node: any,
-	instance: Instance,
-	property: string,
-	__CLEAN: { any },
-	isAttribute: boolean?
-)
+local function bindModel(node: any, instance: Instance, property: string, __CLEAN: { any }, isAttribute: boolean?)
 	table.insert(__CLEAN, bindTo(node, instance, property, isAttribute))
 	local _, disconnect = bindFrom(node, instance, property, isAttribute)
 	table.insert(__CLEAN, disconnect)
