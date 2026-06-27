@@ -14,6 +14,7 @@ type __CLEAN = "__CLEAN"
 type __EVENT = "__EVENT"
 type __REF = "__REF"
 type __TAG = "__TAG"
+type __TAG = "__TAG"
 
 type GraphNode = Graph.Node<any>
 

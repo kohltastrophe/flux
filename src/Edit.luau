@@ -140,10 +140,10 @@ local function edit(instance: Instance, properties: Type.Map<any>): Instance
 				table.insert(__CLEAN, tagVal)
 			end
 			if isNode(tagVal) then
-				local previousTag = {} :: { string }
+				local previousTag = {}
 				local function updateTags(newTag)
 					if type(newTag) == "table" then
-						local newSet = {} :: { [string]: boolean }
+						local newSet = {}
 						for _, tag in newTag do
 							newSet[tag] = true
 						end
