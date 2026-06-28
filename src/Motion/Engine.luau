@@ -183,43 +183,61 @@ local function stepSpring(motion: Spring, dt: number)
 	local w = math.tau * f
 
 	local isSleeping = true
-	local expTerm: number, cosTerm: number, sinTerm: number, r1: number, r2: number, exp1: number, exp2: number, wd: number
 	local target, value, m_vel = motion.target, motion.value, motion.vel
 
-	if d == 1 then
-		expTerm = math.exp(-w * dt)
-	elseif d < 1 then
-		wd = w * math.sqrt(1 - d * d)
-		expTerm = math.exp(-d * w * dt)
-		cosTerm = math.cos(wd * dt)
-		sinTerm = math.sin(wd * dt)
-	else
-		wd = w * math.sqrt(d * d - 1)
-		r1 = -w * d + wd
-		r2 = -w * d - wd
-		exp1 = math.exp(r1 * dt)
-		exp2 = math.exp(r2 * dt)
-	end
-
-	for c, pos in value do
-		local tar: number = target[c]
-		local vel: number = m_vel[c]
-
-		if math.abs(pos - tar) > EPSILON or math.abs(vel) > EPSILON then
-			isSleeping = false
-			if d == 1 then -- CRITICALLY DAMPED
-				local c1 = pos - tar
+	if d == 1 then -- CRITICALLY DAMPED
+		local expTerm = math.exp(-w * dt)
+		
+		for c, pos in value do
+			local tar: number = target[c]
+			local vel: number = m_vel[c]
+			local c1 = pos - tar
+			
+			if math.abs(c1) > EPSILON or math.abs(vel) > EPSILON then
+				isSleeping = false
 				local c2 = vel + w * c1
-				value[c] = tar + (c1 + c2 * dt) * expTerm
-				m_vel[c] = (c2 - w * (c1 + c2 * dt)) * expTerm
-			elseif d < 1 then -- UNDERDAMPED
-				local c1 = pos - tar
-				local c2 = (vel + w * d * c1) / wd
+				local positionTerm = c1 + c2 * dt
+				value[c] = tar + positionTerm * expTerm
+				m_vel[c] = (c2 - w * positionTerm) * expTerm
+			end
+		end
+	elseif d < 1 then -- UNDERDAMPED
+		local wd = w * math.sqrt(1 - d * d)
+		local expTerm = math.exp(-d * w * dt)
+		local dampingRate = w * d
+		local phase = wd * dt
+		local cosTerm = math.cos(phase)
+		local sinTerm = math.sin(phase)
+
+		for c, pos in value do
+			local tar: number = target[c]
+			local vel: number = m_vel[c]
+			local c1 = pos - tar
+			
+			if math.abs(c1) > EPSILON or math.abs(vel) > EPSILON then
+				isSleeping = false
+				local c2 = (vel + dampingRate * c1) / wd
 				value[c] = tar + expTerm * (c1 * cosTerm + c2 * sinTerm)
-				m_vel[c] = expTerm * (vel * cosTerm - (c1 * wd + c2 * d * w) * sinTerm)
-			else -- OVERDAMPED
-				local c2 = (vel - r1 * (pos - tar)) / (r2 - r1)
-				local c1 = pos - tar - c2
+				m_vel[c] = expTerm * (vel * cosTerm - (c1 * wd + c2 * dampingRate) * sinTerm)
+			end
+		end
+	else -- OVERDAMPED
+		local wd = w * math.sqrt(d * d - 1)
+		local negDampingRate = -w * d
+		local r1 = negDampingRate + wd
+		local r2 = negDampingRate - wd
+		local exp1 = math.exp(r1 * dt)
+		local exp2 = math.exp(r2 * dt)
+
+		for c, pos in value do
+			local tar: number = target[c]
+			local vel: number = m_vel[c]
+			local displacement = pos - tar
+			
+			if math.abs(displacement) > EPSILON or math.abs(vel) > EPSILON then
+				isSleeping = false
+				local c2 = (vel - r1 * displacement) / (r2 - r1)
+				local c1 = displacement - c2
 				value[c] = tar + c1 * exp1 + c2 * exp2
 				m_vel[c] = c1 * r1 * exp1 + c2 * r2 * exp2
 			end
