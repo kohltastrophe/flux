@@ -32,9 +32,15 @@ end
 
 local task = Compat.task
 
-local function edit(instance: Instance, properties: Type.Map<any>): Instance
+local function edit(
+	instance: Instance,
+	properties: Type.Map<any>,
+	seenAttrs: { [any]: boolean }?,
+	seenProps: { [any]: boolean }?
+): Instance
 	local actions = {}
 	local signals = {}
+	local toFlatten: { any }? = nil
 
 	local __ATTR = properties.__ATTR
 	local __USER_CLEAN = properties.__CLEAN
@@ -43,6 +49,15 @@ local function edit(instance: Instance, properties: Type.Map<any>): Instance
 	local __TAG = properties.__TAG
 	local __REF = properties.__REF
 	local parent = properties.Parent
+
+	-- prevents two nodes fighting over the parent (possible in flattened tables)
+	if parent and seenProps then
+		if seenProps.Parent then
+			parent = nil
+		else
+			seenProps.Parent = true
+		end
+	end
 
 	for property, value in properties do
 		if
@@ -70,16 +85,11 @@ local function edit(instance: Instance, properties: Type.Map<any>): Instance
 						end)
 					elseif isNode(value) == true then -- children binder (e.g. forValue/forIndex)
 						table.insert(__CLEAN, Bind.children(value, instance, property))
-					elseif value[1] ~= MODEL_SYMBOL then -- assume plain array of children
-						local order = property
-						for _, child in value do
-							if typeof(child) == "Instance" then
-								order = Bind.applyLayoutOrder(child, order)
-								child.Parent = instance
-							elseif isNode(child) == true then
-								table.insert(__CLEAN, Bind.children(child, instance, order))
-								order += 1
-							end
+					elseif value[1] ~= MODEL_SYMBOL then -- flatten tables into root recursively
+						if toFlatten then
+							table.insert(toFlatten, value)
+						else
+							toFlatten = { value }
 						end
 					end
 				end
@@ -87,19 +97,36 @@ local function edit(instance: Instance, properties: Type.Map<any>): Instance
 			continue
 		end
 
-		if type(value) == "table" and value[1] == MODEL_SYMBOL then -- two-way binding (Flux.model)
-			bindModel(value[2], instance, property, __CLEAN)
-			continue
-		end
-
 		if type(value) == "function" then
 			local signal = (instance :: any)[property]
-			if typeof(signal) == "RBXScriptSignal" then
+			if typeof(signal) == "RBXScriptSignal" then -- signal shorthand
 				signals[signal] = value -- implicit instance.signal:Connect()
 				continue
 			end
+
+			if seenProps then
+				if seenProps[property] then
+					continue
+				end
+				seenProps[property] = true
+			end
+
 			value = newNode(value) -- implicit memo
 			table.insert(__CLEAN, value)
+			table.insert(__CLEAN, bindTo(value, instance, property))
+			continue
+		end
+
+		if seenProps then
+			if seenProps[property] then
+				continue
+			end
+			seenProps[property] = true
+		end
+
+		if type(value) == "table" and value[1] == MODEL_SYMBOL then -- two-way binding (Flux.model)
+			bindModel(value[2], instance, property, __CLEAN)
+			continue
 		end
 
 		if isNode(value) == true then -- instance.property <== value
@@ -111,6 +138,13 @@ local function edit(instance: Instance, properties: Type.Map<any>): Instance
 
 	if __ATTR then
 		for attrName, attrVal in __ATTR do
+			if seenAttrs then
+				if seenAttrs[attrName] then
+					continue
+				end
+				seenAttrs[attrName] = true
+			end
+
 			if type(attrVal) == "table" and attrVal[1] == MODEL_SYMBOL then -- two-way binding (Flux.model)
 				bindModel(attrVal[2], instance, attrName, __CLEAN, true)
 			else
@@ -207,6 +241,26 @@ local function edit(instance: Instance, properties: Type.Map<any>): Instance
 			table.insert(__CLEAN, (__REF :: any)(instance) :: any)
 		elseif isNode(__REF) == true then -- pass reference to value node
 			__REF:set(instance)
+		end
+	end
+
+	if toFlatten then
+		if not seenAttrs then
+			seenAttrs = {}
+			if __ATTR then
+				for attrName in __ATTR do
+					seenAttrs[attrName] = true
+				end
+			end
+
+			seenProps = {}
+			for key in properties do
+				seenProps[key] = true
+			end
+		end
+
+		for _, value in toFlatten do
+			edit(instance, value, seenAttrs, seenProps)
 		end
 	end
 
