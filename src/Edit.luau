@@ -32,29 +32,15 @@ end
 
 local task = Compat.task
 
--- for the juggled seenMap, addresses collisions in flattened tables
-local function seen(seenMap: { [any]: { [any]: boolean } }, bucketName: string, key: any): boolean
-	local bucket = seenMap[bucketName]
-
-	-- create bucket if it doesn't exist yet; dynamic creation reduces unnecessary overhead for common cases
-	if not bucket then
-		bucket = {}
-		seenMap[bucketName] = bucket
-	end
-
-	if bucket[key] then
-		return true
-	end
-
-	bucket[key] = true
-	return false
-end
-
-local function edit(instance: Instance, properties: Type.Map<any>, providedSeenMap: { [any]: { [any]: boolean } }?): Instance
-	local seenMap = providedSeenMap or {}
+local function edit(
+	instance: Instance,
+	properties: Type.Map<any>,
+	seenAttrs: { [any]: boolean }?,
+	seenProps: { [any]: boolean }?
+): Instance
 	local actions = {}
 	local signals = {}
-	local toFlatten = {}
+	local toFlatten: { any }? = nil
 
 	local __ATTR = properties.__ATTR
 	local __USER_CLEAN = properties.__CLEAN
@@ -65,8 +51,12 @@ local function edit(instance: Instance, properties: Type.Map<any>, providedSeenM
 	local parent = properties.Parent
 
 	-- prevents two nodes fighting over the parent (possible in flattened tables)
-	if parent and seen(seenMap, "props", "Parent") then
-		parent = nil
+	if parent and seenProps then
+		if seenProps.Parent then
+			parent = nil
+		else
+			seenProps.Parent = true
+		end
 	end
 
 	for property, value in properties do
@@ -96,7 +86,11 @@ local function edit(instance: Instance, properties: Type.Map<any>, providedSeenM
 					elseif isNode(value) == true then -- children binder (e.g. forValue/forIndex)
 						table.insert(__CLEAN, Bind.children(value, instance, property))
 					elseif value[1] ~= MODEL_SYMBOL then -- flatten tables into root recursively
-						table.insert(toFlatten, value)
+						if toFlatten then
+							table.insert(toFlatten, value)
+						else
+							toFlatten = { value }
+						end
 					end
 				end
 			end
@@ -105,17 +99,16 @@ local function edit(instance: Instance, properties: Type.Map<any>, providedSeenM
 
 		if type(value) == "function" then
 			local signal = (instance :: any)[property]
-
 			if typeof(signal) == "RBXScriptSignal" then -- signal shorthand
-				if not seen(seenMap, "events", property) then
-					signals[signal] = value -- implicit instance.signal:Connect()
-				end
-
+				signals[signal] = value -- implicit instance.signal:Connect()
 				continue
 			end
 
-			if seen(seenMap, "props", property) then
-				continue
+			if seenProps then
+				if seenProps[property] then
+					continue
+				end
+				seenProps[property] = true
 			end
 
 			value = newNode(value) -- implicit memo
@@ -123,9 +116,12 @@ local function edit(instance: Instance, properties: Type.Map<any>, providedSeenM
 			table.insert(__CLEAN, bindTo(value, instance, property))
 			continue
 		end
-		
-		if seen(seenMap, "props", property) then
-			continue
+
+		if seenProps then
+			if seenProps[property] then
+				continue
+			end
+			seenProps[property] = true
 		end
 
 		if type(value) == "table" and value[1] == MODEL_SYMBOL then -- two-way binding (Flux.model)
@@ -142,8 +138,11 @@ local function edit(instance: Instance, properties: Type.Map<any>, providedSeenM
 
 	if __ATTR then
 		for attrName, attrVal in __ATTR do
-			if seen(seenMap, "attrs", attrName) then
-				continue
+			if seenAttrs then
+				if seenAttrs[attrName] then
+					continue
+				end
+				seenAttrs[attrName] = true
 			end
 
 			if type(attrVal) == "table" and attrVal[1] == MODEL_SYMBOL then -- two-way binding (Flux.model)
@@ -208,10 +207,6 @@ local function edit(instance: Instance, properties: Type.Map<any>, providedSeenM
 		__EVENT.__ATTR = nil
 
 		for property, value in __EVENT do
-			if seen(seenMap, "events", property) then
-				continue
-			end
-
 			if isNode(value) == true then -- value <== instance.property
 				local _, disconnect = bindFrom(value, instance, property)
 				table.insert(__CLEAN, disconnect)
@@ -228,10 +223,6 @@ local function edit(instance: Instance, properties: Type.Map<any>, providedSeenM
 		if __EVENT_ATTR then
 			__EVENT.__ATTR = __EVENT_ATTR
 			for attribute, value in __EVENT_ATTR do
-				if seen(seenMap, "eventAttrs", attribute) then
-					continue
-				end
-
 				if isNode(value) == true then -- value <== instance.attr
 					local _, disconnect = bindFrom(value, instance, attribute, true)
 					table.insert(__CLEAN, disconnect)
@@ -253,16 +244,32 @@ local function edit(instance: Instance, properties: Type.Map<any>, providedSeenM
 		end
 	end
 
+	if toFlatten then
+		if not seenAttrs then
+			seenAttrs = {}
+			if __ATTR then
+				for attrName in __ATTR do
+					seenAttrs[attrName] = true
+				end
+			end
+
+			seenProps = {}
+			for key in properties do
+				seenProps[key] = true
+			end
+		end
+
+		for _, value in toFlatten do
+			edit(instance, value, seenAttrs, seenProps)
+		end
+	end
+
 	for _, action in actions do
 		task.defer(action, instance)
 	end
 
 	for signal, callback in signals do
 		table.insert(__CLEAN, signal:Connect(callback) :: any)
-	end
-
-	for _, value in toFlatten do
-		edit(instance, value, seenMap)
 	end
 
 	local parentIsNode = isNode(parent) == true
