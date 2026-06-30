@@ -7,12 +7,43 @@ local warn = Compat.warn
 
 local Symbol = table.freeze({ type = "Symbol" }) :: Type.Symbol
 
-local function indexParent(instance: Instance)
+local function indexParent(instance: Instance): Instance?
 	return instance.Parent
 end
 
-local function queryFirst(instance: Instance, query: string)
+local function queryFirst(instance: Instance, query: string): Instance?
 	return instance:QueryDescendants(query)[1]
+end
+
+local function firstDescendant(instance: Instance, name: string): Instance?
+	return instance:FindFirstChild(name, true)
+end
+
+local function path(instance: Instance, path: string): Instance?
+	local segments = string.split(path, ".")
+	local currentInstance: Instance = instance
+
+	for _, segment in segments do
+		if segment == "" then
+			continue
+		end
+
+		local nextInstance: Instance?
+
+		if segment == "Parent" or segment == "^" then
+			nextInstance = currentInstance.Parent
+		else
+			nextInstance = currentInstance:FindFirstChild(segment)
+		end
+
+		if not nextInstance then
+			return nil
+		end
+
+		currentInstance = nextInstance
+	end
+
+	return currentInstance
 end
 
 local function selector(find: any): any
@@ -96,7 +127,7 @@ local module = {
 
 	[Open Documentation](https://flux.kohl.gg/guide/roblox/hydration#instance-selectors-flux-find)
 	]]
-	Descendant = selector("FindFirstDescendant") :: Selector,
+	Descendant = selector(firstDescendant) :: Selector,
 	--[[
 	Selects the hydrated element's [`Instance.Parent`](https://create.roblox.com/docs/reference/engine/classes/Instance#Parent),
 	then applies the property table to it. Use to reach one level up the tree without naming the parent.
@@ -104,6 +135,7 @@ local module = {
 	[Open Documentation](https://flux.kohl.gg/guide/roblox/hydration#instance-selectors-flux-find)
 	]]
 	Parent = selector(indexParent) :: Selector,
+	Path = selector(path) :: Selector,
 	--[[
 	Selects <strong>every</strong> descendant matching a Roblox path query via
 	[`Instance:QueryDescendants`](https://create.roblox.com/docs/reference/engine/classes/Instance#QueryDescendants),
