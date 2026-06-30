@@ -46,7 +46,7 @@ local healthLabel = new "TextLabel" { TextColor3 = healthColor }
 
 A Signal stays alive as long as something reads it. If a transient component builds its own internal `Flux` nodes and you `Destroy()`{luau} the Roblox instance without freeing those nodes, they become **zombies**, evaluating in the background indefinitely.
 
-Build transient state and UI inside a [Scope](/guide/concepts/scopes) and tie that scope to the instance's lifetime with [`__CLEAN`](/guide/roblox/hydration), so destroying the Frame frees every node with it. See [Connecting a Scope to an Instance Lifetime](/guide/concepts/scopes#connecting-a-scope-to-an-instance-lifetime) for the pattern.
+Build transient state and UI inside a [Scope](/guide/concepts/scopes) and tie that scope to the instance's lifetime with [`_CLEAN`](/guide/roblox/hydration), so destroying the Frame frees every node with it. See [Connecting a Scope to an Instance Lifetime](/guide/concepts/scopes#connecting-a-scope-to-an-instance-lifetime) for the pattern.
 
 ## 5. Engine-Specific Optimizations
 

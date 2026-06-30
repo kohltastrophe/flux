@@ -127,10 +127,10 @@ local menu = new "Frame" {
 | Key                           | Behaviour                                                                                                                                                         |
 | :---------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Event name (e.g. `Activated`) | Calls [`:Connect(fn)`{luau}](https://create.roblox.com/docs/en-us/reference/engine/datatypes/RBXScriptSignal#Connect) automatically                               |
-| `__EVENT`                     | Two-way bindings and [`:GetPropertyChangedSignal`{luau}](https://create.roblox.com/docs/en-us/reference/engine/classes/Object#GetPropertyChangedSignal) listeners |
-| `__ATTR`                      | Static or reactive custom Instance Attributes                                                                                                                     |
-| `__CLEAN`                     | Additional cleanup items tied to the instance's lifetime                                                                                                          |
-| `__REF`                       | Capture a reference to the created instance                                                                                                                       |
+| `_EVENT`                      | Two-way bindings and [`:GetPropertyChangedSignal`{luau}](https://create.roblox.com/docs/en-us/reference/engine/classes/Object#GetPropertyChangedSignal) listeners |
+| `_ATTR`                       | Static or reactive custom Instance Attributes                                                                                                                     |
+| `_CLEAN`                      | Additional cleanup items tied to the instance's lifetime                                                                                                          |
+| `_REF`                        | Capture a reference to the created instance                                                                                                                       |
 
 ```luau
 local inputState = Flux("")
@@ -139,16 +139,16 @@ local boxRef = Flux(nil)
 local myTextBox = new "TextBox" {
     Size = UDim2.fromOffset(200, 50),
 
-    -- Two-way binding: assign the node to the property AND list it under __EVENT.
-    -- Top-level drives Text from the node; __EVENT writes the node back when the
+    -- Two-way binding: assign the node to the property AND list it under _EVENT.
+    -- Top-level drives Text from the node; _EVENT writes the node back when the
     -- user types, so the two stay in sync in both directions.
     Text = inputState,
-    __EVENT = {
+    _EVENT = {
         Text = inputState,
     },
 
     -- Capture a reference to this TextBox via a reactive node
-    __REF = boxRef,
+    _REF = boxRef,
 
     -- Connect a plain event with a bare top-level key
     FocusLost = function(enterPressed)
@@ -163,7 +163,7 @@ local myTextBox = new "TextBox" {
 
 ### `Flux.model`{lua}: two-way binding in one key
 
-When a property both drives and is driven by the same node, `Flux.model`{lua} collapses the assign-plus-`__EVENT` pair into a single entry. It binds the node to the property **and** writes the node back whenever the instance changes:
+When a property both drives and is driven by the same node, `Flux.model`{lua} collapses the assign-plus-`_EVENT` pair into a single entry. It binds the node to the property **and** writes the node back whenever the instance changes:
 
 ```luau
 local inputState = Flux("")
@@ -171,12 +171,12 @@ local inputState = Flux("")
 local myTextBox = new "TextBox" {
     Size = UDim2.fromOffset(200, 50),
 
-    -- Equivalent to `Text = inputState` plus `__EVENT = { Text = inputState }`
+    -- Equivalent to `Text = inputState` plus `_EVENT = { Text = inputState }`
     Text = Flux.model(inputState),
 }
 ```
 
-The node's authored value wins on mount (the instance is set from the node first, then the binding-back is wired up). `Flux.model`{lua} works on any property that fires a changed signal, and inside `__ATTR`{luau} for two-way attribute binding (`__ATTR = { Score = Flux.model(scoreNode) }`{luau}).
+The node's authored value wins on mount (the instance is set from the node first, then the binding-back is wired up). `Flux.model`{lua} works on any property that fires a changed signal, and inside `_ATTR`{luau} for two-way attribute binding (`_ATTR = { Score = Flux.model(scoreNode) }`{luau}).
 
 ## Reactive Children (`Flux.forValue`{lua} / `Flux.forIndex`{lua})
 

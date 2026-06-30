@@ -119,6 +119,11 @@ local Motion = {
 	step = Engine.step,
 }
 
+--- Returns whether the given value is a reactive motion.
+function Motion.isMotion<T>(obj: T): T
+	return type(obj) == "table" and getmetatable(obj) == MotionStateMetatable
+end
+
 local function attachEffect(stateNode: Graph.Node<any>, fn: () -> ())
 	local effectNode = Graph.new(fn, true)
 	stateNode:onDestroy(function()

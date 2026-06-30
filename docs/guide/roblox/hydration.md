@@ -63,31 +63,31 @@ scope:Destroy()
 
 To handle Roblox's unique instance architecture efficiently, `Flux.edit`{lua} supports several reserved keys within the properties table.
 
-### `__ATTR`{luau} (Attributes)
+### `_ATTR`{luau} (Attributes)
 
-Roblox Attributes allow you to tag instances with custom metadata. Use the `__ATTR` table to set attributes or bind them to reactive nodes.
+Roblox Attributes allow you to tag instances with custom metadata. Use the `_ATTR` table to set attributes or bind them to reactive nodes.
 
 ```luau
 Flux.edit(playerCharacter) {
-    __ATTR = {
+    _ATTR = {
         IsStunned = true,            -- static assignment
         Health    = reactiveHealthNode, -- binds the attribute to update with the node
     },
 }
 ```
 
-### `__EVENT`{luau} (Two-Way Binding & Listeners)
+### `_EVENT`{luau} (Two-Way Binding & Listeners)
 
-While standard [`RBXScriptSignals`](https://create.roblox.com/docs/en-us/reference/engine/datatypes/RBXScriptSignal) (like [`Activated`](https://create.roblox.com/docs/en-us/reference/engine/classes/GuiButton#Activated) or [`Touched`](https://create.roblox.com/docs/en-us/reference/engine/classes/BasePart#Touched)) can be connected directly as top-level properties, the `__EVENT` table is used for two-way data binding and [`GetPropertyChangedSignal(property)`{luau}](https://create.roblox.com/docs/en-us/reference/engine/classes/Object#GetPropertyChangedSignal) listeners.
+While standard [`RBXScriptSignals`](https://create.roblox.com/docs/en-us/reference/engine/datatypes/RBXScriptSignal) (like [`Activated`](https://create.roblox.com/docs/en-us/reference/engine/classes/GuiButton#Activated) or [`Touched`](https://create.roblox.com/docs/en-us/reference/engine/classes/BasePart#Touched)) can be connected directly as top-level properties, the `_EVENT` table is used for two-way data binding and [`GetPropertyChangedSignal(property)`{luau}](https://create.roblox.com/docs/en-us/reference/engine/classes/Object#GetPropertyChangedSignal) listeners.
 
 - Assigning a **reactive node** to a property key makes the node receive the instance's property value whenever it changes (binding _from_ the instance _into_ the node).
 - Assigning a **function** to a property key checks the named member: if it is itself an [`RBXScriptSignal`](https://create.roblox.com/docs/en-us/reference/engine/datatypes/RBXScriptSignal), the function is connected to that event directly; otherwise it falls back to `GetPropertyChangedSignal(property)`{luau}.
-- Assigning a **node or function** inside `__EVENT.__ATTR`{luau} does the same for attributes (a function connects to `GetAttributeChangedSignal(attribute)`{luau}).
+- Assigning a **node or function** inside `_EVENT._ATTR`{luau} does the same for attributes (a function connects to `GetAttributeChangedSignal(attribute)`{luau}).
 
 > [!TIP]
 > To create a brand-new node mirroring a property without editing the instance, call `Flux(instance, "Property")`{luau} directly. See [Binding from an Instance Property](/guide/concepts/signals#binding-from-an-instance-property).
 
-For a true round-trip, drive the property from the node at the top level _and_ feed it back into the node inside `__EVENT`. The node then both updates the instance and tracks the user's edits:
+For a true round-trip, drive the property from the node at the top level _and_ feed it back into the node inside `_EVENT`. The node then both updates the instance and tracks the user's edits:
 
 ```luau
 local textInputNode = Flux("")
@@ -96,7 +96,7 @@ Flux.edit(existingTextBox) {
     -- node -> instance: writing to the node updates the TextBox's Text
     Text = textInputNode,
 
-    __EVENT = {
+    _EVENT = {
         -- instance -> node: updates 'textInputNode' whenever the TextBox's Text changes
         Text = textInputNode,
 
@@ -106,7 +106,7 @@ Flux.edit(existingTextBox) {
         end,
 
         -- Attribute change listeners
-        __ATTR = {
+        _ATTR = {
             IsStunned = function(newValue)
                 print("Stun state changed:", newValue)
             end,
@@ -115,13 +115,13 @@ Flux.edit(existingTextBox) {
 }
 ```
 
-### `__CLEAN`{luau} (Lifecycle Cleanup)
+### `_CLEAN`{luau} (Lifecycle Cleanup)
 
-`Flux.edit`{lua} automatically cleans up its own reactive bindings and event connections when the instance is destroyed. If you have additional external connections or objects that should be tied to the same lifecycle, add them to the `__CLEAN` table.
+`Flux.edit`{lua} automatically cleans up its own reactive bindings and event connections when the instance is destroyed. If you have additional external connections or objects that should be tied to the same lifecycle, add them to the `_CLEAN` table.
 
 Everything in the table (connections, instances, functions, scopes, or nested arrays of these) is cleaned up when the instance's [`Destroying`](https://create.roblox.com/docs/en-us/reference/engine/classes/Instance#Destroying) event fires. Flux copies the table internally, so your original table is never mutated. That also means items added to your table _after_ the `Flux.edit`{lua} call are not tracked; register everything before editing, or use a [Scope](/guide/concepts/scopes) for late additions.
 
-When a selector matches multiple instances, each match receives its own copy of the `__CLEAN` items, and they run once per destroyed match, so make cleanup functions idempotent if the selector can match more than one instance.
+When a selector matches multiple instances, each match receives its own copy of the `_CLEAN` items, and they run once per destroyed match, so make cleanup functions idempotent if the selector can match more than one instance.
 
 ```luau
 local RunService = game:GetService("RunService")
@@ -139,7 +139,7 @@ Flux.edit(existingFrame) {
     end,
 
     -- Flux will clean up everything in this table when the frame is destroyed
-    __CLEAN = myConnections,
+    _CLEAN = myConnections,
 }
 
 -- When existingFrame is destroyed:
@@ -148,27 +148,27 @@ Flux.edit(existingFrame) {
 ```
 
 > [!NOTE]
-> If you are editing inside a `Scope`, the `__CLEAN` table is also registered to that scope's master cleanup list, ensuring safe destruction even if the scope is wiped before the instance is manually destroyed.
+> If you are editing inside a `Scope`, the `_CLEAN` table is also registered to that scope's master cleanup list, ensuring safe destruction even if the scope is wiped before the instance is manually destroyed.
 
-### `__REF`{luau} (Reference)
+### `_REF`{luau} (Reference)
 
-Sometimes you need a direct reference to the instance you are hydrating. Pass a callback function or a reactive node to `__REF`.
+Sometimes you need a direct reference to the instance you are hydrating. Pass a callback function or a reactive node to `_REF`.
 
 ```luau
 local myFrameNode = Flux(nil)
 
 Flux.edit(existingFrame) {
     -- Assigns the instance directly to the reactive node
-    __REF = myFrameNode,
+    _REF = myFrameNode,
 
     -- OR use a callback:
-    -- __REF = function(inst)
+    -- _REF = function(inst)
     --     print("Hydrated:", inst.Name)
     -- end,
 }
 ```
 
-A callback `__REF`{luau} may also **return** a cleanup value (a function, connection, instance, or array of them) which Flux ties to the instance's lifetime and runs on `Destroying`, exactly like `__CLEAN`. This lets a ref co-locate its own setup and teardown.
+A callback `_REF`{luau} may also **return** a cleanup value (a function, connection, instance, or array of them) which Flux ties to the instance's lifetime and runs on `Destroying`, exactly like `_CLEAN`. This lets a ref co-locate its own setup and teardown.
 
 ## Array Elements (Children & Actions)
 
@@ -203,7 +203,7 @@ When hydrating a complex, pre-built UI hierarchy, calling `Flux.edit`{lua} indiv
 
 `Flux.Find`{lua} provides a set of **Selectors** for inline deep queries. Place a selector in the array portion of your `Flux.edit`{lua} table to find a descendant and apply a nested `Flux.edit`{lua} to it, all in one declarative block.
 
-The properties passed to a selector are treated like a standard `Flux.edit`{lua} block; you can use reactive nodes, `__EVENT`, or nest selectors inside selectors.
+The properties passed to a selector are treated like a standard `Flux.edit`{lua} block; you can use reactive nodes, `_EVENT`, or nest selectors inside selectors.
 
 ### Available Selectors
 

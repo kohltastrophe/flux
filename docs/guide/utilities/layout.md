@@ -25,7 +25,7 @@ new "Frame" {
 }
 ```
 
-Because each helper just **returns an instance**, it composes with the normal builder: `forValue`, selectors, and `__CLEAN` all keep working, and the parent `Frame` keeps full strict-typed property autocomplete. The helpers are also available under the `Flux.Layout`{luau} namespace.
+Because each helper just **returns an instance**, it composes with the normal builder: `forValue`, selectors, and `_CLEAN` all keep working, and the parent `Frame` keeps full strict-typed property autocomplete. The helpers are also available under the `Flux.Layout`{luau} namespace.
 
 ## Conventions
 

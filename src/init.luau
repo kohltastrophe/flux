@@ -42,7 +42,7 @@ local Constructors = setmetatable({}, {
 local Flux = {
 	--[[
 	<strong>Bind</strong>: low-level hydration primitives behind
-	[`Flux.model`](https://flux.kohl.gg/guide/roblox/creation#flux-model-two-way-binding-in-one-key), the `__EVENT`
+	[`Flux.model`](https://flux.kohl.gg/guide/roblox/creation#flux-model-two-way-binding-in-one-key), the `_EVENT`
 	directive, and child parenting. Binds a node to or from a Roblox
 	[`Instance`](https://create.roblox.com/docs/reference/engine/classes/Instance) property or attribute.
 

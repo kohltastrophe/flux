@@ -60,7 +60,7 @@ rtest("bind.children · stale disconnect doesn't sever the live binding", functi
 	local discB = Bind.children(node, parentB) -- remount: rebind to B
 	expect(c1.Parent == parentB, "rebound to B")
 
-	discA() -- STALE disconnect (e.g. A's __CLEAN flushing later): must be a no-op
+	discA() -- STALE disconnect (e.g. A's _CLEAN flushing later): must be a no-op
 	local c2 = Instance.new("Frame")
 	node:set(c2)
 	flush()

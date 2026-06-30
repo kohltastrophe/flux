@@ -23,11 +23,6 @@ local STORE_SYMBOL: any = table.freeze({})
 local StoreMetatable
 local destroyProxy: (proxy: any) -> ()
 
--- A store is itself a reactive owner: the per-key/tracker nodes it creates and the
--- proxies nested beneath it are its children, so destroying the store (or the scope it
--- was created in) tears the whole subtree down. `makeOwner` mints a bare owner node
--- adopted by whatever owner is current: the enclosing scope for a top-level store, the
--- parent proxy's owner for a nested one.
 local EMPTY = function(): any
 	return nil
 end
@@ -47,15 +42,9 @@ local function createProxy<T>(target: T, parentOwner: Graph.Node<any>?): T
 	proxyToRaw[proxy] = target
 	proxyToNodes[proxy] = {}
 
-	-- Adopt the parent proxy's owner when nested, else the current scope (if any) so a
-	-- store built inside `Flux.scope` dies with it. Created with no current owner the
-	-- store is rootless and lives until `Store.destroy`.
 	local owner = if parentOwner then withOwner(parentOwner, makeOwner) else makeOwner()
 	proxyToOwner[proxy] = owner
 
-	-- Drop the registry entries when the owner is torn down and make the proxy inert. The
-	-- owner's children (the per-key nodes and nested-proxy owners) are disposed by the
-	-- cascade before this runs, so a nested proxy is stripped here too, not just the root.
 	onDestroy(function()
 		proxyCache[target] = nil
 		proxyToRaw[proxy] = nil
@@ -210,8 +199,6 @@ function Store.new<T>(initialState: T): T
 end
 
 function destroyProxy(proxy: any)
-	-- Disposing the owner cascades to the per-key nodes and every nested-proxy owner, and
-	-- each owner's onDestroy clears its registry entries and strips its proxy.
 	local owner = proxyToOwner[proxy]
 	if owner then
 		owner:Destroy()
@@ -365,7 +352,6 @@ function Store.move(proxy: any, from: number, to: number)
 		return
 	end
 
-	-- A reposition, not a resize: shuffle the raw reference, no teardown.
 	table.insert(target, to, table.remove(target, from))
 
 	-- Only the indices between the two endpoints changed occupant; re-sync those.
