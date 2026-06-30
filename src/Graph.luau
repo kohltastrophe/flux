@@ -548,10 +548,12 @@ end
 local function withOwner<T>(node: Node<any>, fn: () -> ...T): T
 	local prevOwner = currentOwner
 	currentOwner = if node then node[NODE_KEY] else nil
+
+	local errSrc = debug.traceback()
 	local ok, result = xpcall(fn, debug.traceback :: any)
 	currentOwner = prevOwner
 	if not ok then
-		error(`error while running withOwner():\n{result}`, 0)
+		error(`error while running withOwner():\n{result}\nfrom {errSrc}`, 0)
 	end
 	return result
 end
