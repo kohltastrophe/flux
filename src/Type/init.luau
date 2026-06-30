@@ -9,11 +9,11 @@ export type Function = (...any) -> ...any
 export type Map<T> = { [T]: any }
 export type Symbol = { read type: "Symbol" }
 
-type __ATTR = "__ATTR"
-type __CLEAN = "__CLEAN"
-type __EVENT = "__EVENT"
-type __REF = "__REF"
-type __TAG = "__TAG"
+type _ATTR = "_ATTR"
+type _CLEAN = "_CLEAN"
+type _EVENT = "_EVENT"
+type _REF = "_REF"
+type _TAG = "_TAG"
 
 type GraphNode = Graph.Node<any>
 
@@ -46,13 +46,13 @@ export type function Properties(instance: type?)
 	end
 
 	local attrEventIndexer = { index = types.string, readresult = types.newfunction({ head = { types.any } }) }
-	events:setproperty(__ATTR, types.optional(types.newtable(nil, attrEventIndexer)))
+	events:setproperty(_ATTR, types.optional(types.newtable(nil, attrEventIndexer)))
 
-	result:setproperty(__ATTR, types.optional(types.newtable(nil, { index = types.string, readresult = types.any })))
-	result:setproperty(__TAG, types.optional(types.newtable(nil, { index = types.number, readresult = types.any })))
-	result:setproperty(__CLEAN, types.optional(types.newtable(nil, { index = types.number, readresult = types.any })))
-	result:setproperty(__EVENT, types.optional(events))
-	result:setproperty(__REF, types.optional(types.unionof(Consumer, GraphNode))) -- Consumer or Flux.State type
+	result:setproperty(_ATTR, types.optional(types.newtable(nil, { index = types.string, readresult = types.any })))
+	result:setproperty(_TAG, types.optional(types.newtable(nil, { index = types.number, readresult = types.any })))
+	result:setproperty(_CLEAN, types.optional(types.newtable(nil, { index = types.number, readresult = types.any })))
+	result:setproperty(_EVENT, types.optional(events))
+	result:setproperty(_REF, types.optional(types.unionof(Consumer, GraphNode))) -- Consumer or Flux.State type
 
 	return result
 end

@@ -169,7 +169,7 @@ Wraps a reactive [node](https://flux.kohl.gg/guide/concepts/signals) for <strong
 Assigning `Flux.model(node)` to a property (or attribute) drives the
 [`Instance`](https://create.roblox.com/docs/reference/engine/classes/Instance) from the node AND writes the node
 back whenever the user changes that property, the terse equivalent of assigning the node and repeating it under
-`__EVENT`. Only sound for properties that fire a changed signal (e.g.
+`_EVENT`. Only sound for properties that fire a changed signal (e.g.
 [`TextBox`](https://create.roblox.com/docs/reference/engine/classes/TextBox)`.Text`).
 
 [Open Documentation](https://flux.kohl.gg/guide/roblox/creation#flux-model-two-way-binding-in-one-key)

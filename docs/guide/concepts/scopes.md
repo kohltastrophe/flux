@@ -118,7 +118,7 @@ These are the primitives the built-in helpers (mapping, conditionals, instance b
 
 ## Manual Cleanup with `Flux.clean`{lua}
 
-`Flux.clean`{lua} is the cleanup engine behind Scopes and the `__CLEAN` directive, exposed for manual use. It accepts a function, Instance, connection, thread, node, any object with a `:Destroy()`{luau}/`:destroy()`{luau} method, or an array of any of these (recursively), and disposes of it immediately. Individual failures are isolated, so one bad cleanup never aborts the rest:
+`Flux.clean`{lua} is the cleanup engine behind Scopes and the `_CLEAN` directive, exposed for manual use. It accepts a function, Instance, connection, thread, node, any object with a `:Destroy()`{luau}/`:destroy()`{luau} method, or an array of any of these (recursively), and disposes of it immediately. Individual failures are isolated, so one bad cleanup never aborts the rest:
 
 ```luau
 Flux.clean({
@@ -139,7 +139,7 @@ Flux.clean({
 
 ## Connecting a Scope to an Instance Lifetime
 
-A common pattern ties a scope's lifetime to a Roblox instance with the `__CLEAN` directive, so destroying the instance destroys the scope:
+A common pattern ties a scope's lifetime to a Roblox instance with the `_CLEAN` directive, so destroying the instance destroys the scope:
 
 ```luau
 local function Toast(message)
@@ -151,17 +151,17 @@ local function Toast(message)
             Size = UDim2.fromOffset(300, 60),
 
             -- Destroy the scope when the frame is destroyed
-            __CLEAN = { scope },
+            _CLEAN = { scope },
         }
     end)
 
     -- Animate out and destroy after 3 seconds
     task.delay(3, function()
-        frame:Destroy() -- triggers __CLEAN, which destroys the scope
+        frame:Destroy() -- triggers _CLEAN, which destroys the scope
     end)
 
     return frame
 end
 ```
 
-The `Frame` is owned by the scope, and `__CLEAN = { scope }`{luau} closes the loop the other way: if anything destroys the `Frame` (its parent `ScreenGui` going away, for example), the scope and all the state inside it go with it. Destroying either side tears the whole unit down exactly once.
+The `Frame` is owned by the scope, and `_CLEAN = { scope }`{luau} closes the loop the other way: if anything destroys the `Frame` (its parent `ScreenGui` going away, for example), the scope and all the state inside it go with it. Destroying either side tears the whole unit down exactly once.

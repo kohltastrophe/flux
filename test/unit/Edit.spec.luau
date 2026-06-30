@@ -156,12 +156,12 @@ rtest("new · Flux.model two-way binds a property", function()
 	s:Destroy()
 end)
 
-rtest("new · Flux.model two-way binds an attribute via __ATTR", function()
+rtest("new · Flux.model two-way binds an attribute via _ATTR", function()
 	local level = Flux.signal(1)
 	local frame
 	local s = Flux.scope(function()
 		frame = Flux.new("Frame")({
-			__ATTR = { Level = Flux.model(level) },
+			_ATTR = { Level = Flux.model(level) },
 		})
 	end)
 	flush()
@@ -178,28 +178,28 @@ rtest("new · Flux.model two-way binds an attribute via __ATTR", function()
 	s:Destroy()
 end)
 
-rtest("new · __REF (callback and node forms)", function()
+rtest("new · _REF (callback and node forms)", function()
 	local captured
 	local refNode = Flux.signal(nil)
 	local s = Flux.scope(function()
 		Flux.new("Frame")({
-			__REF = function(inst)
+			_REF = function(inst)
 				captured = inst
 			end,
 		})
-		Flux.new("Frame")({ __REF = refNode })
+		Flux.new("Frame")({ _REF = refNode })
 	end)
-	expect(captured ~= nil and captured:IsA("Frame"), "__REF callback received the instance")
-	expect(refNode() ~= nil and refNode():IsA("Frame"), "__REF node set to the instance")
+	expect(captured ~= nil and captured:IsA("Frame"), "_REF callback received the instance")
+	expect(refNode() ~= nil and refNode():IsA("Frame"), "_REF node set to the instance")
 	s:Destroy()
 end)
 
-rtest("new · __ATTR (static and reactive)", function()
+rtest("new · _ATTR (static and reactive)", function()
 	local lvl = Flux(1)
 	local f, f2
 	local s = Flux.scope(function()
-		f = Flux.new("Frame")({ __ATTR = { Level = 7, Tag = "boss" } })
-		f2 = Flux.new("Frame")({ __ATTR = { Level = lvl } })
+		f = Flux.new("Frame")({ _ATTR = { Level = 7, Tag = "boss" } })
+		f2 = Flux.new("Frame")({ _ATTR = { Level = lvl } })
 	end)
 	expect(f:GetAttribute("Level") == 7, "static numeric attribute set")
 	expect(f:GetAttribute("Tag") == "boss", "static string attribute set")
@@ -270,9 +270,9 @@ rtest("edit · props and reactive bindings on an existing instance", function()
 	s:Destroy()
 end)
 
-rtest("edit · node-driven Parent + __CLEAN survive immediate destroy", function()
+rtest("edit · node-driven Parent + _CLEAN survive immediate destroy", function()
 	-- the Destroying connection is hooked BEFORE parenting, so a destroy
-	-- right after edit() still flushes __CLEAN
+	-- right after edit() still flushes _CLEAN
 	local screen = Instance.new("ScreenGui")
 	local parentFrame = Instance.new("Frame")
 	parentFrame.Parent = screen
@@ -282,7 +282,7 @@ rtest("edit · node-driven Parent + __CLEAN survive immediate destroy", function
 	local parentNode = Flux.signal(parentFrame)
 	Flux.edit(child)({
 		Parent = parentNode,
-		__CLEAN = {
+		_CLEAN = {
 			function()
 				cleaned += 1
 			end,
@@ -291,7 +291,7 @@ rtest("edit · node-driven Parent + __CLEAN survive immediate destroy", function
 	expect(child.Parent == parentFrame, "node-driven Parent applied")
 	child:Destroy()
 	task.wait() -- let deferred Destroying handlers run
-	expect(cleaned == 1, "__CLEAN flushed on immediate destroy")
+	expect(cleaned == 1, "_CLEAN flushed on immediate destroy")
 
 	-- node-driven Parent keeps following on a fresh instance
 	local child2 = Instance.new("Frame")
@@ -304,12 +304,12 @@ rtest("edit · node-driven Parent + __CLEAN survive immediate destroy", function
 	screen:Destroy()
 end)
 
-rtest("edit · __CLEAN runs exactly once across instance and scope destroy", function()
+rtest("edit · _CLEAN runs exactly once across instance and scope destroy", function()
 	local f = Instance.new("Frame")
 	local cleaned = 0
 	local s = Flux.scope(function()
 		Flux.edit(f)({
-			__CLEAN = {
+			_CLEAN = {
 				function()
 					cleaned += 1
 				end,
@@ -323,13 +323,13 @@ rtest("edit · __CLEAN runs exactly once across instance and scope destroy", fun
 	expect(cleaned == 1, "scope destroy does not re-run the cleanup")
 end)
 
-rtest("edit · __EVENT connects an RBXScriptSignal handler", function()
+rtest("edit · _EVENT connects an RBXScriptSignal handler", function()
 	local bindable = Instance.new("BindableEvent")
 	local fired = 0
 	local payload
 	local s = Flux.scope(function()
 		Flux.edit(bindable)({
-			__EVENT = {
+			_EVENT = {
 				-- instance.Event is an RBXScriptSignal: connected via signal:Connect
 				Event = function(value)
 					fired += 1
@@ -346,12 +346,12 @@ rtest("edit · __EVENT connects an RBXScriptSignal handler", function()
 	s:Destroy()
 end)
 
-rtest("edit · __EVENT GetPropertyChangedSignal handler", function()
+rtest("edit · _EVENT GetPropertyChangedSignal handler", function()
 	local label = Instance.new("TextLabel")
 	local changes = 0
 	local s = Flux.scope(function()
 		Flux.edit(label)({
-			__EVENT = {
+			_EVENT = {
 				-- Text is NOT a signal: edit() falls back to GetPropertyChangedSignal("Text")
 				Text = function()
 					changes += 1
@@ -367,13 +367,13 @@ rtest("edit · __EVENT GetPropertyChangedSignal handler", function()
 	s:Destroy()
 end)
 
-rtest("edit · __EVENT value <== instance.property bind-from", function()
+rtest("edit · _EVENT value <== instance.property bind-from", function()
 	local label = Instance.new("TextLabel")
 	label.Text = "start"
 	local mirror = Flux.signal(nil)
 	local s = Flux.scope(function()
 		Flux.edit(label)({
-			__EVENT = {
+			_EVENT = {
 				-- a node at a property key reads FROM the instance into the node
 				Text = mirror,
 			},
@@ -388,15 +388,15 @@ rtest("edit · __EVENT value <== instance.property bind-from", function()
 	s:Destroy()
 end)
 
-rtest("edit · __EVENT.__ATTR attribute-changed handler and bind-from", function()
+rtest("edit · _EVENT._ATTR attribute-changed handler and bind-from", function()
 	local frame = Instance.new("Frame")
 	frame:SetAttribute("Score", 1)
 	local attrChanges = 0
 	local mirror = Flux.signal(nil)
 	local s = Flux.scope(function()
 		Flux.edit(frame)({
-			__EVENT = {
-				__ATTR = {
+			_EVENT = {
+				_ATTR = {
 					-- function => GetAttributeChangedSignal(attr):Connect
 					Score = function()
 						attrChanges += 1

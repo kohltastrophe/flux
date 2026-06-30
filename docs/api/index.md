@@ -35,17 +35,17 @@ A quick map of Flux's public surface, grouped by what you're trying to do. Signa
 
 ## UI Construction
 
-| Signature                                    | Summary                                                                                             | Guide                                                                    |
-| :------------------------------------------- | :-------------------------------------------------------------------------------------------------- | :----------------------------------------------------------------------- |
-| `Flux.new(className) -> (props) -> Instance` | Create an Instance with defaults + reactive props.                                                  | [Creation](/guide/roblox/creation#the-flux-new-function)                 |
-| `Flux.edit(instance) -> (props) -> Instance` | Hydrate an existing Instance with reactive bindings.                                                | [Hydration](/guide/roblox/hydration#the-flux-edit-function)              |
-| `Flux.model(node) -> T`                      | Wrap a node for two-way property/attribute binding.                                                 | [Creation](/guide/roblox/creation#flux-model-two-way-binding-in-one-key) |
-| `__EVENT = { [signal] = fn }`                | Directive: `:Connect` handlers & property-change listeners (nested `__ATTR` for attribute changes). | [Hydration](/guide/roblox/hydration#event-two-way-binding-listeners)     |
-| `__ATTR = { [name] = value \| node }`        | Directive: set or bind Roblox attributes.                                                           | [Hydration](/guide/roblox/hydration#attr-attributes)                     |
-| `__REF = (instance) -> cleanup?` · `Node`    | Directive: receive the built Instance.                                                              | [Hydration](/guide/roblox/hydration#ref-reference)                       |
-| `__CLEAN = { Cleanable }`                    | Directive: extra teardown tied to `Destroying`.                                                     | [Hydration](/guide/roblox/hydration#clean-lifecycle-cleanup)             |
-| `Flux.Defaults`                              | Mutable per-class default props auto-applied by `Flux.new` (e.g. `Frame.BorderSizePixel = 0`).      | [Defaults](/guide/roblox/defaults#customizing-defaults)                  |
-| `Flux.Flags.defaults`                        | Global on/off for the auto-defaults system (default `true`; `false` builds raw instances).          | [Defaults](/guide/roblox/defaults#disabling-defaults)                    |
+| Signature                                    | Summary                                                                                            | Guide                                                                    |
+| :------------------------------------------- | :------------------------------------------------------------------------------------------------- | :----------------------------------------------------------------------- |
+| `Flux.new(className) -> (props) -> Instance` | Create an Instance with defaults + reactive props.                                                 | [Creation](/guide/roblox/creation#the-flux-new-function)                 |
+| `Flux.edit(instance) -> (props) -> Instance` | Hydrate an existing Instance with reactive bindings.                                               | [Hydration](/guide/roblox/hydration#the-flux-edit-function)              |
+| `Flux.model(node) -> T`                      | Wrap a node for two-way property/attribute binding.                                                | [Creation](/guide/roblox/creation#flux-model-two-way-binding-in-one-key) |
+| `_EVENT = { [signal] = fn }`                 | Directive: `:Connect` handlers & property-change listeners (nested `_ATTR` for attribute changes). | [Hydration](/guide/roblox/hydration#event-two-way-binding-listeners)     |
+| `_ATTR = { [name] = value \| node }`         | Directive: set or bind Roblox attributes.                                                          | [Hydration](/guide/roblox/hydration#attr-attributes)                     |
+| `_REF = (instance) -> cleanup?` · `Node`     | Directive: receive the built Instance.                                                             | [Hydration](/guide/roblox/hydration#ref-reference)                       |
+| `_CLEAN = { Cleanable }`                     | Directive: extra teardown tied to `Destroying`.                                                    | [Hydration](/guide/roblox/hydration#clean-lifecycle-cleanup)             |
+| `Flux.Defaults`                              | Mutable per-class default props auto-applied by `Flux.new` (e.g. `Frame.BorderSizePixel = 0`).     | [Defaults](/guide/roblox/defaults#customizing-defaults)                  |
+| `Flux.Flags.defaults`                        | Global on/off for the auto-defaults system (default `true`; `false` builds raw instances).         | [Defaults](/guide/roblox/defaults#disabling-defaults)                    |
 
 ## Lifecycle
 

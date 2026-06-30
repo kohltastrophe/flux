@@ -165,7 +165,7 @@ end)
 
 ### A Self-Contained Component Scope
 
-When a component owns resources whose lifetime should follow its own root instance rather than an outer scope, give it its own scope and tie that scope to the instance with `__CLEAN`. When Flux destroys the instance, it destroys the scope and everything inside it.
+When a component owns resources whose lifetime should follow its own root instance rather than an outer scope, give it its own scope and tie that scope to the instance with `_CLEAN`. When Flux destroys the instance, it destroys the scope and everything inside it.
 
 ```luau
 local function TimerComponent(props)
@@ -181,7 +181,7 @@ local function TimerComponent(props)
             Text = function() return timeElapsed .. "s" end,
 
             -- Destroy the scope when this TextLabel is destroyed
-            __CLEAN = { scope },
+            _CLEAN = { scope },
         }
     end)
 
@@ -189,6 +189,6 @@ local function TimerComponent(props)
 end
 ```
 
-Because the `TextLabel` is built inside the scope, the scope owns it, and `__CLEAN = { scope }`{luau} closes the loop the other way: destroying the `TextLabel` (or any outer scope) tears down the timer's effect too; its `timeElapsed` signal is then left for the GC.
+Because the `TextLabel` is built inside the scope, the scope owns it, and `_CLEAN = { scope }`{luau} closes the loop the other way: destroying the `TextLabel` (or any outer scope) tears down the timer's effect too; its `timeElapsed` signal is then left for the GC.
 
 By following the "Run Once" mental model and letting scopes own what your components create, you can build large UI trees out of small, predictable components.
