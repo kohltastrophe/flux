@@ -120,7 +120,7 @@ local Motion = {
 }
 
 --- Returns whether the given value is a reactive motion.
-function Motion.isMotion<T>(obj: T): T
+function Motion.isMotion(obj: unknown): boolean
 	return type(obj) == "table" and getmetatable(obj) == MotionStateMetatable
 end
 
