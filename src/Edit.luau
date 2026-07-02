@@ -111,7 +111,8 @@ local function edit(
 	instance: Instance,
 	properties: Type.Map<any>,
 	seenAttrs: { [any]: boolean }?,
-	seenProps: { [any]: boolean }?
+	seenProps: { [any]: boolean }?,
+	inheritedClean: { any }?
 ): Instance
 	local actions = {}
 	local signals = {}
@@ -119,7 +120,12 @@ local function edit(
 
 	local _ATTR = properties._ATTR
 	local _USER_CLEAN = properties._CLEAN
-	local _CLEAN = if _USER_CLEAN then table.clone(_USER_CLEAN) else {}
+	local _CLEAN = inheritedClean or (if _USER_CLEAN then table.clone(_USER_CLEAN) else {})
+	if inheritedClean and _USER_CLEAN then
+		for _, item in _USER_CLEAN do
+			table.insert(_CLEAN, item)
+		end
+	end
 	local _EVENT = properties._EVENT
 	local _TAG = properties._TAG
 	local _REF = properties._REF
@@ -242,9 +248,12 @@ local function edit(
 
 	if _EVENT then
 		local _EVENT_ATTR = _EVENT._ATTR
-		_EVENT._ATTR = nil
 
 		for property, value in _EVENT do
+			if property == "_ATTR" then
+				continue
+			end
+
 			if isNode(value) then -- value <== instance.property
 				local _, disconnect = bindFrom(value, instance, property)
 				table.insert(_CLEAN, disconnect)
@@ -259,7 +268,6 @@ local function edit(
 		end
 
 		if _EVENT_ATTR then
-			_EVENT._ATTR = _EVENT_ATTR
 			for attribute, value in _EVENT_ATTR do
 				if isNode(value) then -- value <== instance.attr
 					local _, disconnect = bindFrom(value, instance, attribute, true)
@@ -293,12 +301,14 @@ local function edit(
 
 			seenProps = {}
 			for key in properties do
-				seenProps[key] = true
+				if type(key) ~= "number" then -- numeric entries never reach the seenProps checks
+					seenProps[key] = true
+				end
 			end
 		end
 
 		for _, value in toFlatten do
-			edit(instance, value, seenAttrs, seenProps)
+			edit(instance, value, seenAttrs, seenProps, _CLEAN)
 		end
 	end
 
@@ -312,7 +322,8 @@ local function edit(
 
 	local parentIsNode = isNode(parent)
 
-	if parentIsNode or next(_CLEAN) ~= nil then
+	-- an inherited _CLEAN belongs to the root pass, which installs the single lifecycle hook
+	if not inheritedClean and (parentIsNode or next(_CLEAN) ~= nil) then
 		local connection = instance.Destroying:Once(function()
 			Clean(_CLEAN)
 			table.clear(_CLEAN)
