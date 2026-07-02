@@ -45,6 +45,11 @@ A quick map of Flux's public surface, grouped by what you're trying to do. Signa
 | `_TAG = tag \| node \| { tag \| node }`      | Directive: static or reactive CollectionService tags (diffed: adds new, removes dropped).          | [Hydration](/guide/roblox/hydration#tag-collectionservice-tags)          |
 | `_REF = (instance) -> cleanup?` · `Node`     | Directive: receive the built Instance.                                                             | [Hydration](/guide/roblox/hydration#ref-reference)                       |
 | `_CLEAN = { Cleanable }`                     | Directive: extra teardown tied to `Destroying`.                                                    | [Hydration](/guide/roblox/hydration#clean-lifecycle-cleanup)             |
+| `Flux.attr(name, value)` · `Flux.attr(map)`  | One-off `_ATTR` for the array portion; repeatable.                                                 | [Hydration](/guide/roblox/hydration#one-off-directives)                  |
+| `Flux.event(name, fn)` · `Flux.event(map)`   | One-off `_EVENT` for the array portion; repeatable.                                                | [Hydration](/guide/roblox/hydration#one-off-directives)                  |
+| `Flux.tag(...tags)`                          | One-off `_TAG` for the array portion; repeatable.                                                  | [Hydration](/guide/roblox/hydration#one-off-directives)                  |
+| `Flux.ref(fn \| node)`                       | One-off `_REF` for the array portion.                                                              | [Hydration](/guide/roblox/hydration#one-off-directives)                  |
+| `Flux.onDestroy(...items)`                   | One-off `_CLEAN` for the array portion; repeatable.                                                | [Hydration](/guide/roblox/hydration#one-off-directives)                  |
 | `Flux.Defaults`                              | Mutable per-class default props auto-applied by `Flux.new` (e.g. `Frame.BorderSizePixel = 0`).     | [Defaults](/guide/roblox/defaults#customizing-defaults)                  |
 | `Flux.Flags.defaults`                        | Global on/off for the auto-defaults system (default `true`; `false` builds raw instances).         | [Defaults](/guide/roblox/defaults#disabling-defaults)                    |
 

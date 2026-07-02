@@ -13,6 +13,7 @@ local Bind = require("@self/Bind")
 local Clean = require("@self/Clean")
 local Conditional = require("@self/Conditional")
 local Context = require("@self/Context")
+local Directive = require("@self/Directive")
 local For = require("@self/For")
 local Layout = require("@self/Layout")
 local Responsive = require("@self/Responsive")
@@ -142,6 +143,12 @@ local Flux = {
 	on = Bind.on,
 	listen = Bind.listen,
 	model = Bind.model,
+
+	attr = Directive.attr,
+	event = Directive.event,
+	onDestroy = Directive.onDestroy,
+	ref = Directive.ref,
+	tag = Directive.tag,
 
 	-- TODO: better context using scopes
 	context = Context.new,
