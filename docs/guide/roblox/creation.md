@@ -129,8 +129,11 @@ local menu = new "Frame" {
 | Event name (e.g. `Activated`) | Calls [`:Connect(fn)`{luau}](https://create.roblox.com/docs/en-us/reference/engine/datatypes/RBXScriptSignal#Connect) automatically                               |
 | `_EVENT`                      | Two-way bindings and [`:GetPropertyChangedSignal`{luau}](https://create.roblox.com/docs/en-us/reference/engine/classes/Object#GetPropertyChangedSignal) listeners |
 | `_ATTR`                       | Static or reactive custom Instance Attributes                                                                                                                     |
+| `_TAG`                        | Static or reactive [CollectionService](https://create.roblox.com/docs/en-us/reference/engine/classes/CollectionService) tags                                      |
 | `_CLEAN`                      | Additional cleanup items tied to the instance's lifetime                                                                                                          |
 | `_REF`                        | Capture a reference to the created instance                                                                                                                       |
+
+Each directive is described in detail in [Hydration: Special Directives](/guide/roblox/hydration#special-directives); they behave identically for created and hydrated instances.
 
 ```luau
 local inputState = Flux("")

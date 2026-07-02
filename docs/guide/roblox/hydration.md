@@ -76,6 +76,27 @@ Flux.edit(playerCharacter) {
 }
 ```
 
+### `_TAG`{luau} (CollectionService Tags)
+
+Use `_TAG` to manage [CollectionService](https://create.roblox.com/docs/en-us/reference/engine/classes/CollectionService) tags declaratively. It accepts:
+
+- A **string**, added as a tag once.
+- An **array**, where every element is itself a valid `_TAG` value (string, node, or function).
+- A **node or function** (implicit memo) whose value is a tag string _or an array of tag strings_. The instance's tags follow the value: when it changes, Flux diffs the new value against the old one, adds the newly listed tags, removes the dropped ones, and leaves tags present in both untouched (a kept tag never flickers off).
+
+```luau
+local status = Flux("Idle")
+
+Flux.edit(npcModel) {
+    _TAG = {
+        "Enemy",  -- static tag, applied once
+        status,   -- reactive tag, swaps "Idle" for "Running" on status("Running")
+    },
+}
+```
+
+A reactive `_TAG` only removes tags it previously applied itself, so tags added by Studio or other scripts are left alone. Flux also reference-counts the tags it applies per instance, so a tag declared by more than one `_TAG` entry (say, a static string and a node that moves off the same value) stays on the instance until every declaring entry has dropped it. When the instance is destroyed (or the owning [scope](/guide/concepts/scopes) is wiped first), the listener disconnects and the currently applied tags remain on the instance.
+
 ### `_EVENT`{luau} (Two-Way Binding & Listeners)
 
 While standard [`RBXScriptSignals`](https://create.roblox.com/docs/en-us/reference/engine/datatypes/RBXScriptSignal) (like [`Activated`](https://create.roblox.com/docs/en-us/reference/engine/classes/GuiButton#Activated) or [`Touched`](https://create.roblox.com/docs/en-us/reference/engine/classes/BasePart#Touched)) can be connected directly as top-level properties, the `_EVENT` table is used for two-way data binding and [`GetPropertyChangedSignal(property)`{luau}](https://create.roblox.com/docs/en-us/reference/engine/classes/Object#GetPropertyChangedSignal) listeners.

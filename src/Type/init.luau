@@ -49,7 +49,9 @@ export type function Properties(instance: type?)
 	events:setproperty(_ATTR, types.optional(types.newtable(nil, attrEventIndexer)))
 
 	result:setproperty(_ATTR, types.optional(types.newtable(nil, { index = types.string, readresult = types.any })))
-	result:setproperty(_TAG, types.optional(types.newtable(nil, { index = types.number, readresult = types.any })))
+	local tag = types.unionof(types.string, GraphNode, types.newfunction({}, { head = { types.any } }))
+	local tagList = types.newtable(nil, { index = types.number, readresult = tag })
+	result:setproperty(_TAG, types.optional(types.unionof(tag, tagList)))
 	result:setproperty(_CLEAN, types.optional(types.newtable(nil, { index = types.number, readresult = types.any })))
 	result:setproperty(_EVENT, types.optional(events))
 	result:setproperty(_REF, types.optional(types.unionof(Consumer, GraphNode))) -- Consumer or Flux.State type

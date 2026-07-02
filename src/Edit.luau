@@ -14,7 +14,6 @@ local bindFrom = Bind.from
 local bindListen = Bind.listen
 local bindTo = Bind.to
 local isNode = Graph.isNode
-local raw = Graph.raw
 local newNode = Graph.new
 local getOwner = Graph.getOwner
 local onDestroy = Graph.onDestroy
@@ -28,6 +27,82 @@ local function bindModel(node: any, instance: Instance, property: string, _CLEAN
 	table.insert(_CLEAN, bindTo(node, instance, property, isAttribute))
 	local _, disconnect = bindFrom(node, instance, property, isAttribute)
 	table.insert(_CLEAN, disconnect)
+end
+
+type tagValue = Directive.tagValue
+
+local tagCounts: { [Instance]: { [string]: number } } = setmetatable({}, { __mode = "k" }) :: any
+
+local function addTagRef(instance: Instance, tag: string)
+	local counts = tagCounts[instance]
+	if not counts then
+		counts = {}
+		tagCounts[instance] = counts
+	end
+	local count = counts[tag]
+	counts[tag] = (count or 0) + 1
+	if not count then
+		instance:AddTag(tag)
+	end
+end
+
+local function removeTagRef(instance: Instance, tag: string)
+	local counts = tagCounts[instance]
+	local count = if counts then counts[tag] else nil
+	if count and count > 1 then
+		counts[tag] = count - 1
+	else
+		if counts then
+			counts[tag] = nil
+		end
+		instance:RemoveTag(tag)
+	end
+end
+
+local function bindTag(instance: Instance, tagValue: tagValue, _CLEAN: { any })
+	if type(tagValue) == "string" then
+		addTagRef(instance, tagValue)
+		return
+	elseif type(tagValue) == "function" then
+		tagValue = newNode(tagValue :: any)
+		table.insert(_CLEAN, tagValue)
+	end
+
+	if isNode(tagValue) then
+		local node = tagValue :: Graph.Node<string>
+		local currentSet: { [string]: boolean } = {}
+
+		local function updateTags(newTag: string | { string })
+			local newSet: { [string]: boolean } = {}
+			if type(newTag) == "table" then
+				for _, tag in newTag do
+					newSet[tag] = true
+				end
+			elseif type(newTag) == "string" then
+				newSet[newTag] = true
+			end
+
+			for tag in newSet do
+				if not currentSet[tag] then
+					addTagRef(instance, tag)
+				end
+			end
+			for tag in currentSet do
+				if not newSet[tag] then
+					removeTagRef(instance, tag)
+				end
+			end
+
+			currentSet = newSet
+		end
+
+		table.insert(_CLEAN, bindListen(node, updateTags))
+		updateTags(node:peek())
+	elseif type(tagValue) == "table" then
+		for _, value in tagValue do
+			bindTag(instance, value, _CLEAN)
+		end
+	end
 end
 
 local task = Compat.task
@@ -162,44 +237,7 @@ local function edit(
 	end
 
 	if _TAG then
-		for _, tagVal in _TAG do
-			if typeof(tagVal) == "function" then
-				tagVal = newNode(tagVal)
-				table.insert(_CLEAN, tagVal)
-			end
-			if isNode(tagVal) then
-				local previousTag = {} :: { string }
-				local function updateTags(newTag)
-					if type(newTag) == "table" then
-						local newSet = {} :: { [string]: boolean }
-						for _, tag in newTag do
-							newSet[tag] = true
-						end
-						for _, tag in previousTag do
-							if newSet[tag] then
-								newSet[tag] = nil
-							else
-								instance:RemoveTag(tag)
-							end
-						end
-						for tag in newSet do
-							instance:AddTag(tag)
-						end
-					else
-						tagVal:RemoveTag(previousTag)
-						tagVal:AddTag(newTag)
-					end
-					previousTag = newTag
-				end
-
-				local disconnect = bindListen(tagVal, updateTags)
-				updateTags(raw(tagVal))
-
-				table.insert(_CLEAN, disconnect)
-			else
-				instance:AddTag(tagVal)
-			end
-		end
+		bindTag(instance, _TAG, _CLEAN)
 	end
 
 	if _EVENT then
