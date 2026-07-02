@@ -42,6 +42,34 @@ test("model · rejects a non-node", function()
 	end, "expects a reactive node")
 end)
 
+rtest("bind.to · strict mode applies remaining bindings when one write fails (expected warn)", function()
+	Flux.strict(true)
+	local ok, err = pcall(function()
+		local holder = Instance.new("ObjectValue")
+		local target = Instance.new("Folder")
+		local v = Flux(nil :: Instance?)
+		-- attributes are written before properties, and Instances are invalid attribute values,
+		-- so the attribute write fails first and must not starve the sibling property binding
+		Flux.Bind.to(v, holder, "ref", true)
+		Flux.Bind.to(v, holder, "Value")
+
+		v:set(target, true)
+		flush() -- expected warn: attribute write fails with instance/key/value context
+		expect(holder.Value == target, "property write applied after the attribute write failed")
+
+		v:set(nil, true)
+		flush()
+		expect(holder.Value == nil, "binding keeps working after a failed write")
+
+		holder:Destroy()
+		target:Destroy()
+	end)
+	Flux.strict(false)
+	if not ok then
+		error(err, 0)
+	end
+end)
+
 rtest("bind.children · stale disconnect doesn't sever the live binding", function()
 	local Bind = Flux.Bind
 	local screen = Instance.new("ScreenGui")
