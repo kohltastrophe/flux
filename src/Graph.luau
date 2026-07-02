@@ -638,7 +638,7 @@ local function effect<T>(fn: (T) -> ()): Node<T>
 end
 
 local function new<T>(obj: T, isEffect: boolean?, equals: ((T, T) -> boolean)?): Node<T>
-	if type(obj) == "table" and getmetatable(obj) == Node then
+	if isNode(obj) then
 		return obj
 	end
 	if type(obj) == "function" then
