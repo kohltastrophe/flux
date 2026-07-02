@@ -250,6 +250,59 @@ test("effect · deferred, runs on flush, re-runs on change", function()
 	expect(runs == 2 and last == 7, "effect re-runs after dependency change")
 end)
 
+test("effect · survives a suppressed error and stays reactive (expected warn)", function()
+	local v = Flux(1)
+	local runs = 0
+	Flux(function()
+		runs += 1
+		if v() == 2 then
+			error("effect failure (expected warn)")
+		end
+	end, true)
+	flush()
+	expect(runs == 1, "baseline run")
+	v(2)
+	flush()
+	expect(runs == 2, "erroring run still happened")
+	v(3)
+	flush()
+	expect(runs == 3, "effect re-runs after a suppressed error")
+end)
+
+test("effect · survives an error on its very first run (expected warn)", function()
+	local v = Flux(2)
+	local runs = 0
+	Flux(function()
+		runs += 1
+		if v() == 2 then
+			error("first-run failure (expected warn)")
+		end
+	end, true)
+	flush()
+	expect(runs == 1, "first run errored")
+	v(3)
+	flush()
+	expect(runs == 2, "effect stays subscribed to sources read before the error")
+end)
+
+test("effect · survives a first-run error under strict mode (expected warn)", function()
+	withStrict(function()
+		local v = Flux(2)
+		local runs = 0
+		Flux(function()
+			runs += 1
+			if v() == 2 then
+				error("first-run failure (expected warn)")
+			end
+		end, true)
+		flush()
+		expect(runs == 1, "first run errored")
+		v(3)
+		flush()
+		expect(runs == 3, "effect recovered; strict double-runs the successful pass")
+	end)
+end)
+
 test("effect · batches multiple writes per flush", function()
 	local v = Flux(0)
 	local runs, last = 0, nil
