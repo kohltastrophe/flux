@@ -91,6 +91,13 @@ table.insert(list, "Shield")
 items:set(list, true) -- same table reference; force dependents to update
 ```
 
+When there is no new value to write, `:update()`{luau} is the terser equivalent: it re-fires dependents with the value the node already holds, and returns the node so a read or write can be chained.
+
+```luau
+table.insert(items:peek(), "Axe")
+items:update() -- nothing written; dependents re-run with the same table
+```
+
 ## Custom Equality
 
 By default, a node only propagates when the new value is `~=` the old one. The explicit constructors `Flux.signal`{luau} and `Flux.computed`{luau} accept an optional `equals` function as their final argument; when it returns `true`{luau}, the values are considered equal and dependents are not notified:

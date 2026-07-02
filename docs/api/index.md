@@ -31,6 +31,7 @@ A quick map of Flux's public surface, grouped by what you're trying to do. Signa
 | `node:get() -> T` · `node()`                     | Tracked read of a node.                                                                             | [Signals](/guide/concepts/signals#reading-a-signal)                                    |
 | `node:peek() -> T`                               | Untracked read of a node (current value, no subscribe).                                             | [Tracking](/guide/concepts/tracking#flux-raw)                                          |
 | `node:set(value, force?)` · `node(value)`        | Write a node (`force` re-fires dependents even when the value is unchanged).                        | [Signals](/guide/concepts/signals#updating-a-signal)                                   |
+| `node:update() -> node`                          | Re-fire dependents without writing (push an in-place table mutation).                               | [Signals](/guide/concepts/signals#forcing-an-update)                                   |
 | `node:Destroy()` · `node:onDestroy(fn)`          | Tear down a node / register a teardown callback.                                                    | [Signals](/guide/concepts/signals#destroying-a-signal)                                 |
 
 ## UI Construction

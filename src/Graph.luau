@@ -707,13 +707,26 @@ end
 
 --[[
 Writes a value, skipping propagation when it is identical (`~=`) to the current one. Pass `force`
-as `true` to notify dependents anyway, the idiomatic way to push an in-place table mutation
-(same reference) back through the graph.
+as `true` to notify dependents anyway; to re-fire dependents without writing at all, use
+[`node:update()`](https://flux.kohl.gg/guide/concepts/signals#forcing-an-update).
 
 [Open Documentation](https://flux.kohl.gg/guide/concepts/signals#updating-a-signal)
 ]]
 function Node.set<T>(self: Node<T>, value: T, force: boolean?): T
 	return setData(self[NODE_KEY], value, force)
+end
+
+--[[
+Re-fires the node's dependents <strong>without writing a value</strong>: observers are marked stale
+exactly as if a changed value had been set. This is the terse equivalent of `node:set(node:peek(), true)`,
+the idiomatic way to push an in-place table mutation (same reference) back through the graph.
+Returns the node, so a read or write can be chained.
+
+[Open Documentation](https://flux.kohl.gg/guide/concepts/signals#forcing-an-update)
+]]
+function Node.update<T>(self: Node<T>): Node<T>
+	forObservers(self[NODE_KEY], stale)
+	return self
 end
 
 --[[

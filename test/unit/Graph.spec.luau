@@ -96,6 +96,28 @@ test("value · equals option short-circuits; force bypasses", function()
 	expect(c() == 20 and runs == 2, "force write propagates to observers")
 end)
 
+test("value · update() re-fires dependents without writing", function()
+	local items = Flux({ "Sword" })
+	local runs, seen = 0, 0
+	local c = Flux(function()
+		runs += 1
+		return #items()
+	end)
+	Flux(function()
+		seen = #items()
+	end, true)
+	flush()
+	expect(c() == 1 and runs == 1 and seen == 1, "baseline evaluation")
+
+	table.insert(items:peek(), "Shield")
+	expect(c() == 1 and runs == 1, "in-place mutation alone does not propagate")
+
+	expect(items:update() == items, "update() returns the node")
+	flush()
+	expect(c() == 2 and runs == 2, "computed observer re-runs with the same reference")
+	expect(seen == 2, "effect observer re-runs on flush")
+end)
+
 test("value · redundant write on default equality is a no-op", function()
 	local v = Flux(10) -- plain value node, no custom equals
 	local runs = 0
