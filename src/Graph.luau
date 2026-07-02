@@ -512,7 +512,8 @@ local function flush(index: number?)
 			errored[STATE] = CLEAN
 		end
 		effectQueue[drainIndex] = nil
-		warn(`suppressed effect error:\n{result}`)
+		local hint = if strict_mode then "" else " (enable Flux.strict() in development for detailed errors)"
+		warn(`suppressed effect error:{hint}\n{result}`)
 		start = drainIndex + 1
 	end
 	flushing = false
@@ -524,11 +525,12 @@ local function cleanupFactory(obj: any)
 		elseif typeof(obj) == "RBXScriptConnection" then function() obj:Disconnect() end
 		elseif type(obj) == "thread" then function() task.cancel(obj) end
 		elseif typeof(obj) == "Instance" then function() obj:Destroy() end
+		elseif type(obj) ~= "table" then error(`cannot cleanup given object: {typeof(obj)}`)
 		elseif type(obj.destroy) == "function" then function() (obj :: any):destroy() end
 		elseif type(obj.disconnect) == "function" then function() (obj :: any):disconnect() end
 		elseif type(obj.Destroy) == "function" then function() (obj :: any):Destroy() end
 		elseif type(obj.Disconnect) == "function" then function() (obj :: any):Disconnect() end
-		else error "cannot cleanup given object"
+		else error(`cannot cleanup given object: {typeof(obj)}`)
 	--stylua: ignore end
 end
 
