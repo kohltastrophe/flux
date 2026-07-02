@@ -25,12 +25,12 @@ jobs:
           rm luau.zip
 
       - name: Run headless spec
-        run: ./luau test/spec.luau
+        run: ./luau test/spec.client.luau
 
       - name: Measure coverage
         id: cov
         run: |
-          ./luau --coverage test/spec.luau > /dev/null
+          ./luau --coverage test/spec.client.luau > /dev/null
           PCT=$(python3 .github/scripts/coverage.py 2> coverage-table.txt)
           echo "pct=$PCT" >> "$GITHUB_OUTPUT"
           {
@@ -75,4 +75,4 @@ jobs:
           ROBLOX_API_KEY: ${{ secrets.ROBLOX_API_KEY }}
           ROBLOX_UNIVERSE_ID: ${{ secrets.ROBLOX_TEST_UNIVERSE_ID }}
           ROBLOX_PLACE_ID: ${{ secrets.ROBLOX_TEST_PLACE_ID }}
-          TEST_TASK_FILE: test/spec.luau
+          TEST_TASK_FILE: test/spec.client.luau

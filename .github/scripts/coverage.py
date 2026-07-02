@@ -2,7 +2,7 @@
 """Summarize Luau --coverage (LCOV) output for src/.
 
 Reads an LCOV file (default ./coverage.out, as written by `luau --coverage
-test/spec.luau`) and reports line coverage for ./src/** only -- the test
+test/spec.client.luau`) and reports line coverage for ./src/** only -- the test
 harness (spec.luau, sert.luau) is excluded from the denominator.
 
   stdout : total coverage percentage, one decimal, bare (e.g. "71.0"), so CI
