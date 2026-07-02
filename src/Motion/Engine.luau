@@ -187,12 +187,12 @@ local function stepSpring(motion: Spring, dt: number)
 
 	if d == 1 then -- CRITICALLY DAMPED
 		local expTerm = math.exp(-w * dt)
-		
+
 		for c, pos in value do
 			local tar: number = target[c]
 			local vel: number = m_vel[c]
 			local c1 = pos - tar
-			
+
 			if math.abs(c1) > EPSILON or math.abs(vel) > EPSILON then
 				isSleeping = false
 				local c2 = vel + w * c1
@@ -213,7 +213,7 @@ local function stepSpring(motion: Spring, dt: number)
 			local tar: number = target[c]
 			local vel: number = m_vel[c]
 			local c1 = pos - tar
-			
+
 			if math.abs(c1) > EPSILON or math.abs(vel) > EPSILON then
 				isSleeping = false
 				local c2 = (vel + dampingRate * c1) / wd
@@ -233,7 +233,7 @@ local function stepSpring(motion: Spring, dt: number)
 			local tar: number = target[c]
 			local vel: number = m_vel[c]
 			local displacement = pos - tar
-			
+
 			if math.abs(displacement) > EPSILON or math.abs(vel) > EPSILON then
 				isSleeping = false
 				local c2 = (vel - r1 * displacement) / (r2 - r1)
