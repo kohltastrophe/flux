@@ -762,6 +762,8 @@ every reactive scope ([computeds](https://flux.kohl.gg/guide/concepts/computeds)
 [effects](https://flux.kohl.gg/guide/concepts/effects) alike) runs a full second time so
 non-idempotent bodies surface in dev, and the graph errors on reactive cycles (re-entering a scope
 mid-run) and on destroying the scope that is currently running.
+- Instance binding writes run individually checked: a failing write reports the instance, key, and
+value that caused it, and no longer skips the node's remaining bindings.
 - Pass `true`/`false` to set the flag; call with no argument to read the current state.
 - Defaults on in development, off under production.
 
