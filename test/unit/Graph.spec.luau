@@ -346,6 +346,18 @@ test("effect · cleanup errors outside a reactive context", function()
 	end, "reactive")
 end)
 
+test("effect · cleanup rejects uncleanable objects, naming the type", function()
+	local scope = Flux.scope(function()
+		expectError(function()
+			Flux.cleanup({} :: any)
+		end, "cannot cleanup given object: table")
+		expectError(function()
+			Flux.cleanup(5 :: any)
+		end, "cannot cleanup given object: number")
+	end)
+	scope:Destroy()
+end)
+
 test("node · onDestroy and Destroy", function()
 	local destroyed = false
 	local n = Flux(1)
