@@ -50,7 +50,7 @@ def main():
         sys.exit(f"coverage: no src/ records in {path} (did the spec run?)")
 
     total_cov = total = 0
-    print(f'{"file":28} {"cov%":>6}  covered/total', file=sys.stderr)
+    print(f"{'file':28} {'cov%':>6}  covered/total", file=sys.stderr)
     for name in sorted(src):
         cov = sum(1 for hit in src[name].values() if hit)
         tot = len(src[name])
@@ -59,7 +59,7 @@ def main():
         print(f"{name[4:]:28} {100 * cov / tot:5.1f}%  {cov}/{tot}", file=sys.stderr)
     pct = 100 * total_cov / total
     print("-" * 50, file=sys.stderr)
-    print(f'{"TOTAL":28} {pct:5.1f}%  {total_cov}/{total}', file=sys.stderr)
+    print(f"{'TOTAL':28} {pct:5.1f}%  {total_cov}/{total}", file=sys.stderr)
 
     print(f"{pct:.1f}")
 
