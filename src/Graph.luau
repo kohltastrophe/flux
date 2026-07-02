@@ -381,6 +381,7 @@ local function strictUpdate(node: node)
 		currentReaction, currentOwner = prevReaction, prevOwner
 
 		if not ok then
+			reconcileSources(node)
 			currentEvalId, currentSources, currentSourcesIndex = prevEvalId, prevSources, prevIndex
 			error(`effect error:\n{result}`, 0)
 		end
@@ -473,12 +474,15 @@ local function rawDep(object: any): any
 	return if type(object) == "function" then (object :: any)() else raw(object)
 end
 
+local drainingNode: node? = nil
+
 local function drain(index: number)
 	while index <= effectQueueN do
 		drainIndex = index
 		local node = effectQueue[index]
 		effectQueue[index] = nil
 		if node[EFFECT] then
+			drainingNode = node
 			bringCurrent(node)
 		end
 		index += 1
@@ -498,7 +502,15 @@ local function flush(index: number?)
 		if ok then
 			break
 		end
+		local mid = currentReaction
+		if mid and mid[STATE] ~= nil then
+			reconcileSources(mid)
+		end
 		currentOwner, currentReaction, currentSources, currentSourcesIndex = nil, nil, nil, 0
+		local errored = drainingNode
+		if errored and errored[STATE] ~= nil then
+			errored[STATE] = CLEAN
+		end
 		effectQueue[drainIndex] = nil
 		warn(`suppressed effect error:\n{result}`)
 		start = drainIndex + 1
