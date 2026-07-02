@@ -11,7 +11,7 @@
 				"$path": "sert.luau"
 			},
 			"Flux.spec": {
-				"$path": "spec.luau"
+				"$path": "spec.client.luau"
 			},
 			"Flux.unit": {
 				"$path": "unit"

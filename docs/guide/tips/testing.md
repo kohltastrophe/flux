@@ -92,8 +92,8 @@ Graph.flush()
 assert(#seen == 1 and seen[1] == 5)
 ```
 
-Flux's own spec, [`test/spec.luau`](https://github.com/kohltastrophe/flux/blob/main/test/spec.luau), runs exactly this way and doubles as a reference for the graph's guaranteed semantics: laziness, memoization, diamond updates, effect batching, error recovery, and cycle containment.
+Flux's own spec, [`test/spec.client.luau`](https://github.com/kohltastrophe/flux/blob/main/test/spec.client.luau), runs exactly this way and doubles as a reference for the graph's guaranteed semantics: laziness, memoization, diamond updates, effect batching, error recovery, and cycle containment.
 
 ## Full-Engine Tests in CI
 
-For tests that need real instances (component output, hydration, motion), build a test place with [Rojo](https://rojo.space/) and execute the spec in the cloud with the [Open Cloud Luau Execution API](https://create.roblox.com/docs/cloud/guides/luau-execution), with no Studio session required. Flux's own [CI workflow](https://github.com/kohltastrophe/flux/blob/main/.github/workflows/ci.yml) does exactly this with the same `test/spec.luau` that runs headless: the suite detects its runtime, skipping Roblox-only tests under the CLI and running everything (instances, hydration, motion datatypes) in the cloud. `rojo build` produces a place file, a script uploads it, runs the spec task, and fails the build on any failed assertion.
+For tests that need real instances (component output, hydration, motion), build a test place with [Rojo](https://rojo.space/) and execute the spec in the cloud with the [Open Cloud Luau Execution API](https://create.roblox.com/docs/cloud/guides/luau-execution), with no Studio session required. Flux's own [CI workflow](https://github.com/kohltastrophe/flux/blob/main/.github/workflows/ci.yml) does exactly this with the same `test/spec.client.luau` that runs headless: the suite detects its runtime, skipping Roblox-only tests under the CLI and running everything (instances, hydration, motion datatypes) in the cloud. `rojo build` produces a place file, a script uploads it, runs the spec task, and fails the build on any failed assertion.

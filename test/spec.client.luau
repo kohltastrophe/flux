@@ -2,7 +2,7 @@
 --[[
 	Flux unified test entry: one suite, two runtimes.
 
-	* Headless: `luau test/spec.luau` (vanilla Luau 0.640+). rtest() tests are
+	* Headless: `luau test/spec.client.luau` (vanilla Luau 0.640+). rtest() tests are
 	  skipped; the rest runs in ~20ms. The fast feedback loop.
 	* Roblox: run as a Luau Execution API task by CI against the built place, or
 	  via the Studio MCP. Runs everything: Instances, Motion datatypes, real
@@ -34,7 +34,7 @@ else
 	require("./unit")
 end
 
--- Headless-only: `luau test/spec.luau -a <substring>` runs just matching tests
+-- Headless-only: `luau test/spec.client.luau -a <substring>` runs just matching tests
 -- (plain substring), muting expected-warn noise. CLI passes post-`-a` args as varargs.
 local filter = if IS_ROBLOX then nil else ... :: string?
 
