@@ -133,7 +133,7 @@ local menu = new "Frame" {
 | `_CLEAN`                      | Additional cleanup items tied to the instance's lifetime                                                                                                          |
 | `_REF`                        | Capture a reference to the created instance                                                                                                                       |
 
-Each directive is described in detail in [Hydration: Special Directives](/guide/roblox/hydration#special-directives); they behave identically for created and hydrated instances.
+Each directive is described in detail in [Hydration: Special Directives](/guide/roblox/hydration#special-directives); they behave identically for created and hydrated instances. Every directive also has a [one-off function form](/guide/roblox/hydration#one-off-directives) (`Flux.attr("Name", value)`{luau}, `Flux.tag("Tag")`{luau}, `Flux.event("Name", handler)`{luau}, `Flux.ref(node)`{luau}, `Flux.onDestroy(fn)`{luau}) placed in the array portion of the table, so a single attribute, tag, or listener can live inline next to related children.
 
 ```luau
 local inputState = Flux("")

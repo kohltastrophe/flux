@@ -3,6 +3,7 @@
 local Bind = require("./Bind")
 local Clean = require("./Clean")
 local Compat = require("./Compat")
+local Directive = require("./Directive")
 local Graph = require("./Graph")
 local Find = require("./Find")
 local Type = require("./Type")

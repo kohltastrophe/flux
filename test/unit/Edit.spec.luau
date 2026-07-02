@@ -311,6 +311,24 @@ rtest("new · reactive tag moving off a static sibling keeps the shared tag", fu
 	s:Destroy()
 end)
 
+rtest("edit · frozen _EVENT maps are accepted without mutation", function()
+	local label = Instance.new("TextLabel")
+	local changes = 0
+	local frozen = table.freeze({
+		Text = function()
+			changes += 1
+		end,
+	})
+	local s = Flux.scope(function()
+		Flux.edit(label)({ _EVENT = frozen })
+	end)
+	label.Text = "updated"
+	task.wait() -- let the property-changed signal fire
+	expect(changes == 1, "handler from a frozen event map connected")
+	label:Destroy()
+	s:Destroy()
+end)
+
 rtest("edit · _TAG stops tracking after scope destroy", function()
 	local f = Instance.new("Frame")
 	local tag = Flux.signal("A")
@@ -327,6 +345,113 @@ rtest("edit · _TAG stops tracking after scope destroy", function()
 	expect(f:HasTag("B"), "last applied tag is left in place after scope destroy")
 	expect(not f:HasTag("C"), "listener disconnected by scope destroy")
 	f:Destroy()
+end)
+
+test("directive · one-off constructors build frozen wrappers", function()
+	local attr = Flux.attr("Level", 3)
+	expect(attr._ATTR.Level == 3, "attr singular form wraps name/value")
+	expect(table.isfrozen(attr), "wrappers are frozen")
+	expect(Flux.attr({ A = 1 })._ATTR.A == 1, "attr map form wraps the table")
+	expect(Flux.tag("Enemy")._TAG == "Enemy", "tag single argument kept as-is")
+	local tags = Flux.tag("A", "B")._TAG
+	expect(tags[1] == "A" and tags[2] == "B", "tag varargs collect into an array")
+	local handler = function() end
+	expect(Flux.event("Text", handler)._EVENT.Text == handler, "event singular form wraps name/handler")
+	expect(Flux.event({ Text = handler })._EVENT.Text == handler, "event map form wraps the table")
+	expect(Flux.onDestroy(handler)._CLEAN[1] == handler, "onDestroy collects cleanup items")
+	expect(Flux.ref(handler)._REF == handler, "ref wraps the callback")
+	local fails = sert.fails
+	fails(function()
+		Flux.attr("Level")
+	end, "expects a value", "attr singular without a value errors")
+	fails(function()
+		Flux.event("Text")
+	end, "expects a handler", "event singular without a handler errors")
+	fails(function()
+		Flux.tag()
+	end, "Flux.tag expects", "tag without arguments errors")
+	fails(function()
+		Flux.onDestroy()
+	end, "at least one cleanup item", "onDestroy without arguments errors")
+	fails(function()
+		Flux.ref(5)
+	end, "expects a function or reactive node", "ref with a non-function non-node errors")
+end)
+
+rtest("new · one-off directives at numeric indices", function()
+	local lvl = Flux.signal(1)
+	local status = Flux.signal("Idle")
+	local cleaned = 0
+	local captured
+	local f
+	local s = Flux.scope(function()
+		f = Flux.new("Frame")({
+			Flux.attr("Level", lvl),
+			Flux.attr("Kind", "NPC"),
+			Flux.tag("Enemy", status),
+			Flux.ref(function(inst)
+				captured = inst
+			end),
+			Flux.onDestroy(function()
+				cleaned += 1
+			end),
+		})
+	end)
+	flush()
+	expect(f:GetAttribute("Level") == 1, "reactive singular attr applied")
+	expect(f:GetAttribute("Kind") == "NPC", "second singular attr call applied")
+	expect(f:HasTag("Enemy") and f:HasTag("Idle"), "variadic tag applied static and node values")
+	expect(captured == f, "ref callback received the instance")
+	lvl:set(2)
+	status:set("Running")
+	flush()
+	expect(f:GetAttribute("Level") == 2, "singular attr tracks its node")
+	expect(f:HasTag("Running") and not f:HasTag("Idle"), "node inside variadic tag swaps")
+	s:Destroy()
+	expect(cleaned == 1, "onDestroy ran on scope destroy")
+end)
+
+rtest("edit · multiple singular event and tag calls accumulate", function()
+	local label = Instance.new("TextLabel")
+	label.Text = "start"
+	local a, b = 0, 0
+	local mirror = Flux.signal(nil)
+	local s = Flux.scope(function()
+		Flux.edit(label)({
+			Flux.tag("Enemy"),
+			Flux.tag("Boss"),
+			Flux.event("Text", function()
+				a += 1
+			end),
+			Flux.event("Text", function()
+				b += 1
+			end),
+			Flux.event({ Text = mirror }),
+		})
+	end)
+	expect(label:HasTag("Enemy") and label:HasTag("Boss"), "each singular tag call applied")
+	expect(mirror() == "start", "event map form seeded the bind-from node")
+	label.Text = "next"
+	task.wait() -- let the property-changed signals fire
+	flush()
+	expect(a == 1 and b == 1, "both singular event handlers connected")
+	expect(mirror() == "next", "bind-from node tracks the property")
+	label:Destroy()
+	s:Destroy()
+end)
+
+rtest("new · duplicate attr names dedupe with the root table winning", function()
+	local f
+	local s = Flux.scope(function()
+		f = Flux.new("Frame")({
+			_ATTR = { Kind = "root" },
+			Flux.attr("Kind", "one-off"),
+			Flux.attr("Other", "kept"),
+		})
+	end)
+	expect(f:GetAttribute("Kind") == "root", "root _ATTR wins over a one-off duplicate")
+	expect(f:GetAttribute("Other") == "kept", "non-duplicate one-off attr still applied")
+	s:Destroy()
 end)
 
 rtest("new · defaults applied and toggleable via Flux.Flags", function()

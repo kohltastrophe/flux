@@ -191,6 +191,39 @@ Flux.edit(existingFrame) {
 
 A callback `_REF`{luau} may also **return** a cleanup value (a function, connection, instance, or array of them) which Flux ties to the instance's lifetime and runs on `Destroying`, exactly like `_CLEAN`. This lets a ref co-locate its own setup and teardown.
 
+### One-Off Directives
+
+Every directive also has a **function form** that you place in the array portion of the property table (at a numeric index), like a `Flux.Find`{lua} selector. Use these to declare a single attribute, tag, or listener inline next to related code, or to splice directives in from a component fragment, without assembling the combined directive tables.
+
+| One-off                                             | Equivalent                    |
+| :-------------------------------------------------- | :---------------------------- |
+| `Flux.attr(name, value)`{luau} · `Flux.attr { name = value }`{luau} | `_ATTR = { name = value }`{luau} |
+| `Flux.event(name, handler)`{luau} · `Flux.event { name = handler }`{luau} | `_EVENT = { name = handler }`{luau} |
+| `Flux.tag(...)`{luau}                                | `_TAG = { ... }`{luau}        |
+| `Flux.ref(nodeOrCallback)`{luau}                     | `_REF = nodeOrCallback`{luau} |
+| `Flux.onDestroy(...)`{luau}                          | `_CLEAN = { ... }`{luau}      |
+
+The values accepted are identical to the underlying directive: `Flux.attr`{lua} takes statics, nodes, functions, or `Flux.model`{lua}; `Flux.tag`{lua} takes any number of strings, nodes, or functions; `Flux.event`{lua} takes handler functions or bind-from nodes (and its map form supports the nested `_ATTR` table).
+
+```luau
+Flux.edit(npcModel) {
+    Flux.attr("Health", healthNode),
+    Flux.attr("Kind", "NPC"),
+    Flux.tag("Enemy", statusNode),
+    Flux.event("Name", function(name)
+        print("Renamed to", name)
+    end),
+    Flux.onDestroy(function()
+        print("NPC removed")
+    end),
+}
+```
+
+You can repeat the same one-off as many times as you like: tags, events, and cleanup items **accumulate**, while a duplicated attribute name is applied once, with the root table's `_ATTR`{luau} entry winning over one-offs and earlier one-offs winning over later ones (the same first-wins rule as [flattened arrays](/guide/roblox/creation#creating-hierarchies-children)).
+
+> [!NOTE] `Flux.onDestroy`{lua} vs `Flux.cleanup`{lua}
+> `Flux.onDestroy(...)`{luau} is the one-off form of `_CLEAN`, tying items to the **instance's** `Destroying` lifetime. The similarly named `Flux.cleanup(fn)`{luau} is unrelated: it registers a callback on the current reactive owner (see [Scopes](/guide/concepts/scopes)).
+
 ## Array Elements (Children & Actions)
 
 The array portion of the properties table (elements with numeric indices) serves two purposes.
