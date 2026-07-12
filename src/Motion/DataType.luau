@@ -30,8 +30,10 @@ local Oklab_toRGB = Oklab.toRGB
 local Oklab_fromRGB = Oklab.fromRGB
 
 local IS_ROBLOX = game ~= nil
+
 local CFrame_new = if IS_ROBLOX then CFrame.new else nil :: any
 local CFrame_fromAxisAngle = if IS_ROBLOX then CFrame.fromAxisAngle else nil :: any
+local ColorSequence_new = if IS_ROBLOX then ColorSequence.new else nil :: any
 local ColorSequenceKeypoint_new = if IS_ROBLOX then ColorSequenceKeypoint.new else nil :: any
 local DateTime_fromUnixTimestampMillis = if IS_ROBLOX then DateTime.fromUnixTimestampMillis else nil :: any
 local NumberRange_new = if IS_ROBLOX then NumberRange.new else nil :: any
@@ -55,7 +57,10 @@ local unpackers: { [string]: ({ number }) -> any } = {
 	number = function(v) return v[1] end,
 	CFrame = function(v) local p, a = CFrame_new(v[1], v[2], v[3]), Vector3_new(v[4], v[5], v[6]); if a.Magnitude < 1e-6 then return p end; return p * CFrame_fromAxisAngle(a, v[7]) end,
 	Color3 = function(v) return Oklab_toRGB(Vector3_new(v[1], v[2], v[3]), false) end,
-	ColorSequenceKeypoint = function(v) return ColorSequenceKeypoint_new(v[4], Oklab_toRGB(Vector3_new(v[1], v[2], v[3]), false)) end,
+	-- ColorSequenceKeypoint/ColorSequence must clamp (unlike Color3): their constructors reject
+	-- out-of-range channels, and spring overshoot/Oklab midpoints exit the sRGB gamut mid-animation
+	ColorSequenceKeypoint = function(v) return ColorSequenceKeypoint_new(v[4], Oklab_toRGB(Vector3_new(v[1], v[2], v[3]), true)) end,
+	ColorSequence = function(v) local keypoints = {}; for i = 1, #v, 4 do table.insert(keypoints, ColorSequenceKeypoint_new(v[i + 3], Oklab_toRGB(Vector3_new(v[i], v[i + 1], v[i + 2]), true)) :: any) end; return (ColorSequence_new :: any)(keypoints) end,
 	DateTime = function(v) return DateTime_fromUnixTimestampMillis(v[1]) end,
 	NumberRange = function(v) return NumberRange_new(v[1], v[2]) end,
 	NumberSequenceKeypoint = function(v) return NumberSequenceKeypoint_new(v[2], v[1], v[3]) end,
@@ -78,8 +83,9 @@ local packers: { [string]: ({ number }, any) -> () } = {
 	-- stylua: ignore start
 	number = function(v, value) v[1] = value end,
 	CFrame = function(v, value) local axis, angle = (value :: CFrame):ToAxisAngle(); v[1], v[2], v[3], v[4], v[5], v[6], v[7] = value.X, value.Y, value.Z, axis.X, axis.Y, axis.Z, angle end,
-	Color3 = function(v, value) local lab = Oklab_fromRGB(value); v[1], v[2], v[3] = lab.X, lab.Y, lab.Z end,
+	Color3 = function(v, value) local lab = Oklab_fromRGB(value); v[1], v[2], v[3] = lab.X, lab.Y, lab.Z; end,
 	ColorSequenceKeypoint = function(v, value) local lab = Oklab_fromRGB(value.Value); v[1], v[2], v[3], v[4] = lab.X, lab.Y, lab.Z, value.Time end,
+	ColorSequence = function(v, value) for i, kp in value.Keypoints do local lab = Oklab_fromRGB(kp.Value); i = (i - 1) * 4; v[i + 1], v[i + 2], v[i + 3], v[i + 4] = lab.X, lab.Y, lab.Z, kp.Time end end,
 	DateTime = function(v, value) v[1] = value.UnixTimestampMillis end,
 	NumberRange = function(v, value) v[1], v[2] = value.Min, value.Max end,
 	NumberSequenceKeypoint = function(v, value) v[1], v[2], v[3] = value.Value, value.Time, value.Envelope end,
