@@ -488,6 +488,7 @@ export type Editable = Creatable & {
 	EditableImage: EditableImage,
 	EditableMesh: EditableMesh,
 	EditableService: EditableService,
+	EditorSourceService: EditorSourceService,
 	EncodingService: EncodingService,
 	EventIngestService: EventIngestService,
 	ExampleV2Service: ExampleV2Service,
