@@ -206,6 +206,25 @@ test("motion · scope teardown unregisters a spring from the engine", function()
 	expect(ok, "the engine no longer steps the scope-destroyed spring")
 end)
 
+test("motion · vector spring round-trips exactly and converges componentwise", function()
+	-- the `vector` packers run wherever typeof() yields "vector" (the Luau CLI);
+	-- under Roblox typeof(vector.create(...)) is "Vector3", exercising that packer instead
+	local start = vector.create(1.5, -2.25, 3.125)
+	local goal = Flux.signal(start)
+	local spr = Flux.spring(goal, 10, 1)
+	Motion.step()
+	expect(spr:get() == start, `resting spring pack/unpack is lossless, got {tostring(spr:get())}`)
+
+	goal:set(vector.create(30, -20, 10))
+	flush()
+	advance(0.2) -- a freq-10 critically-damped spring is converged within ~0.2s of sim time
+	local v = spr:get()
+	expect(
+		approx(v.x, 30, 0.5) and approx(v.y, -20, 0.5) and approx(v.z, 10, 0.5),
+		`vector spring converged componentwise, got {tostring(v)}`
+	)
+end)
+
 rtest("motion · impulse/setVelocity warn on a tween node (expected warn)", function()
 	-- a tween carries the Motion metatable, so the methods EXIST and the guard's
 	-- reject path is genuinely exercised (TweenInfo is Roblox-only -> rtest)

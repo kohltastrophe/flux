@@ -6,6 +6,7 @@ local Oklab = Color.Oklab
 
 export type Animatable =
 	number
+	& vector
 	& CFrame
 	& Color3
 	& ColorSequence
@@ -31,11 +32,17 @@ local packers: { [string]: ({ number }, any) -> () } = {
 	number = function(v, value: number)
 		v[1] = value
 	end,
+	vector = function(v, value: vector)
+		v[1], v[2], v[3] = value.x, value.y, value.z
+	end,
 }
 
 local unpackers: { [string]: ({ number }) -> any } = {
 	number = function(v): number
 		return v[1]
+	end,
+	vector = function(v): vector
+		return vector.create(v[1], v[2], v[3])
 	end,
 }
 
