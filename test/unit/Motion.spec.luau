@@ -443,6 +443,33 @@ rtest("motion · ColorSequenceKeypoint reaches its goal", function()
 	)
 end)
 
+rtest("motion · ColorSequence reaches its goal", function()
+	-- guards the keypoint loop stride (4 numbers per keypoint: time + Oklab xyz).
+	-- keypoint COUNTS must match: the motion's packed length is fixed at creation.
+	-- times round-trip exactly; the colors go through Oklab (lossy) so use eps.
+	local start = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Color3.new(1, 0, 0)),
+		ColorSequenceKeypoint.new(0.5, Color3.new(0, 1, 0)),
+		ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)),
+	})
+	local goal = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Color3.new(0.2, 0.4, 0.8)),
+		ColorSequenceKeypoint.new(0.25, Color3.new(0.9, 0.1, 0.5)),
+		ColorSequenceKeypoint.new(1, Color3.new(0.05, 0.95, 0.35)),
+	})
+	local got = tweenToGoal(start, goal)
+	expect(#got.Keypoints == 3, `keypoint count preserved, got {#got.Keypoints}`)
+	for i, k in goal.Keypoints do
+		local g = got.Keypoints[i]
+		local c, e = g.Value, k.Value
+		expect(approx(g.Time, k.Time, 1e-4), `CS keypoint {i} time round-trip, got {g.Time}`)
+		expect(
+			approx(c.R, e.R, 3e-3) and approx(c.G, e.G, 3e-3) and approx(c.B, e.B, 3e-3),
+			`CS keypoint {i} color round-trip, got {tostring(c)}`
+		)
+	end
+end)
+
 rtest("motion · Color3 reaches its goal", function()
 	-- Oklab round-trip is lossy, so use eps
 	local goal = Color3.new(0.9, 0.1, 0.5)
