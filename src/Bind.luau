@@ -9,7 +9,6 @@ local raw = Graph.raw
 local readDep = Graph.readDep
 local untrack = Graph.untrack
 local isNode = Graph.isNode
-local strict = Graph.strict
 local withOwner = Graph.withOwner
 
 local task = Compat.task
@@ -95,11 +94,15 @@ local function applyChildren(bind: BindData, value: any)
 	end
 end
 
-local function processBinds(bind: BindData, value: any)
-	for fn in bind.fn do
-		task.spawn(fn, value)
-	end
+local function setAttribute(instance: Instance, attr: string, value: any)
+	instance:SetAttribute(attr, value)
+end
 
+local function setProperty(instance: Instance, prop: string, value: any)
+	(instance :: any)[prop] = value
+end
+
+local function writeInstance(bind: BindData, value: any)
 	for instance, syncTo in bind.rbx do
 		for attr in syncTo[1] do
 			instance:SetAttribute(attr, value)
@@ -108,56 +111,31 @@ local function processBinds(bind: BindData, value: any)
 			(instance :: any)[prop] = value
 		end
 	end
-
-	applyChildren(bind, value)
 end
 
-local function setProperty(instance: Instance, prop: string, value: any)
-	(instance :: any)[prop] = value
-end
-
-local function setAttribute(instance: Instance, attr: string, value: any)
-	instance:SetAttribute(attr, value)
-end
-
-local function addFailure(failures: { string }?, context: string, err: any): { string }
-	local list = failures or {}
-	table.insert(list, `{context}: {err}`)
-	return list
-end
-
--- Strict-mode twin of processBinds: every engine write runs protected, so one failing
--- binding no longer starves the node's remaining bindings, and failures rethrow naming
--- the instance, key, and value that caused them.
-local function processBindsStrict(bind: BindData, value: any)
+local function processBinds(bind: BindData, value: any)
 	for fn in bind.fn do
 		task.spawn(fn, value)
 	end
 
-	local failures: { string }? = nil
-	for instance, syncTo in bind.rbx do
-		for attr in syncTo[1] do
-			local ok, err = pcall(setAttribute, instance, attr, value)
-			if not ok then
-				failures = addFailure(failures, `attribute "{attr}" of {instance:GetFullName()}`, err)
+	if not pcall(writeInstance, bind, value) then
+		for instance, syncTo in bind.rbx do
+			for attr in syncTo[1] do
+				local ok, result = pcall(setAttribute, instance, attr, value)
+				if not ok then
+					warn(`failed to set attribute "{attr}" of {instance:GetFullName()}: {result}`)
+				end
 			end
-		end
-		for prop in syncTo[2] do
-			local ok, err = pcall(setProperty, instance, prop, value)
-			if not ok then
-				failures = addFailure(failures, `{instance:GetFullName()}.{prop}`, err)
+			for prop in syncTo[2] do
+				local ok, result = pcall(setProperty, instance, prop, value)
+				if not ok then
+					warn(`failed to set property "{prop}" of {instance:GetFullName()}: {result}`)
+				end
 			end
 		end
 	end
 
-	local ok, err = pcall(applyChildren, bind, value)
-	if not ok then
-		failures = addFailure(failures, "children binding", err)
-	end
-
-	if failures then
-		error(`failed to write {tostring(value)} ({typeof(value)}) to:\n\t{table.concat(failures, "\n\t")}`, 0)
-	end
+	applyChildren(bind, value)
 end
 
 local function cleanupChildrenBind<T>(node: Graph.Node<T>, parent: Instance?)
@@ -192,8 +170,7 @@ local function getBindData<T>(node: Graph.Node<T>)
 
 		local effect = withOwner(nil :: any, function()
 			return new(function()
-				local process: (BindData, any) -> () = if strict() then processBindsStrict else processBinds
-				process(data, get(node))
+				processBinds(data, get(node))
 			end, true)
 		end)
 
