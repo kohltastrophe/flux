@@ -63,7 +63,7 @@ local function applyChildren(bind: BindData, value: any)
 			end
 
 			for _, child in list do
-				if child and child.Parent == parent and incoming[child] == nil then
+				if typeof(child) == "Instance" and child.Parent == parent and incoming[child] == nil then
 					child.Parent = nil
 				end
 			end
@@ -80,7 +80,7 @@ local function applyChildren(bind: BindData, value: any)
 		end
 	else
 		for _, child in list do
-			if child and child.Parent == parent and child ~= value then
+			if typeof(child) == "Instance" and child.Parent == parent and child ~= value then
 				child.Parent = nil
 			end
 		end
