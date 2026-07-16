@@ -150,6 +150,21 @@ When Flux sees a reactive node or a function assigned to a property, it establis
 
 Whenever `count(newValue)`{luau} is called, Flux propagates the change through the graph, ensuring your UI stays in sync without any manual `.Changed` or `GetPropertyChangedSignal` connections.
 
+### When a Write Fails
+
+If the engine rejects a bound write (a `nil`{luau} written to a string property, a value of the wrong type, a locked property), Flux re-runs that node's writes checked: every failure is collected into one error naming the **full instance path, the property or attribute name, and the rejected value** (with its type), and the node's remaining property, attribute, and children bindings still receive the update instead of being starved by the failure.
+
+```luau
+local text = Flux("hello")
+local label = new "TextLabel" { Text = text }
+
+text:set(nil, true)
+-- failed to write nil (nil) to:
+--     Players.you.PlayerGui.ScreenGui.TextLabel.Text: Unable to assign property Text. string expected, got nil
+```
+
+The checked re-run only happens after a write has already failed, so the happy path stays raw and free. Since binding writes run in an [effect](/guide/concepts/effects), the error surfaces through the flush as a `suppressed effect error` warning; the update that *caused* the bad value is best tracked down in development with [strict mode](/guide/tips/strict) on.
+
 ## Binding from an Instance Property
 
 The reverse direction also works: passing an Instance to the `Flux` constructor creates a signal that **mirrors** one of its properties, updating whenever the property changes. Prefix the name with `$` to mirror an attribute instead:

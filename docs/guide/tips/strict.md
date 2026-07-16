@@ -12,7 +12,7 @@ A body that quietly breaks that promise (by reading mutable state that isn't tra
 
 **Strict mode** flushes them into the open. It is a development-only check that **runs every reactive body a second time** each time it evaluates. A pure body double-runs invisibly; it returns the same value and touches nothing else. An impure one gives itself away: a side effect stashed inside a body fires twice, and a body that reads untracked or non-deterministic state returns a _different_ value on its second run. Strict mode does not compare the two runs for you or print a warning; it makes the impurity loud enough to notice (doubled log lines, flickering values, effects that fire twice) so you catch it in development instead of shipping it. If you've used [Vide](https://centau.github.io/vide/), this mirrors its strict mode.
 
-Alongside the double-run, strict mode upgrades two silent hazards into immediate errors: a reactive **cycle** (a body that re-enters a node already evaluating) and **destroying the node that is currently running**. It also runs each body in a way that reports a clean error if it illegally [yields](/guide/concepts/tracking), and runs every [instance binding write checked](#checked-instance-writes) so a failing write reports exactly which instance, property, or attribute rejected which value.
+Alongside the double-run, strict mode upgrades two silent hazards into immediate errors: a reactive **cycle** (a body that re-enters a node already evaluating) and **destroying the node that is currently running**. It also runs each body in a way that reports a clean error if it illegally [yields](/guide/concepts/tracking).
 
 ## Enabling strict mode
 
@@ -111,23 +111,5 @@ Strict mode also turns two latent graph hazards into immediate errors:
 
 Like the double-run, both checks exist only to surface mistakes during development and are off the hot path in production.
 
-## Checked instance writes
-
-When a bound node updates, Flux writes the new value to every property and attribute bound to it. In production those writes run raw: if the engine rejects one (a `nil`{luau} written to a string property, a value of the wrong type, a locked property), the resulting error carries no context about *which* binding failed, and the node's remaining bindings are skipped for that update.
-
-With strict mode on, each write runs individually checked instead:
-
-- A failing write reports the **full instance path, the property or attribute name, and the value** (with its type) that was rejected, so the error names the exact binding to fix.
-- One failing write **no longer starves the node's other bindings**; every remaining property, attribute, and children binding still receives the update, and all failures are collected into a single error.
-
-```luau
-local text = Flux("hello")
-local label = new "TextLabel" { Text = text }
-
-text:set(nil, true)
--- production: "Unable to assign property Text. string expected, got nil" (no instance context)
--- strict:     failed to write nil (nil) to:
---                 Players.you.PlayerGui.ScreenGui.TextLabel.Text: Unable to assign property Text. string expected, got nil
-```
-
-Like every strict check, this swaps in a separate write path, so production writes stay entirely unchecked and free.
+> [!NOTE] Failing binding writes always report context
+> A bound write the engine rejects reports the full instance path, key, and value [in every mode](/guide/concepts/signals#when-a-write-fails), not just under strict mode, so this page's checks are about *reactive purity*, not write errors.
