@@ -13,6 +13,7 @@ export type Animatable =
 	& ColorSequenceKeypoint
 	& DateTime
 	& NumberRange
+	& NumberSequence
 	& NumberSequenceKeypoint
 	& PhysicalProperties
 	& Ray
@@ -55,6 +56,7 @@ if IS_ROBLOX then
 	local ColorSequenceKeypoint_new = ColorSequenceKeypoint.new
 	local DateTime_fromUnixTimestampMillis = DateTime.fromUnixTimestampMillis
 	local NumberRange_new = NumberRange.new
+	local NumberSequence_new = NumberSequence.new
 	local NumberSequenceKeypoint_new = NumberSequenceKeypoint.new
 	local PhysicalProperties_new = PhysicalProperties.new
 	local Ray_new = Ray.new
@@ -78,6 +80,7 @@ if IS_ROBLOX then
 	function packers.ColorSequenceKeypoint(t, v: ColorSequenceKeypoint) local o = Oklab_fromRGB(v.Value); t[1], t[2], t[3], t[4] = v.Time, o.X, o.Y, o.Z end
 	function packers.DateTime(t, v: DateTime) t[1] = v.UnixTimestampMillis end
 	function packers.NumberRange(t, v: NumberRange) t[1], t[2] = v.Min, v.Max end
+	function packers.NumberSequence(t, v: NumberSequence) for i, k in v.Keypoints do i = (i - 1) * 3; t[i + 1], t[i + 2], t[i + 3] = k.Time, k.Value, k.Envelope end end
 	function packers.NumberSequenceKeypoint(t, v: NumberSequenceKeypoint) t[1], t[2], t[3] = v.Value, v.Time, v.Envelope end
 	function packers.PhysicalProperties(t, v: PhysicalProperties) t[1], t[2], t[3], t[4], t[5] = v.Density, v.Friction, v.Elasticity, v.FrictionWeight, v.ElasticityWeight end
 	function packers.Ray(t, v: Ray) t[1], t[2], t[3], t[4], t[5], t[6] = v.Origin.X, v.Origin.Y, v.Origin.Z, v.Direction.X, v.Direction.Y, v.Direction.Z end
@@ -98,6 +101,7 @@ if IS_ROBLOX then
 	function unpackers.ColorSequenceKeypoint(t): ColorSequenceKeypoint return ColorSequenceKeypoint_new(t[1], Oklab_toRGB(Vector3_new(t[2], t[3], t[4]), false)) end
 	function unpackers.DateTime(t): DateTime return DateTime_fromUnixTimestampMillis(t[1]) end
 	function unpackers.NumberRange(t): NumberRange return NumberRange_new(t[1], t[2]) end
+	function unpackers.NumberSequence(t): NumberSequence local k = {}; for i = 1, #t, 3 do table.insert(k, NumberSequenceKeypoint_new(t[i], t[i + 1], t[i + 2])) end; return NumberSequence_new(k) end
 	function unpackers.NumberSequenceKeypoint(t): NumberSequenceKeypoint return NumberSequenceKeypoint_new(t[2], t[1], t[3]) end
 	function unpackers.PhysicalProperties(t): PhysicalProperties return PhysicalProperties_new(t[1], t[2], t[3], t[4], t[5]) end
 	function unpackers.Ray(t): Ray return Ray_new(Vector3_new(t[1], t[2], t[3]), Vector3_new(t[4], t[5], t[6])) end
