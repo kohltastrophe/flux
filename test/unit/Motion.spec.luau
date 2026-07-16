@@ -406,6 +406,31 @@ rtest("motion · NumberSequenceKeypoint reaches its goal", function()
 	)
 end)
 
+rtest("motion · NumberSequence reaches its goal", function()
+	-- guards the keypoint loop stride (3 numbers per keypoint: time, value, envelope)
+	-- and the NumberSequenceKeypoint.new(time, value, envelope) rebuild order.
+	-- keypoint COUNTS must match: the motion's packed length is fixed at creation.
+	local start = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0, 0),
+		NumberSequenceKeypoint.new(0.5, 0.5, 0),
+		NumberSequenceKeypoint.new(1, 1, 0),
+	})
+	local goal = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.25, 0.05),
+		NumberSequenceKeypoint.new(0.4, 0.9, 0.1),
+		NumberSequenceKeypoint.new(1, 0.1, 0.2),
+	})
+	local got = tweenToGoal(start, goal)
+	expect(#got.Keypoints == 3, `keypoint count preserved, got {#got.Keypoints}`)
+	for i, k in goal.Keypoints do
+		local g = got.Keypoints[i]
+		expect(
+			approx(g.Time, k.Time) and approx(g.Value, k.Value) and approx(g.Envelope, k.Envelope),
+			`NS keypoint {i} round-trip, got time={g.Time} value={g.Value} env={g.Envelope}`
+		)
+	end
+end)
+
 rtest("motion · ColorSequenceKeypoint reaches its goal", function()
 	-- Time is exact; the Value color round-trips through Oklab (lossy) so use eps
 	local goal = ColorSequenceKeypoint.new(0.6, Color3.new(0.2, 0.4, 0.8))
