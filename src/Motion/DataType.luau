@@ -8,6 +8,7 @@ export type Animatable =
 	number
 	& CFrame
 	& Color3
+	& ColorSequence
 	& ColorSequenceKeypoint
 	& DateTime
 	& NumberRange
@@ -24,90 +25,93 @@ export type Animatable =
 	& Vector3
 	& Vector3int16
 
-local round = math.round
-
-local Oklab_toRGB = Oklab.toRGB
-local Oklab_fromRGB = Oklab.fromRGB
-
 local IS_ROBLOX = game ~= nil
 
-local CFrame_new = if IS_ROBLOX then CFrame.new else nil :: any
-local CFrame_fromAxisAngle = if IS_ROBLOX then CFrame.fromAxisAngle else nil :: any
-local ColorSequence_new = if IS_ROBLOX then ColorSequence.new else nil :: any
-local ColorSequenceKeypoint_new = if IS_ROBLOX then ColorSequenceKeypoint.new else nil :: any
-local DateTime_fromUnixTimestampMillis = if IS_ROBLOX then DateTime.fromUnixTimestampMillis else nil :: any
-local NumberRange_new = if IS_ROBLOX then NumberRange.new else nil :: any
-local NumberSequenceKeypoint_new = if IS_ROBLOX then NumberSequenceKeypoint.new else nil :: any
-local PhysicalProperties_new = if IS_ROBLOX then PhysicalProperties.new else nil :: any
-local Ray_new = if IS_ROBLOX then Ray.new else nil :: any
-local Rect_new = if IS_ROBLOX then Rect.new else nil :: any
-local Region3_new = if IS_ROBLOX then Region3.new else nil :: any
-local Region3int16_new = if IS_ROBLOX then Region3int16.new else nil :: any
-local UDim_new = if IS_ROBLOX then UDim.new else nil :: any
-local UDim2_new = if IS_ROBLOX then UDim2.new else nil :: any
-local Vector2_new = if IS_ROBLOX then Vector2.new else nil :: any
-local Vector3_new = if IS_ROBLOX then Vector3.new else nil :: any
-local Vector2int16_new = if IS_ROBLOX then Vector2int16.new else nil :: any
-local Vector3int16_new = if IS_ROBLOX then Vector3int16.new else nil :: any
-
-local DataType = {}
+local packers: { [string]: ({ number }, any) -> () } = {
+	number = function(v, value: number)
+		v[1] = value
+	end,
+}
 
 local unpackers: { [string]: ({ number }) -> any } = {
-	-- stylua: ignore start
-	number = function(v) return v[1] end,
-	CFrame = function(v) local p, a = CFrame_new(v[1], v[2], v[3]), Vector3_new(v[4], v[5], v[6]); if a.Magnitude < 1e-6 then return p end; return p * CFrame_fromAxisAngle(a, v[7]) end,
-	Color3 = function(v) return Oklab_toRGB(Vector3_new(v[1], v[2], v[3]), false) end,
-	-- ColorSequenceKeypoint/ColorSequence must clamp (unlike Color3): their constructors reject
-	-- out-of-range channels, and spring overshoot/Oklab midpoints exit the sRGB gamut mid-animation
-	ColorSequenceKeypoint = function(v) return ColorSequenceKeypoint_new(v[4], Oklab_toRGB(Vector3_new(v[1], v[2], v[3]), true)) end,
-	ColorSequence = function(v) local keypoints = {}; for i = 1, #v, 4 do table.insert(keypoints, ColorSequenceKeypoint_new(v[i + 3], Oklab_toRGB(Vector3_new(v[i], v[i + 1], v[i + 2]), true)) :: any) end; return (ColorSequence_new :: any)(keypoints) end,
-	DateTime = function(v) return DateTime_fromUnixTimestampMillis(v[1]) end,
-	NumberRange = function(v) return NumberRange_new(v[1], v[2]) end,
-	NumberSequenceKeypoint = function(v) return NumberSequenceKeypoint_new(v[2], v[1], v[3]) end,
-	PhysicalProperties = function(v) return PhysicalProperties_new(v[1], v[2], v[3], v[4], v[5]) end,
-	Ray = function(v) return Ray_new(Vector3_new(v[1], v[2], v[3]), Vector3_new(v[4], v[5], v[6])) end,
-	Rect = function(v) return Rect_new(v[1], v[2], v[3], v[4]) end,
-	-- FUTURE: support rotated Region3s if/when they become constructable
-	Region3 = function(v) local position, halfSize = Vector3_new(v[1], v[2], v[3]), Vector3_new(v[4] / 2, v[5] / 2, v[6] / 2); return Region3_new(position - halfSize, position + halfSize) end,
-	Region3int16 = function(v) return Region3int16_new(Vector3int16_new(round(v[1]), round(v[2]), round(v[3])), Vector3int16_new(round(v[4]), round(v[5]), round(v[6]))) end,
-	UDim = function(v) return UDim_new(v[1], round(v[2])) end,
-	UDim2 = function(v) return UDim2_new(v[1], round(v[2]), v[3], round(v[4])) end,
-	Vector2 = function(v) return Vector2_new(v[1], v[2]) end,
-	Vector2int16 = function(v) return Vector2int16_new(round(v[1]), round(v[2])) end,
-	Vector3 = function(v) return Vector3_new(v[1], v[2], v[3]) end,
-	Vector3int16 = function(v) return Vector3int16_new(round(v[1]), round(v[2]), round(v[3])) end,
-	-- stylua: ignore end
+	number = function(v): number
+		return v[1]
+	end,
 }
 
-local packers: { [string]: ({ number }, any) -> () } = {
+if IS_ROBLOX then
+	local round = math.round
+
+	local CFrame_new = CFrame.new
+	local CFrame_fromAxisAngle = CFrame.fromAxisAngle
+	local ColorSequence_new = ColorSequence.new
+	local ColorSequenceKeypoint_new = ColorSequenceKeypoint.new
+	local DateTime_fromUnixTimestampMillis = DateTime.fromUnixTimestampMillis
+	local NumberRange_new = NumberRange.new
+	local NumberSequenceKeypoint_new = NumberSequenceKeypoint.new
+	local PhysicalProperties_new = PhysicalProperties.new
+	local Ray_new = Ray.new
+	local Rect_new = Rect.new
+	local Region3_new = Region3.new
+	local Region3int16_new = Region3int16.new
+	local UDim_new = UDim.new
+	local UDim2_new = UDim2.new
+	local Vector2_new = Vector2.new
+	local Vector3_new = Vector3.new
+	local Vector2int16_new = Vector2int16.new
+	local Vector3int16_new = Vector3int16.new
+
+	local Oklab_toRGB = Oklab.toRGB
+	local Oklab_fromRGB = Oklab.fromRGB
+
 	-- stylua: ignore start
-	number = function(v, value) v[1] = value end,
-	CFrame = function(v, value) local axis, angle = (value :: CFrame):ToAxisAngle(); v[1], v[2], v[3], v[4], v[5], v[6], v[7] = value.X, value.Y, value.Z, axis.X, axis.Y, axis.Z, angle end,
-	Color3 = function(v, value) local lab = Oklab_fromRGB(value); v[1], v[2], v[3] = lab.X, lab.Y, lab.Z; end,
-	ColorSequenceKeypoint = function(v, value) local lab = Oklab_fromRGB(value.Value); v[1], v[2], v[3], v[4] = lab.X, lab.Y, lab.Z, value.Time end,
-	ColorSequence = function(v, value) for i, kp in value.Keypoints do local lab = Oklab_fromRGB(kp.Value); i = (i - 1) * 4; v[i + 1], v[i + 2], v[i + 3], v[i + 4] = lab.X, lab.Y, lab.Z, kp.Time end end,
-	DateTime = function(v, value) v[1] = value.UnixTimestampMillis end,
-	NumberRange = function(v, value) v[1], v[2] = value.Min, value.Max end,
-	NumberSequenceKeypoint = function(v, value) v[1], v[2], v[3] = value.Value, value.Time, value.Envelope end,
-	PhysicalProperties = function(v, value) v[1], v[2], v[3], v[4], v[5] = value.Density, value.Friction, value.Elasticity, value.FrictionWeight, value.ElasticityWeight end,
-	Ray = function(v, value) v[1], v[2], v[3], v[4], v[5], v[6] = value.Origin.X, value.Origin.Y, value.Origin.Z, value.Direction.X, value.Direction.Y, value.Direction.Z end,
-	Rect = function(v, value) v[1], v[2], v[3], v[4] = value.Min.X, value.Min.Y, value.Max.X, value.Max.Y end,
+	function packers.CFrame(t, v: CFrame) local p, a = v:ToAxisAngle(); t[1], t[2], t[3], t[4], t[5], t[6], t[7] = v.X, v.Y, v.Z, p.X, p.Y, p.Z, a end
+	function packers.Color3(t, v: Color3) local o = Oklab_fromRGB(v); t[1], t[2], t[3] = o.X, o.Y, o.Z end
+	function packers.ColorSequence(t, v: ColorSequence) for i, k in v.Keypoints do local o = Oklab_fromRGB(k.Value); i = (i - 1) * 4; t[i + 1], t[i + 2], t[i + 3], t[i + 4] = k.Time, o.X, o.Y, o.Z end end
+	function packers.ColorSequenceKeypoint(t, v: ColorSequenceKeypoint) local o = Oklab_fromRGB(v.Value); t[1], t[2], t[3], t[4] = v.Time, o.X, o.Y, o.Z end
+	function packers.DateTime(t, v: DateTime) t[1] = v.UnixTimestampMillis end
+	function packers.NumberRange(t, v: NumberRange) t[1], t[2] = v.Min, v.Max end
+	function packers.NumberSequenceKeypoint(t, v: NumberSequenceKeypoint) t[1], t[2], t[3] = v.Value, v.Time, v.Envelope end
+	function packers.PhysicalProperties(t, v: PhysicalProperties) t[1], t[2], t[3], t[4], t[5] = v.Density, v.Friction, v.Elasticity, v.FrictionWeight, v.ElasticityWeight end
+	function packers.Ray(t, v: Ray) t[1], t[2], t[3], t[4], t[5], t[6] = v.Origin.X, v.Origin.Y, v.Origin.Z, v.Direction.X, v.Direction.Y, v.Direction.Z end
+	function packers.Rect(t, v: Rect) t[1], t[2], t[3], t[4] = v.Min.X, v.Min.Y, v.Max.X, v.Max.Y end
 	-- FUTURE: support rotated Region3s if/when they become constructable
-	Region3 = function(v, value) v[1], v[2], v[3], v[4], v[5], v[6] = value.CFrame.X, value.CFrame.Y, value.CFrame.Z, value.Size.X, value.Size.Y, value.Size.Z end,
-	Region3int16 = function(v, value) v[1], v[2], v[3], v[4], v[5], v[6] = value.Min.X, value.Min.Y, value.Min.Z, value.Max.X, value.Max.Y, value.Max.Z end,
-	UDim = function(v, value) v[1], v[2] = value.Scale, value.Offset end,
-	UDim2 = function(v, value) v[1], v[2], v[3], v[4] = value.X.Scale, value.X.Offset, value.Y.Scale, value.Y.Offset end,
-	Vector2 = function(v, value) v[1], v[2] = value.X, value.Y end,
-	Vector2int16 = function(v, value) v[1], v[2] = value.X, value.Y end,
-	Vector3 = function(v, value) v[1], v[2], v[3] = value.X, value.Y, value.Z end,
-	Vector3int16 = function(v, value) v[1], v[2], v[3] = value.X, value.Y, value.Z end,
+	function packers.Region3(t, v: Region3) t[1], t[2], t[3], t[4], t[5], t[6] = v.CFrame.X, v.CFrame.Y, v.CFrame.Z, v.Size.X, v.Size.Y, v.Size.Z end
+	function packers.Region3int16(t, v: Region3int16) t[1], t[2], t[3], t[4], t[5], t[6] = v.Min.X, v.Min.Y, v.Min.Z, v.Max.X, v.Max.Y, v.Max.Z end
+	function packers.UDim(t, v: UDim) t[1], t[2] = v.Scale, v.Offset end
+	function packers.UDim2(t, v: UDim2) t[1], t[2], t[3], t[4] = v.X.Scale, v.X.Offset, v.Y.Scale, v.Y.Offset end
+	function packers.Vector2(t, v: Vector2) t[1], t[2] = v.X, v.Y end
+	function packers.Vector2int16(t, v: Vector2int16) t[1], t[2] = v.X, v.Y end
+	function packers.Vector3(t, v: Vector3) t[1], t[2], t[3] = v.X, v.Y, v.Z end
+	function packers.Vector3int16(t, v: Vector3int16) t[1], t[2], t[3] = v.X, v.Y, v.Z end
+
+	function unpackers.CFrame(t): CFrame local p, a = CFrame_new(t[1], t[2], t[3]), Vector3_new(t[4], t[5], t[6]); if a.Magnitude < 1e-6 then return p end; return p * CFrame_fromAxisAngle(a, t[7]) end
+	function unpackers.Color3(t): Color3 return Oklab_toRGB(Vector3_new(t[1], t[2], t[3]), false) end
+	function unpackers.ColorSequence(t): ColorSequence local k = {}; for i = 1, #t, 4 do table.insert(k, ColorSequenceKeypoint_new(t[i], Oklab_toRGB(Vector3_new(t[i + 1], t[i + 2], t[i + 3]), true))) end; return ColorSequence_new(k) end
+	function unpackers.ColorSequenceKeypoint(t): ColorSequenceKeypoint return ColorSequenceKeypoint_new(t[1], Oklab_toRGB(Vector3_new(t[2], t[3], t[4]), false)) end
+	function unpackers.DateTime(t): DateTime return DateTime_fromUnixTimestampMillis(t[1]) end
+	function unpackers.NumberRange(t): NumberRange return NumberRange_new(t[1], t[2]) end
+	function unpackers.NumberSequenceKeypoint(t): NumberSequenceKeypoint return NumberSequenceKeypoint_new(t[2], t[1], t[3]) end
+	function unpackers.PhysicalProperties(t): PhysicalProperties return PhysicalProperties_new(t[1], t[2], t[3], t[4], t[5]) end
+	function unpackers.Ray(t): Ray return Ray_new(Vector3_new(t[1], t[2], t[3]), Vector3_new(t[4], t[5], t[6])) end
+	function unpackers.Rect(t): Rect return Rect_new(t[1], t[2], t[3], t[4]) end
+	-- FUTURE: support rotated Region3s if/when they become constructable
+	function unpackers.Region3(t): Region3 local p, h = Vector3_new(t[1], t[2], t[3]), Vector3_new(t[4] / 2, t[5] / 2, t[6] / 2); return Region3_new(p - h, p + h) end
+	function unpackers.Region3int16(t): Region3int16 return Region3int16_new(Vector3int16_new(round(t[1]), round(t[2]), round(t[3])), Vector3int16_new(round(t[4]), round(t[5]), round(t[6]))) end
+	function unpackers.UDim(t): UDim return UDim_new(t[1], round(t[2])) end
+	function unpackers.UDim2(t): UDim2 return UDim2_new(t[1], round(t[2]), t[3], round(t[4])) end
+	function unpackers.Vector2(t): Vector2 return Vector2_new(t[1], t[2]) end
+	function unpackers.Vector2int16(t): Vector2int16 return Vector2int16_new(round(t[1]), round(t[2])) end
+	function unpackers.Vector3(t): Vector3 return Vector3_new(t[1], t[2], t[3]) end
+	function unpackers.Vector3int16(t): Vector3int16 return Vector3int16_new(round(t[1]), round(t[2]), round(t[3])) end
 	-- stylua: ignore end
-}
+end
+local DataType = {}
 
 --- Unpacks an array of numbers into a given animatable data type
 function DataType.unpack(arr: { number }, t: string): any
 	local unpack = unpackers[t]
-	return if unpack ~= nil then unpack(arr) else nil
+	return if unpack then unpack(arr) else nil
 end
 
 --- Returns the unpacker for an animatable type
@@ -122,7 +126,7 @@ function DataType.pack(arr: { number }, value: Animatable, t: string)
 	clear(arr)
 
 	local pack = packers[t]
-	if pack ~= nil then
+	if pack then
 		pack(arr, value)
 	end
 
