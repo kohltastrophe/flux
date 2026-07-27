@@ -7,16 +7,23 @@ local construct = require("./Construct")
 local IS_ROBLOX = Compat.isRoblox
 local warn = Compat.warn
 
+local computed = Graph.computed
 local isNode = Graph.isNode
-local raw = Graph.raw
-local read = Graph.read
+local rawDep = Graph.rawDep
+local readDep = Graph.readDep
 
 type Props = { [string]: any }
+type EnumMap = { [string]: EnumItem }
 
--- A value that may be static, a reactive Node, or a computation function.
-export type Reactive<T> = T | Graph.Node<T> | (() -> T)
+-- Re-exported from Graph: a value that may be static, a reactive Node, or a computation function.
+export type Reactive<T> = Graph.Reactive<T>
 export type Length = number | UDim
+-- The struct a reactive padding source yields (e.g. `Flux.safeArea`); missing sides read as 0.
+export type Insets = { top: number?, bottom: number?, left: number?, right: number? }
 export type Align = "start" | "center" | "end"
+-- Adds the flex distribution values: space-* spread items along an axis; stretch/fill resize them to fill it.
+export type FlexAlign = Align | "between" | "around" | "evenly" | "stretch" | "fill" | "none"
+export type LineAlign = Align | "stretch" | "automatic"
 export type Direction = "x" | "y"
 export type FlexMode = "fill" | "grow" | "shrink" | "none"
 
@@ -31,29 +38,42 @@ export type PaddingSides = {
 
 export type ListConfig = {
 	gap: Reactive<Length>?,
-	direction: (Direction | Enum.FillDirection)?,
-	align: Align?,
-	justify: Align?,
-	horizontalAlign: (Align | Enum.HorizontalAlignment)?,
-	verticalAlign: (Align | Enum.VerticalAlignment)?,
+	direction: Reactive<Direction | Enum.FillDirection>?,
+	align: Reactive<FlexAlign>?,
+	justify: Reactive<FlexAlign>?,
+	horizontalAlign: Reactive<FlexAlign | Enum.HorizontalAlignment | Enum.UIFlexAlignment>?,
+	verticalAlign: Reactive<FlexAlign | Enum.VerticalAlignment | Enum.UIFlexAlignment>?,
+	lineAlign: Reactive<LineAlign | Enum.ItemLineAlignment>?,
 	wraps: Reactive<boolean>?,
 }
 
 export type GridConfig = {
 	cell: Reactive<number | Vector2 | UDim2>?,
 	gap: Reactive<number | Vector2 | UDim2>?,
-	fill: (Direction | Enum.FillDirection)?,
-	align: (Align | Enum.HorizontalAlignment)?,
-	justify: (Align | Enum.VerticalAlignment)?,
+	fill: Reactive<Direction | Enum.FillDirection>?,
+	align: Reactive<Align | Enum.HorizontalAlignment>?,
+	justify: Reactive<Align | Enum.VerticalAlignment>?,
 	maxCells: Reactive<number>?,
 }
 
-local FILL_DIRECTION: Props
-local HORIZONTAL_ALIGN: Props
-local VERTICAL_ALIGN: Props
-local FLEX_MODE: Props
-local ASPECT_TYPE: Props
-local DOMINANT_AXIS: Props
+export type StrokeConfig = {
+	thickness: Reactive<number>?,
+	color: Reactive<Color3>?,
+	transparency: Reactive<number>?,
+	mode: Reactive<"contextual" | "border" | Enum.ApplyStrokeMode>?,
+	joins: Reactive<"round" | "bevel" | "miter" | Enum.LineJoinMode>?,
+}
+
+local FILL_DIRECTION: EnumMap
+local HORIZONTAL_ALIGN: EnumMap
+local VERTICAL_ALIGN: EnumMap
+local FLEX_ALIGNMENT: EnumMap
+local ITEM_LINE_ALIGN: EnumMap
+local FLEX_MODE: EnumMap
+local ASPECT_TYPE: EnumMap
+local DOMINANT_AXIS: EnumMap
+local STROKE_MODE: EnumMap
+local LINE_JOIN: EnumMap
 
 if IS_ROBLOX then
 	FILL_DIRECTION = { x = Enum.FillDirection.Horizontal, y = Enum.FillDirection.Vertical }
@@ -67,6 +87,21 @@ if IS_ROBLOX then
 		center = Enum.VerticalAlignment.Center,
 		["end"] = Enum.VerticalAlignment.Bottom,
 	}
+	FLEX_ALIGNMENT = {
+		none = Enum.UIFlexAlignment.None,
+		fill = Enum.UIFlexAlignment.Fill,
+		stretch = Enum.UIFlexAlignment.Fill,
+		between = Enum.UIFlexAlignment.SpaceBetween,
+		around = Enum.UIFlexAlignment.SpaceAround,
+		evenly = Enum.UIFlexAlignment.SpaceEvenly,
+	}
+	ITEM_LINE_ALIGN = {
+		automatic = Enum.ItemLineAlignment.Automatic,
+		start = Enum.ItemLineAlignment.Start,
+		center = Enum.ItemLineAlignment.Center,
+		["end"] = Enum.ItemLineAlignment.End,
+		stretch = Enum.ItemLineAlignment.Stretch,
+	}
 	FLEX_MODE = {
 		fill = Enum.UIFlexMode.Fill,
 		grow = Enum.UIFlexMode.Grow,
@@ -78,22 +113,50 @@ if IS_ROBLOX then
 		scale = Enum.AspectType.ScaleWithParentSize,
 	}
 	DOMINANT_AXIS = { width = Enum.DominantAxis.Width, height = Enum.DominantAxis.Height }
+	STROKE_MODE = { contextual = Enum.ApplyStrokeMode.Contextual, border = Enum.ApplyStrokeMode.Border }
+	LINE_JOIN = { round = Enum.LineJoinMode.Round, bevel = Enum.LineJoinMode.Bevel, miter = Enum.LineJoinMode.Miter }
 end
 
---[[ Friendly string → Enum; passes through a real Enum; warns + falls back on a bad string. ]]
-local function resolveEnum(map: Props, value: any, default: any, label: string): any
+-- A value the reactive pipeline must read through: a Node or a computation function.
+local function isReactiveValue(value: any): boolean
+	return isNode(value) or type(value) == "function"
+end
+
+local warnedEnums: { [string]: boolean } = {}
+
+--[[ Friendly string → Enum; passes through a real Enum; a bad string warns and resolves `nil`, leaving the property on its engine default. ]]
+local function resolveEnum(map: EnumMap, value: any, label: string): any
 	if value == nil then
 		return nil
 	end
 	if type(value) == "string" then
 		local mapped = map[value]
 		if mapped == nil then
-			warn(`[Flux] unknown {label} "{value}"; falling back to default`)
-			return default
+			local key = `{label}:{value}`
+			if not warnedEnums[key] then
+				warnedEnums[key] = true
+				warn(`[Flux] unknown {label} "{value}"; falling back to default`)
+			end
+			return nil
 		end
 		return mapped
 	end
 	return value -- already an Enum
+end
+
+--[[
+Reactive-aware `resolveEnum`: a Node/function source becomes a closure re-resolving on every
+change. A closure cannot leave the property unset, so `default` (the engine default, always
+expressed as a map entry) is written when resolution fails.
+]]
+local function enumProp(map: EnumMap, value: any, label: string, default: EnumItem): any
+	if isReactiveValue(value) then
+		return function()
+			local resolved = resolveEnum(map, readDep(value), label)
+			return if resolved == nil then default else resolved
+		end
+	end
+	return resolveEnum(map, value, label)
 end
 
 local function toUDim(value: any): UDim
@@ -114,13 +177,9 @@ local function toUDim2(value: any): UDim2
 end
 
 local function reactiveProp(value: any, convert: (any) -> any): any
-	if isNode(value) then
+	if isReactiveValue(value) then
 		return function()
-			return convert(read(value))
-		end
-	elseif type(value) == "function" then
-		return function()
-			return convert((value :: any)())
+			return convert(readDep(value))
 		end
 	end
 	return convert(value)
@@ -148,11 +207,69 @@ local function setSide(props: Props, prop: string, value: any)
 	end
 end
 
--- Reactive closure reading one inset field (e.g. `top`) off a struct node, defaulting to 0.
-local function structSide(node: any, field: string): () -> UDim
+-- Reactive closure reading one inset field (e.g. `top`) off a struct source, defaulting to 0.
+local function structSide(source: any, field: string): () -> UDim
 	return function()
-		return UDim.new(0, (read(node) :: any)[field] or 0)
+		return UDim.new(0, (readDep(source) :: any)[field] or 0)
 	end
+end
+
+-- Flex distribution values (friendly strings and raw UIFlexAlignment) route to the axis
+-- Flex property instead of the Alignment one.
+local function toFlexAlignment(value: any): EnumItem?
+	if type(value) == "string" then
+		return FLEX_ALIGNMENT[value]
+	end
+	if typeof(value) == "EnumItem" and (value :: EnumItem).EnumType == Enum.UIFlexAlignment then
+		return value
+	end
+	return nil
+end
+
+--[[
+Resolves one axis ("x"/"y") of a list's alignment to its (Alignment, Flex) prop values. The
+axis-pinned override wins; otherwise flexbox routing assigns `justify` to the main axis and
+`align` to the cross one based on `direction`. Reactive inputs produce closures re-deriving
+the routing; these write engine defaults where a static config would leave the property unset.
+]]
+local function listAlign(cfg: ListConfig, direction: any, axis: Direction, map: EnumMap, label: string): (any, any)
+	local pinned = if axis == "x" then cfg.horizontalAlign else cfg.verticalAlign
+	local align, justify = cfg.align, cfg.justify
+
+	if pinned == nil and align == nil and justify == nil then
+		return nil, nil
+	end
+
+	-- Yields the chosen input and its config key, so a bad string warns as the key the user wrote.
+	local function value(): (any, string)
+		if pinned ~= nil then
+			return readDep(pinned), label
+		end
+		local main = resolveEnum(FILL_DIRECTION, readDep(direction), "direction") == FILL_DIRECTION.x
+		if (axis == "x") == main then
+			return readDep(justify), "justify"
+		end
+		return readDep(align), "align"
+	end
+
+	local reactive = if pinned ~= nil
+		then isReactiveValue(pinned) -- a static pinned override never re-routes
+		else isReactiveValue(direction) or isReactiveValue(align) or isReactiveValue(justify)
+	if reactive then
+		return function()
+			local v, source = value()
+			return if toFlexAlignment(v) ~= nil then map.start else resolveEnum(map, v, source) or map.start
+		end, function()
+			return toFlexAlignment((value())) or FLEX_ALIGNMENT.none
+		end
+	end
+
+	local v, source = value()
+	local flex = toFlexAlignment(v)
+	if flex ~= nil then
+		return nil, flex
+	end
+	return resolveEnum(map, v, source), nil
 end
 
 local Layout = {}
@@ -160,24 +277,26 @@ local Layout = {}
 --[[
 Creates a [`UIPadding`](https://create.roblox.com/docs/reference/engine/classes/UIPadding) from a single
 length (applied to all sides), a per-side `{ top, bottom, left, right, x, y }` table, or a reactive
-[node](https://flux.kohl.gg/guide/concepts/signals) such as
+[node](https://flux.kohl.gg/guide/concepts/signals) or function yielding a length or a
+`{ top, bottom, left, right }` struct such as
 [`Flux.safeArea`](https://flux.kohl.gg/guide/utilities/responsive#safe-area). Plain `number` values are
 offset pixels; a [`UDim`](https://create.roblox.com/docs/reference/engine/datatypes/UDim) is used as-is.
 <em>Reactive sides bind and update in place.</em>
 
 [Open Documentation](https://flux.kohl.gg/guide/utilities/layout#padding)
 ]]
-function Layout.padding(value: number | UDim | PaddingSides | Graph.Node<any>): UIPadding
+function Layout.padding(value: Length | PaddingSides | Graph.Node<any> | (() -> Length | Insets)): UIPadding
 	local props: Props = {}
 
-	if isNode(value) then
-		if type(raw(value)) == "table" then -- struct node, e.g. safeArea
-			props.PaddingTop = structSide(value, "top")
-			props.PaddingBottom = structSide(value, "bottom")
-			props.PaddingLeft = structSide(value, "left")
-			props.PaddingRight = structSide(value, "right")
-		else -- single length node, all sides
-			applyAllSides(props, value)
+	if isReactiveValue(value) then
+		local source: any = if type(value) == "function" then computed(value :: any) else value
+		if type(rawDep(source)) == "table" then -- struct source, e.g. safeArea
+			props.PaddingTop = structSide(source, "top")
+			props.PaddingBottom = structSide(source, "bottom")
+			props.PaddingLeft = structSide(source, "left")
+			props.PaddingRight = structSide(source, "right")
+		else -- single length source, all sides
+			applyAllSides(props, source)
 		end
 	elseif type(value) == "table" then
 		local sides = value :: PaddingSides
@@ -193,8 +312,39 @@ function Layout.padding(value: number | UDim | PaddingSides | Graph.Node<any>): 
 end
 
 --[[
+Creates a [`UICorner`](https://create.roblox.com/docs/reference/engine/classes/UICorner) rounding the
+parent's corners. `radius` is offset pixels or a
+[`UDim`](https://create.roblox.com/docs/reference/engine/datatypes/UDim), optionally reactive; omit it
+for the engine default (8 px).
+
+[Open Documentation](https://flux.kohl.gg/guide/utilities/layout#corner)
+]]
+function Layout.corner(radius: Reactive<Length>?): UICorner
+	return construct("UICorner", { CornerRadius = udimProp(radius) }) :: any
+end
+
+--[[
+Creates a [`UIStroke`](https://create.roblox.com/docs/reference/engine/classes/UIStroke) outlining the
+parent. `thickness` (px), `color`, and `transparency` bind reactively; `mode` is `"contextual"` (text
+outline on text objects, border otherwise) or `"border"`, and `joins` is `"round"`/`"bevel"`/`"miter"`,
+each also accepting the raw Enum or a reactive source.
+
+[Open Documentation](https://flux.kohl.gg/guide/utilities/layout#stroke)
+]]
+function Layout.stroke(config: StrokeConfig?): UIStroke
+	local cfg: StrokeConfig = config or {}
+	return construct("UIStroke", {
+		Thickness = cfg.thickness,
+		Color = cfg.color,
+		Transparency = cfg.transparency,
+		ApplyStrokeMode = enumProp(STROKE_MODE, cfg.mode, "strokeMode", STROKE_MODE.contextual),
+		LineJoinMode = enumProp(LINE_JOIN, cfg.joins, "lineJoin", LINE_JOIN.round),
+	}) :: any
+end
+
+--[[
 Creates a [`UIAspectRatioConstraint`](https://create.roblox.com/docs/reference/engine/classes/UIAspectRatioConstraint)
-constraining a frame's width-to-height ratio.
+constraining a frame's width-to-height ratio. Every argument may be reactive.
 @param ratio - The aspect ratio; may be a static number or a reactive [node](https://flux.kohl.gg/guide/concepts/signals).
 @param aspectType - `"fit"` (FitWithinMaxSize) or `"scale"` (ScaleWithParentSize), or a raw [`Enum.AspectType`](https://create.roblox.com/docs/reference/engine/enums/AspectType).
 @param dominantAxis - `"width"` or `"height"`, or a raw [`Enum.DominantAxis`](https://create.roblox.com/docs/reference/engine/enums/DominantAxis); an unknown string warns and falls back.
@@ -203,45 +353,26 @@ constraining a frame's width-to-height ratio.
 ]]
 function Layout.aspectRatio(
 	ratio: Reactive<number>,
-	aspectType: ("fit" | "scale" | Enum.AspectType)?,
-	dominantAxis: ("width" | "height" | Enum.DominantAxis)?
+	aspectType: Reactive<"fit" | "scale" | Enum.AspectType>?,
+	dominantAxis: Reactive<"width" | "height" | Enum.DominantAxis>?
 ): UIAspectRatioConstraint
-	local props: Props = { AspectRatio = ratio }
-	if aspectType ~= nil then
-		props.AspectType = resolveEnum(ASPECT_TYPE, aspectType, Enum.AspectType.FitWithinMaxSize, "aspectType")
-	end
-	if dominantAxis ~= nil then
-		props.DominantAxis = resolveEnum(DOMINANT_AXIS, dominantAxis, Enum.DominantAxis.Width, "dominantAxis")
-	end
-	return construct("UIAspectRatioConstraint", props) :: any
-end
-
---[[
-Creates a [`UISizeConstraint`](https://create.roblox.com/docs/reference/engine/classes/UISizeConstraint)
-bounding an element's pixel size. `min` and `max` are
-[`Vector2`](https://create.roblox.com/docs/reference/engine/datatypes/Vector2) pixel sizes; either may be
-omitted or reactive.
-
-[Open Documentation](https://flux.kohl.gg/guide/utilities/layout#sizeconstraint)
-]]
-function Layout.sizeConstraint(min: Reactive<Vector2>?, max: Reactive<Vector2>?): UISizeConstraint
-	local props: Props = {}
-	if min ~= nil then
-		props.MinSize = min
-	end
-	if max ~= nil then
-		props.MaxSize = max
-	end
-	return construct("UISizeConstraint", props) :: any
+	return construct("UIAspectRatioConstraint", {
+		AspectRatio = ratio,
+		AspectType = enumProp(ASPECT_TYPE, aspectType, "aspectType", ASPECT_TYPE.fit),
+		DominantAxis = enumProp(DOMINANT_AXIS, dominantAxis, "dominantAxis", DOMINANT_AXIS.width),
+	}) :: any
 end
 
 --[[
 Creates a [`UIListLayout`](https://create.roblox.com/docs/reference/engine/classes/UIListLayout) that
-arranges siblings in a line. `gap` is the spacing between items (offset px or a
+arranges siblings in a line with flexbox semantics. `gap` is the spacing between items (offset px or a
 [`UDim`](https://create.roblox.com/docs/reference/engine/datatypes/UDim)); `direction` is `"x"`/`"y"`.
-`align` sets <strong>cross-axis</strong> and `justify` <strong>main-axis</strong> alignment using flexbox
-semantics, while `horizontalAlign`/`verticalAlign` are explicit axis-pinned overrides. `wraps` flows items
-onto multiple lines.
+`align` sets the <strong>cross-axis</strong> and `justify` the <strong>main-axis</strong> value:
+`"start"`/`"center"`/`"end"` align items, `"between"`/`"around"`/`"evenly"` distribute the free space,
+and `"stretch"`/`"fill"` resize items to fill the axis. `horizontalAlign`/`verticalAlign` are explicit
+axis-pinned overrides, `wraps` flows items onto multiple lines, and `lineAlign` aligns items within
+their wrapped line. <em>Every value, including `direction`, may be reactive; alignments re-route when a
+reactive `direction` flips.</em>
 
 [Open Documentation](https://flux.kohl.gg/guide/utilities/layout#list)
 ]]
@@ -249,41 +380,22 @@ function Layout.list(config: ListConfig?): UIListLayout
 	local cfg: ListConfig = config or {}
 	local props: Props = {}
 
-	if cfg.gap ~= nil then
-		props.Padding = udimProp(cfg.gap)
-	end
-	if cfg.wraps ~= nil then
-		props.Wraps = cfg.wraps
-	end
+	props.Padding = udimProp(cfg.gap)
+	props.Wraps = cfg.wraps
+	props.ItemLineAlignment = enumProp(ITEM_LINE_ALIGN, cfg.lineAlign, "lineAlign", ITEM_LINE_ALIGN.automatic)
 
-	local direction = resolveEnum(FILL_DIRECTION, cfg.direction, nil, "direction")
-	if direction ~= nil then
-		props.FillDirection = direction
+	local direction: any = cfg.direction
+	if isReactiveValue(direction) then
+		local source = direction
+		direction = computed(function()
+			return resolveEnum(FILL_DIRECTION, readDep(source), "direction")
+		end)
 	end
+	props.FillDirection = enumProp(FILL_DIRECTION, direction, "direction", FILL_DIRECTION.y)
 
-	local horizontal = direction == Enum.FillDirection.Horizontal
-	local h = cfg.horizontalAlign
-	local v = cfg.verticalAlign
-	if cfg.align ~= nil then
-		if horizontal then
-			v = v or cfg.align
-		else
-			h = h or cfg.align
-		end
-	end
-	if cfg.justify ~= nil then
-		if horizontal then
-			h = h or cfg.justify
-		else
-			v = v or cfg.justify
-		end
-	end
-	if h ~= nil then
-		props.HorizontalAlignment = resolveEnum(HORIZONTAL_ALIGN, h, nil, "horizontalAlign")
-	end
-	if v ~= nil then
-		props.VerticalAlignment = resolveEnum(VERTICAL_ALIGN, v, nil, "verticalAlign")
-	end
+	props.HorizontalAlignment, props.HorizontalFlex =
+		listAlign(cfg, direction, "x", HORIZONTAL_ALIGN, "horizontalAlign")
+	props.VerticalAlignment, props.VerticalFlex = listAlign(cfg, direction, "y", VERTICAL_ALIGN, "verticalAlign")
 
 	return construct("UIListLayout", props) :: any
 end
@@ -294,48 +406,33 @@ arranges siblings in a uniform grid. `cell` is the cell size and `gap` the spaci
 [`Vector2`](https://create.roblox.com/docs/reference/engine/datatypes/Vector2), a `number` (offset px), or a
 [`UDim2`](https://create.roblox.com/docs/reference/engine/datatypes/UDim2). `fill` is the flow direction
 `"x"`/`"y"`; `align`/`justify` map to horizontal/vertical alignment; `maxCells` caps cells per line.
+<em>Every value may be reactive.</em>
 
 [Open Documentation](https://flux.kohl.gg/guide/utilities/layout#grid)
 ]]
 function Layout.grid(config: GridConfig?): UIGridLayout
 	local cfg: GridConfig = config or {}
-	local props: Props = {}
-
-	if cfg.cell ~= nil then
-		props.CellSize = udim2Prop(cfg.cell)
-	end
-	if cfg.gap ~= nil then
-		props.CellPadding = udim2Prop(cfg.gap)
-	end
-	if cfg.maxCells ~= nil then
-		props.FillDirectionMaxCells = cfg.maxCells
-	end
-
-	local fill = resolveEnum(FILL_DIRECTION, cfg.fill, nil, "fill")
-	if fill ~= nil then
-		props.FillDirection = fill
-	end
-	if cfg.align ~= nil then
-		props.HorizontalAlignment = resolveEnum(HORIZONTAL_ALIGN, cfg.align, nil, "align")
-	end
-	if cfg.justify ~= nil then
-		props.VerticalAlignment = resolveEnum(VERTICAL_ALIGN, cfg.justify, nil, "justify")
-	end
-
-	return construct("UIGridLayout", props) :: any
+	return construct("UIGridLayout", {
+		CellSize = udim2Prop(cfg.cell),
+		CellPadding = udim2Prop(cfg.gap),
+		FillDirectionMaxCells = cfg.maxCells,
+		FillDirection = enumProp(FILL_DIRECTION, cfg.fill, "fill", FILL_DIRECTION.x),
+		HorizontalAlignment = enumProp(HORIZONTAL_ALIGN, cfg.align, "align", HORIZONTAL_ALIGN.start),
+		VerticalAlignment = enumProp(VERTICAL_ALIGN, cfg.justify, "justify", VERTICAL_ALIGN.start),
+	}) :: any
 end
 
 --[[
 Creates a [`UIFlexItem`](https://create.roblox.com/docs/reference/engine/classes/UIFlexItem) controlling how
 a child grows or shrinks inside a flex
-[`UIListLayout`](https://create.roblox.com/docs/reference/engine/classes/UIListLayout). `mode` is
-`"fill"`/`"grow"`/`"shrink"`/`"none"` or a raw
-[`Enum.UIFlexMode`](https://create.roblox.com/docs/reference/engine/enums/UIFlexMode).
+[`UIListLayout`](https://create.roblox.com/docs/reference/engine/classes/UIListLayout). `mode` is `"fill"`
+(the default when omitted), `"grow"`, `"shrink"`, or `"none"`, or a raw
+[`Enum.UIFlexMode`](https://create.roblox.com/docs/reference/engine/enums/UIFlexMode), optionally reactive.
 
 [Open Documentation](https://flux.kohl.gg/guide/utilities/layout#flex)
 ]]
-function Layout.flex(mode: FlexMode | Enum.UIFlexMode): UIFlexItem
-	local resolved = resolveEnum(FLEX_MODE, mode, Enum.UIFlexMode.Fill, "flex mode")
+function Layout.flex(mode: Reactive<FlexMode | Enum.UIFlexMode>?): UIFlexItem
+	local resolved = enumProp(FLEX_MODE, mode or "fill", "flexMode", FLEX_MODE.fill)
 	return construct("UIFlexItem", { FlexMode = resolved }) :: any
 end
 

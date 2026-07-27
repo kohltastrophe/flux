@@ -23,6 +23,7 @@ local Store = require("@self/Store")
 local Wrap = require("@self/Wrap")
 
 export type Node<T> = Graph.Node<T>
+export type Reactive<T> = Graph.Reactive<T>
 
 local construct = require("@self/Construct")
 
@@ -89,8 +90,8 @@ local Flux = {
 	]]
 	Graph = Graph,
 	--[[
-	<strong>Layout</strong>: layout and constraint helpers (`padding`, `list`, `grid`, `aspectRatio`,
-	`sizeConstraint`, `flex`) that return ready-to-parent Roblox
+	<strong>Layout</strong>: layout and appearance helpers (`padding`, `corner`, `stroke`, `list`, `grid`,
+	`aspectRatio`, `flex`) that return ready-to-parent Roblox
 	[`Instance`](https://create.roblox.com/docs/reference/engine/classes/Instance)s with reactive arguments.
 
 	[Open Documentation](https://flux.kohl.gg/guide/utilities/layout)
@@ -161,8 +162,9 @@ local Flux = {
 	safeArea = Responsive.safeArea,
 
 	padding = Layout.padding,
+	corner = Layout.corner,
+	stroke = Layout.stroke,
 	aspectRatio = Layout.aspectRatio,
-	sizeConstraint = Layout.sizeConstraint,
 	list = Layout.list,
 	grid = Layout.grid,
 	flex = Layout.flex,
