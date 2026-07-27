@@ -131,7 +131,7 @@ local safeArea: Graph.Node<SafeAreaInsets> = newNode(
 	end
 )
 
-if IS_ROBLOX then
+if IS_ROBLOX and game:GetService("RunService"):IsClient() then
 	local GuiService = game:GetService("GuiService")
 
 	local function recomputeSafeArea()
