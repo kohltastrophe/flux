@@ -698,6 +698,9 @@ Node.__index = Node
 
 export type Node<T> = setmetatable<NodeData<T>, typeof(Node)>
 
+-- A maybe-reactive value: static, a Node, or a computation function; `readDep`/`rawDep` read one.
+export type Reactive<T> = T | Node<T> | (() -> T)
+
 --[[
 Reads a node's up-to-date value WITHOUT subscribing the caller.
 

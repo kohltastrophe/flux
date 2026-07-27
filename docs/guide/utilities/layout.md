@@ -1,12 +1,12 @@
 ---
 title: Layout
-description: Terse helpers for padding, constraints, and UI layouts that drop straight into a Flux tree.
+description: Terse helpers for padding, corners, strokes, constraints, and UI layouts that drop straight into a Flux tree.
 outline: deep
 ---
 
 # Layout
 
-Roblox arranges and constrains UI through child instances: `UIListLayout`, `UIPadding`, `UIAspectRatioConstraint`, and friends. Writing them out longhand is verbose, especially the ones whose properties are `UDim`s. Flux's layout helpers are thin, typed wrappers that return those instances, so they drop straight into a children list alongside everything else:
+Roblox arranges, constrains, and decorates UI through child instances: `UIListLayout`, `UIPadding`, `UICorner`, and friends. Writing them out longhand is verbose, especially the ones whose properties are `UDim`s or Enums. Flux's layout helpers are thin, typed wrappers that return those instances, so they drop straight into a children list alongside everything else:
 
 ```luau
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -37,13 +37,40 @@ Three rules apply across every helper:
 
 ## `padding`
 
-Returns a [`UIPadding`](https://create.roblox.com/docs/en-us/reference/engine/classes/UIPadding). Accepts one length for all sides, a per-side table, or a reactive struct node:
+Returns a [`UIPadding`](https://create.roblox.com/docs/en-us/reference/engine/classes/UIPadding). Accepts one length for all sides, a per-side table, or a reactive source (node or function) yielding a length or a `{top,bottom,left,right}`{luau} struct:
 
 ```luau
 Flux.padding(8)                      -- all four sides
 Flux.padding { x = 16, y = 8 }       -- horizontal / vertical
 Flux.padding { top = 8, left = 16 }  -- only the sides you name
 Flux.padding(Flux.safeArea)          -- bind a {top,bottom,left,right} node
+Flux.padding(function()              -- any computation works too
+    return 8 * Flux.scale()
+end)
+```
+
+## `corner`
+
+Returns a [`UICorner`](https://create.roblox.com/docs/en-us/reference/engine/classes/UICorner). The radius is offset pixels or a `UDim`{luau}, optionally reactive; call it bare for the engine default (8 px):
+
+```luau
+Flux.corner()          -- default 8 px rounding
+Flux.corner(12)        -- CornerRadius = UDim.new(0, 12)
+Flux.corner(UDim.new(0.5, 0))  -- fully round (pill / circle)
+```
+
+## `stroke`
+
+Returns a [`UIStroke`](https://create.roblox.com/docs/en-us/reference/engine/classes/UIStroke):
+
+```luau
+Flux.stroke {
+    thickness = 2,        -- px
+    color = accentColor,  -- static or reactive Color3
+    transparency = 0.25,
+    mode = "border",      -- "contextual" (default) | "border"
+    joins = "round",      -- "round" (default) | "bevel" | "miter"
+}
 ```
 
 ## `list`
@@ -54,13 +81,32 @@ Returns a [`UIListLayout`](https://create.roblox.com/docs/en-us/reference/engine
 Flux.list {
     gap = 8,             -- spacing between items (offset px)
     direction = "x",     -- "x" (horizontal) | "y" (vertical, default)
-    align = "center",    -- cross-axis alignment
-    justify = "start",   -- main-axis alignment (along `direction`)
+    align = "center",    -- cross-axis value
+    justify = "between", -- main-axis value (along `direction`)
     wraps = true,
+    lineAlign = "start", -- item alignment within a wrapped line
 }
 ```
 
-`align` and `justify` follow flexbox semantics: `align` is the **cross** axis and `justify` the **main** axis (the one items flow along). Because their target axis depends on `direction`, they take the axis-agnostic strings `"start" | "center" | "end"`{luau}. To set an axis directly, or to pass a raw `Enum`{luau}, use `horizontalAlign` / `verticalAlign` instead.
+`align` and `justify` follow flexbox semantics: `align` is the **cross** axis and `justify` the **main** axis (the one items flow along). Because their target axis depends on `direction`, they take axis-agnostic strings:
+
+- `"start" | "center" | "end"`{luau}: align items along the axis.
+- `"between" | "around" | "evenly"`{luau}: distribute the free space between, around, or evenly amongst items ([`UIFlexAlignment`](https://create.roblox.com/docs/en-us/reference/engine/enums/UIFlexAlignment)), the flexbox `space-*` values.
+- `"stretch"`{luau} (alias `"fill"`{luau}): resize items to fill the axis; on the cross axis this is CSS's `align-items: stretch`.
+
+To set an axis directly, or to pass a raw `Enum`{luau}, use `horizontalAlign` / `verticalAlign` instead. When `wraps` is on, `lineAlign` (`"start" | "center" | "end" | "stretch" | "automatic"`{luau}) aligns items within their own line.
+
+Every value may be reactive, including `direction`: `align`/`justify` re-route to their new axes when it flips:
+
+```luau
+Flux.list {
+    direction = function() -- phones stack vertically, desktop flows across
+        return if Flux.Responsive.breakpoint() == "phone" then "y" else "x"
+    end,
+    gap = 8,
+    justify = "between",
+}
+```
 
 ## `grid`
 
@@ -77,7 +123,7 @@ Flux.grid {
 }
 ```
 
-Unlike [`list`](#list), `grid`'s `align` and `justify` always map to the **horizontal** and **vertical** axes respectively (not the direction-relative cross/main pair) since a grid flows along both axes at once.
+Unlike [`list`](#list), `grid`'s `align` and `justify` always map to the **horizontal** and **vertical** axes respectively (not the direction-relative cross/main pair) since a grid flows along both axes at once, and they take only the alignment strings `"start" | "center" | "end"`{luau}.
 
 ## `aspectRatio`
 
@@ -90,27 +136,25 @@ Flux.aspectRatio(1, "scale", "height")  -- ratio, aspectType, dominantAxis
 
 `aspectType` accepts `"fit"`{luau} / `"scale"`{luau}; `dominantAxis` accepts `"width"`{luau} / `"height"`{luau}.
 
-## `sizeConstraint`
-
-Returns a [`UISizeConstraint`](https://create.roblox.com/docs/en-us/reference/engine/classes/UISizeConstraint). Either bound may be omitted:
+::: tip Where is `sizeConstraint`?
+`UISizeConstraint`'s two `Vector2`{luau} properties need no conversion, so the longhand is just as terse, and reactive values already bind natively:
 
 ```luau
-Flux.sizeConstraint(Vector2.new(200, 100), Vector2.new(600, 400))
-Flux.sizeConstraint(nil, Vector2.new(600, 400))  -- max only
+new "UISizeConstraint" { MinSize = Vector2.new(200, 100), MaxSize = maxSize }
 ```
 
-Pure `UIScale`-based scaling shrinks everything uniformly; pairing it with a `sizeConstraint` keeps small screens from collapsing UI below a usable size. See [Responsive](/guide/utilities/responsive#scale).
+:::
 
 ## `flex`
 
-Returns a [`UIFlexItem`](https://create.roblox.com/docs/en-us/reference/engine/classes/UIFlexItem) for items inside a flex `UIListLayout`:
+Returns a [`UIFlexItem`](https://create.roblox.com/docs/en-us/reference/engine/classes/UIFlexItem) for items inside a flex `UIListLayout`. `mode` defaults to `"fill"`{luau}:
 
 ```luau
 new "Frame" {
     Flux.list { direction = "x" },
 
     new "TextLabel" { Text = "Fixed" },
-    new "Frame" { Flux.flex("fill") },  -- "fill" | "grow" | "shrink" | "none"
+    new "Frame" { Flux.flex() },  -- "fill" (default) | "grow" | "shrink" | "none"
 }
 ```
 
