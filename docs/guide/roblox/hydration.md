@@ -195,13 +195,13 @@ A callback `_REF`{luau} may also **return** a cleanup value (a function, connect
 
 Every directive also has a **function form** that you place in the array portion of the property table (at a numeric index), like a `Flux.Find`{lua} selector. Use these to declare a single attribute, tag, or listener inline next to related code, or to splice directives in from a component fragment, without assembling the combined directive tables.
 
-| One-off                                             | Equivalent                    |
-| :-------------------------------------------------- | :---------------------------- |
-| `Flux.attr(name, value)`{luau} · `Flux.attr { name = value }`{luau} | `_ATTR = { name = value }`{luau} |
+| One-off                                                                   | Equivalent                          |
+| :------------------------------------------------------------------------ | :---------------------------------- |
+| `Flux.attr(name, value)`{luau} · `Flux.attr { name = value }`{luau}       | `_ATTR = { name = value }`{luau}    |
 | `Flux.event(name, handler)`{luau} · `Flux.event { name = handler }`{luau} | `_EVENT = { name = handler }`{luau} |
-| `Flux.tag(...)`{luau}                                | `_TAG = { ... }`{luau}        |
-| `Flux.ref(nodeOrCallback)`{luau}                     | `_REF = nodeOrCallback`{luau} |
-| `Flux.onDestroy(...)`{luau}                          | `_CLEAN = { ... }`{luau}      |
+| `Flux.tag(...)`{luau}                                                     | `_TAG = { ... }`{luau}              |
+| `Flux.ref(nodeOrCallback)`{luau}                                          | `_REF = nodeOrCallback`{luau}       |
+| `Flux.onDestroy(...)`{luau}                                               | `_CLEAN = { ... }`{luau}            |
 
 The values accepted are identical to the underlying directive: `Flux.attr`{lua} takes statics, nodes, functions, or `Flux.model`{lua}; `Flux.tag`{lua} takes any number of strings, nodes, or functions; `Flux.event`{lua} takes handler functions or bind-from nodes (and its map form supports the nested `_ATTR` table).
 
@@ -261,21 +261,25 @@ The properties passed to a selector are treated like a standard `Flux.edit`{lua}
 
 ### Available Selectors
 
-| Selector                              | Finds                                        |
-| :------------------------------------ | :------------------------------------------- |
-| `Find.Child(name)`{luau}              | `FindFirstChild(name)`{luau}                 |
-| `Find.ChildClass(className)`{luau}    | `FindFirstChildOfClass(className)`{luau}     |
-| `Find.ChildIsA(className)`{luau}      | `FindFirstChildWhichIsA(className)`{luau}    |
-| `Find.Descendant(name)`{luau}         | `FindFirstDescendant(name)`{luau}            |
-| `Find.Ancestor(name)`{luau}           | `FindFirstAncestor(name)`{luau}              |
-| `Find.AncestorClass(className)`{luau} | `FindFirstAncestorOfClass(className)`{luau}  |
-| `Find.AncestorIsA(className)`{luau}   | `FindFirstAncestorWhichIsA(className)`{luau} |
-| `Find.Parent()`{luau}                 | `Instance.Parent`{lua}                       |
-| `Find.Query(query)`{luau}             | `QueryDescendants(query)`{luau}              |
-| `Find.QueryFirst(query)`{luau}        | `QueryDescendants(query)[1]`{luau}           |
+| Selector                              | Finds                                                     |
+| :------------------------------------ | :-------------------------------------------------------- |
+| `Find.Child(name)`{luau}              | `FindFirstChild(name)`{luau}                              |
+| `Find.ChildClass(className)`{luau}    | `FindFirstChildOfClass(className)`{luau}                  |
+| `Find.ChildIsA(className)`{luau}      | `FindFirstChildWhichIsA(className)`{luau}                 |
+| `Find.Descendant(name)`{luau}         | `FindFirstDescendant(name)`{luau}                         |
+| `Find.Ancestor(name)`{luau}           | `FindFirstAncestor(name)`{luau}                           |
+| `Find.AncestorClass(className)`{luau} | `FindFirstAncestorOfClass(className)`{luau}               |
+| `Find.AncestorIsA(className)`{luau}   | `FindFirstAncestorWhichIsA(className)`{luau}              |
+| `Find.Parent()`{luau}                 | `Instance.Parent`{lua}                                    |
+| `Find.Path(path)`{luau}               | `FindFirstChild(segment)`{luau} per `.`-separated segment |
+| `Find.Query(query)`{luau}             | `QueryDescendants(query)`{luau}                           |
+| `Find.QueryFirst(query)`{luau}        | `QueryDescendants(query)[1]`{luau}                        |
 
 > [!NOTE]
 > `Find.Parent`{lua} curries like the other selectors; it ignores its query argument. Call it with empty parens and then apply the properties: `Find.Parent() { ... }`{luau}.
+
+> [!NOTE]
+> `Find.Path`{lua} walks its query one `.`-separated segment at a time: each segment is a `FindFirstChild(segment)`{luau} step, except that a `Parent` or `^` segment climbs to the instance's parent instead, so `Find.Path "^.Sidebar.Title" { ... }`{luau} goes up one level, then down through `Sidebar` to `Title`. Empty segments (stray dots) are skipped, and if any step misses, the selector warns and applies nothing. Because `Parent` is reserved as a climb token, a child literally named "Parent" can't be reached with `Find.Path`{lua}; use `Find.Child`{lua} for that.
 
 ```luau
 local Find = Flux.Find
@@ -302,6 +306,10 @@ Flux.edit(existingMenu) {
         Activated = function()
             isMuted(not isMuted())
         end,
+    },
+
+    Find.Path "Header.Title" {
+        Text = "Settings",
     },
 
     Find.QueryFirst "UIListLayout" {

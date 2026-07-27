@@ -135,6 +135,13 @@ local module = {
 	[Open Documentation](https://flux.kohl.gg/guide/roblox/hydration#instance-selectors-flux-find)
 	]]
 	Parent = selector(indexParent) :: Selector,
+	--[[
+	Walks a `.`-separated path from the hydrated element, one [`Instance:FindFirstChild`](https://create.roblox.com/docs/reference/engine/classes/Instance#FindFirstChild)
+	step per segment, then applies the property table to the final [`Instance`](https://create.roblox.com/docs/reference/engine/classes/Instance). A `Parent` or `^` segment
+	climbs to [`Instance.Parent`](https://create.roblox.com/docs/reference/engine/classes/Instance#Parent) instead; empty segments are skipped. If any step misses, nothing is applied.
+
+	[Open Documentation](https://flux.kohl.gg/guide/roblox/hydration#instance-selectors-flux-find)
+	]]
 	Path = selector(path) :: Selector,
 	--[[
 	Selects <strong>every</strong> descendant matching a Roblox path query via
