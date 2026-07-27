@@ -6,12 +6,9 @@ local Graph = require("./Graph")
 local IS_ROBLOX = Compat.isRoblox
 local warn = Compat.warn
 
-local newNode = Graph.new
-local read = Graph.read
-
-local function computed<T>(fn: () -> T): Graph.Node<T>
-	return newNode(fn)
-end
+local computed = Graph.computed
+local readDep = Graph.readDep
+local signal = Graph.signal
 
 export type ScaleMode = "min" | "width" | "height" | "max" | "diagonal"
 export type Breakpoint = "phone" | "tablet" | "desktop"
@@ -32,13 +29,13 @@ export type PartialConfig = {
 	min: number?,
 	max: number?,
 	breakpoints: Breakpoints?,
+	viewport: Graph.Reactive<Vector2>?,
 }
 
-local DEFAULT_REFERENCE = (if IS_ROBLOX then Vector2.new(1920, 1080) else { X = 1920, Y = 1080 }) :: any
-local DEFAULT_VIEWPORT = (if IS_ROBLOX then Vector2.new(1920, 1080) else { X = 1920, Y = 1080 }) :: any
+local DEFAULT_SIZE = (if IS_ROBLOX then Vector2.new(1920, 1080) else { X = 1920, Y = 1080 }) :: any
 
 local config: Config = {
-	reference = DEFAULT_REFERENCE,
+	reference = DEFAULT_SIZE,
 	mode = "min",
 	breakpoints = { phone = 600, tablet = 1024 },
 }
@@ -102,20 +99,22 @@ local function breakpointFor(width: number, partial: PartialConfig?): Breakpoint
 	return "desktop"
 end
 
-local viewport: Graph.Node<Vector2> = newNode(DEFAULT_VIEWPORT) :: any
+local viewport: Graph.Node<Vector2> = signal(DEFAULT_SIZE)
 
 --[[ Factory escape hatch: a `scale` node with per-surface config (merged over defaults). ]]
 local function scaleOf(partial: PartialConfig?): Graph.Node<number>
+	local source = (if partial then partial.viewport else nil) or viewport
 	return computed(function(): number
-		local vp = read(viewport) :: Vector2
+		local vp = readDep(source) :: Vector2
 		return scaleFor(vp.X, vp.Y, partial)
 	end)
 end
 
 --[[ Factory escape hatch: a `breakpoint` node with per-surface thresholds. ]]
 local function breakpointOf(partial: PartialConfig?): Graph.Node<Breakpoint>
+	local source = (if partial then partial.viewport else nil) or viewport
 	return computed(function(): Breakpoint
-		local vp = read(viewport) :: Vector2
+		local vp = readDep(source) :: Vector2
 		return breakpointFor(vp.X, partial)
 	end)
 end
@@ -123,9 +122,8 @@ end
 local scale: Graph.Node<number> = scaleOf()
 local breakpoint: Graph.Node<Breakpoint> = breakpointOf()
 
-local safeArea: Graph.Node<SafeAreaInsets> = newNode(
+local safeArea: Graph.Node<SafeAreaInsets> = signal(
 	{ top = 0, bottom = 0, left = 0, right = 0 },
-	nil,
 	function(a: SafeAreaInsets, b: SafeAreaInsets): boolean
 		return a.top == b.top and a.bottom == b.bottom and a.left == b.left and a.right == b.right
 	end
