@@ -28,6 +28,74 @@ test("find.parent · query packed for Edit's warnings (expected warn)", function
 	end)) == true, "selector miss warns without erroring")
 end)
 
+-- Find.Path wraps a plain function, so sel[2] is the traversal itself in both
+-- runtimes; drive it directly with fake instances for headless coverage.
+local walkPath = Find.Path("")({})[2]
+
+local function fakeInstance(name, parent)
+	local inst = { Name = name, Parent = parent, _children = {} }
+	function inst.FindFirstChild(self, childName)
+		for _, child in self._children do
+			if child.Name == childName then
+				return child
+			end
+		end
+		return nil
+	end
+	if parent then
+		table.insert(parent._children, inst)
+	end
+	return inst
+end
+
+test("find.path · walks dot-separated child names", function()
+	local root = fakeInstance("Root")
+	local a = fakeInstance("A", root)
+	local b = fakeInstance("B", a)
+	fakeInstance("Decoy", root)
+
+	expect(walkPath(root, "A.B") == b, "descends two named segments")
+	expect(walkPath(root, "A") == a, "resolves a single segment")
+	expect(walkPath(root, "A.Missing") == nil, "returns nil when a segment misses")
+	expect(walkPath(root, "Missing.B") == nil, "returns nil when the first segment misses")
+end)
+
+test("find.path · Parent and ^ segments climb, empty segments are skipped", function()
+	local root = fakeInstance("Root")
+	local a = fakeInstance("A", root)
+	local b = fakeInstance("B", a)
+
+	expect(walkPath(b, "Parent") == a, "'Parent' climbs one level")
+	expect(walkPath(b, "^.^") == root, "'^' chains climb multiple levels")
+	expect(walkPath(b, "^.B") == b, "climb then descend round-trips")
+	expect(walkPath(root, "^") == nil, "climbing past a nil Parent returns nil")
+	expect(walkPath(root, "") == root, "empty path resolves to the instance itself")
+	expect(walkPath(root, ".A..B.") == b, "stray dots are skipped, not treated as misses")
+end)
+
+test("find.path · query packed for Edit's warnings", function()
+	local props = { Name = "target" }
+	local sel = Find.Path("Inner.Frame")(props)
+	expect(sel[1] == Find.Symbol and sel[3] == props and sel[4] == "Inner.Frame", "packs query for warnings")
+end)
+
+rtest("find.path · resolves a nested path end-to-end via Flux.edit", function()
+	local root = Instance.new("Folder")
+	local a = Instance.new("Frame")
+	a.Name = "A"
+	a.Parent = root
+	local b = Instance.new("Frame")
+	b.Name = "B"
+	b.Parent = a
+
+	Flux.edit(root)({ Find.Path("A.B")({ LayoutOrder = 8 }) })
+	expect(b.LayoutOrder == 8, "Find.Path resolved the nested child and applied props")
+
+	Flux.edit(b)({ Find.Path("^.^.A")({ LayoutOrder = 2 }) })
+	expect(a.LayoutOrder == 2, "Find.Path climbed with ^ and descended again")
+	root:Destroy()
+end)
+
 rtest("find.child · FindFirstChild matches named child and applies props", function()
 	local root = Instance.new("Folder")
 	local child = Instance.new("Frame")
