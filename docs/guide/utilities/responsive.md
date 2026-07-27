@@ -85,7 +85,7 @@ new "Frame" {
 
 ## Viewport
 
-`Flux.viewport`{lua} is the `Node<Vector2>`{luau} everything else derives from: the current `ViewportSize`{luau} of `workspace.CurrentCamera`{luau}, kept in sync as the window resizes or the camera changes. Read it when you need the raw size:
+`Flux.viewport`{lua} is the `Node<Vector2>`{luau} everything else derives from: the current `ViewportSize`{luau} of `workspace.CurrentCamera`{luau}, kept in sync as the window resizes or the camera changes (on the client; elsewhere it holds `1920×1080`{luau} and stays writable, so exotic hosts can drive it themselves). Read it when you need the raw size:
 
 ```luau
 local isPortrait = Flux(function()
@@ -127,6 +127,25 @@ local tabletFirst = Flux.Responsive.breakpointOf {
     breakpoints = { phone = 480, tablet = 900 },
 }
 ```
+
+### Container queries & plugin docks
+
+The factories also take a `viewport` override: any reactive source yielding a size. The derived node then tracks **that surface** instead of the screen: CSS container queries, in effect. Bind an instance's `AbsoluteSize` with the [terse constructor](/guide/concepts/signals#creating-a-signal) and a Studio plugin dock (or a `SurfaceGui`, or any frame) becomes its own responsive context:
+
+```luau
+local dockSize = Flux(dockWidget, "AbsoluteSize")
+
+local dockScale = Flux.Responsive.scaleOf {
+    viewport = dockSize,
+    reference = Vector2.new(400, 600),
+}
+local dockBreakpoint = Flux.Responsive.breakpointOf {
+    viewport = dockSize,
+    breakpoints = { phone = 320, tablet = 480 },
+}
+```
+
+This is the intended path for plugin UIs: the shared `Flux.viewport`{lua}/`Flux.safeArea`{lua} singletons wire to the camera and `GuiService` on the **client only** (a server or Studio edit session keeps their defaults), while dock-driven nodes never depend on them.
 
 ### Pure helpers
 

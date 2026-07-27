@@ -85,6 +85,31 @@ test("responsive · scaleOf / breakpointOf escape hatches use merged config", fu
 	b:Destroy()
 end)
 
+test("responsive · scaleOf/breakpointOf accept a custom viewport source (container queries)", function()
+	-- e.g. a plugin dock: Flux(dock, "AbsoluteSize"); here a plain node stands in for the surface size.
+	local container = Flux({ X = 400, Y = 300 } :: any)
+	local s = Responsive.scaleOf({ viewport = container, reference = { X = 800, Y = 600 } :: any })
+	local b = Responsive.breakpointOf({ viewport = container, breakpoints = { phone = 500, tablet = 700 } })
+
+	expect(approx(s:get(), 0.5), "scale derives from the container, not the global viewport")
+	expect(b:get() == "phone", "breakpoint derives from the container width")
+
+	container({ X = 800, Y = 600 } :: any)
+	expect(approx(s:get(), 1), "scale tracks container resizes")
+	expect(b:get() == "desktop", "breakpoint tracks container resizes")
+
+	local fn = Responsive.breakpointOf({
+		viewport = function()
+			return { X = container().X / 2, Y = 0 } :: any
+		end,
+	})
+	expect(fn:get() == "phone", "a function source works too")
+
+	s:Destroy()
+	b:Destroy()
+	fn:Destroy()
+end)
+
 rtest("responsive · scale node drives a real UIScale from viewport", function()
 	local uiScale
 	local s = Flux.scope(function()
