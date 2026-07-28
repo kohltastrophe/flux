@@ -158,7 +158,6 @@ local Flux = {
 
 	viewport = Responsive.viewport,
 	scale = Responsive.scale,
-	breakpoint = Responsive.breakpoint,
 	safeArea = Responsive.safeArea,
 
 	padding = Layout.padding,

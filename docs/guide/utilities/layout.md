@@ -33,7 +33,7 @@ Three rules apply across every helper:
 
 - **Bare numbers are offset pixels.** `Flux.padding(8)`{luau} and `gap = 8`{luau} become `UDim.new(0, 8)`{luau}. Pass a `UDim`{luau} explicitly if you want scale.
 - **Friendly strings instead of Enums.** `direction = "x"`{luau}, `align = "center"`{luau}, `Flux.flex("fill")`{luau}: terser than the full `Enum`, and still strictly typed. You can pass a raw `Enum`{luau} anywhere a string is accepted.
-- **Any value can be reactive.** A `Node`{luau} or a function works wherever a static value does, and binds reactively, so `Flux.padding(Flux.safeArea)`{luau} and `Flux.list { gap = animatedGap }`{luau} just work, and clean up when the instance is destroyed.
+- **Any value can be reactive.** A `Node`{luau} or a function works wherever a static value does (enum strings included) and binds reactively, so `Flux.padding(Flux.safeArea)`{luau}, `Flux.list { gap = animatedGap }`{luau}, and a `direction` that flips with [`Flux.Responsive.breakpoint`](/guide/utilities/responsive#breakpoint) all just work, and clean up when the instance is destroyed. (A reactive enum prop can't be "unset", so it writes the engine default when its value is `nil`{luau} or invalid.)
 
 ## `padding`
 

@@ -6,9 +6,9 @@ outline: deep
 
 # Responsive
 
-Roblox UI authored in fixed offset pixels looks right on the screen you built it on and wrong everywhere else. Flux's responsive layer exposes the screen as a set of **reactive values you read** (`Flux.viewport`{lua}, `Flux.scale`{lua}, `Flux.breakpoint`{lua}, and `Flux.safeArea`{lua}), so your layout reacts to the device the same way every other binding reacts to state.
+Roblox UI authored in fixed offset pixels looks right on the screen you built it on and wrong everywhere else. Flux's responsive layer exposes the screen as a set of **reactive values you read** (`Flux.viewport`{lua}, `Flux.scale`{lua}, and `Flux.safeArea`{lua}), so your layout reacts to the device the same way every other binding reacts to state.
 
-Everything here is derived from one shared `Flux.viewport`{lua} node, kept in sync with the active camera. There are no factories to call and nothing to mount: read the value, bind it, done. (They are also available under the `Flux.Responsive`{lua} namespace.)
+Everything here is derived from one shared `Flux.viewport`{lua} node, kept in sync with the active camera. There are no factories to call and nothing to mount: read the value, bind it, done. (They are also available under the `Flux.Responsive`{lua} namespace, alongside the rest of this page's API.)
 
 ## Scale
 
@@ -46,10 +46,10 @@ By default `scale` is computed as `math.min(viewport.X / reference.X, viewport.Y
 
 ## Breakpoint
 
-`Flux.breakpoint`{lua} is a `Node<"phone" | "tablet" | "desktop">`{luau} derived from viewport **width**. Use it to switch _layout_, not just shrink it. Pair it with [`Flux.switch`](/guide/concepts/conditionals):
+`Flux.Responsive.breakpoint`{lua} is a `Node<"phone" | "tablet" | "desktop">`{luau} derived from viewport **width**. Use it to switch _layout_, not just shrink it. Pair it with [`Flux.switch`](/guide/concepts/conditionals):
 
 ```luau
-Flux.switch(Flux.breakpoint) {
+Flux.switch(Flux.Responsive.breakpoint) {
     phone = function()
         return CompactLayout()
     end,
@@ -108,7 +108,7 @@ Flux.Responsive.config.breakpoints = { phone = 700, tablet = 1100 }
 | Field         | Default                    | Meaning                                                                   |
 | :------------ | :------------------------- | :------------------------------------------------------------------------ |
 | `reference`   | `Vector2(1920,1080)`       | The resolution at which `scale` is `1.0`.                                 |
-| `mode`        | `"min"`                    | `"min"` (fit) · `"width"` · `"height"` · `"max"` (cover) · `"diagonal"`.  |
+| `mode`        | `"min"`                    | `"min"` (fit) · `"width"` · `"height"` · `"max"` (cover).                 |
 | `min` / `max` | `nil`                      | Optional clamps on the scale factor.                                      |
 | `breakpoints` | `{phone=600, tablet=1024}` | Upper-bound widths for `phone` and `tablet`; anything wider is `desktop`. |
 
@@ -147,15 +147,5 @@ local dockBreakpoint = Flux.Responsive.breakpointOf {
 
 This is the intended path for plugin UIs: the shared `Flux.viewport`{lua}/`Flux.safeArea`{lua} singletons wire to the camera and `GuiService` on the **client only** (a server or Studio edit session keeps their defaults), while dock-driven nodes never depend on them.
 
-### Pure helpers
-
-The derivation math is also exposed as pure functions that take plain numbers, handy for one-off calculations and unit tests:
-
-```luau
-Flux.Responsive.scaleFor(1280, 720)        -- → number
-Flux.Responsive.breakpointFor(800)         -- → "tablet"
-Flux.Responsive.scaleFor(1280, 720, { mode = "width" })
-```
-
 > [!NOTE]
-> The reactive nodes read the engine (camera, `GuiService`), so they only update under Roblox. The pure `scaleFor`{luau} / `breakpointFor`{luau} helpers and all derivation logic run anywhere, including headless Luau, which is how Flux tests them.
+> Only the engine wiring (camera, `GuiService`) is Roblox-specific. The derivation math runs anywhere: hand the factories a plain `{ X, Y }`{luau} source and they work in headless Luau, which is how Flux unit-tests them.
