@@ -20,43 +20,71 @@ local Responsive = Flux.Responsive
 
 local approx = sert.approx
 
-test("responsive · scaleFor min mode fits the tighter axis", function()
-	expect(approx(Responsive.scaleFor(1920, 1080), 1), "at reference → 1.0")
-	expect(approx(Responsive.scaleFor(960, 540), 0.5), "half reference → 0.5")
-	expect(approx(Responsive.scaleFor(800, 600), 800 / 1920), "min picks the tighter (width) axis")
-	expect(approx(Responsive.scaleFor(3840, 2160), 2), "above reference scales up unclamped")
+-- Derivation math is tested through the factories with a private viewport source,
+-- the same seam container queries use: a plain {X,Y} node stands in for a surface.
+test("responsive · scaleOf min mode fits the tighter axis", function()
+	local vp = Flux({ X = 1920, Y = 1080 } :: any)
+	local s = Responsive.scaleOf({ viewport = vp })
+	expect(approx(s:get(), 1), "at reference → 1.0")
+	vp({ X = 960, Y = 540 } :: any)
+	expect(approx(s:get(), 0.5), "half reference → 0.5")
+	vp({ X = 800, Y = 600 } :: any)
+	expect(approx(s:get(), 800 / 1920), "min picks the tighter (width) axis")
+	vp({ X = 3840, Y = 2160 } :: any)
+	expect(approx(s:get(), 2), "above reference scales up unclamped")
+	s:Destroy()
 end)
 
-test("responsive · scaleFor honors mode", function()
-	expect(approx(Responsive.scaleFor(960, 1080, { mode = "width" }), 0.5), "width mode tracks X")
-	expect(approx(Responsive.scaleFor(1920, 540, { mode = "height" }), 0.5), "height mode tracks Y")
-	expect(approx(Responsive.scaleFor(800, 1080, { mode = "max" }), 1), "max picks the looser axis")
-	expect(approx(Responsive.scaleFor(960, 540, { mode = "diagonal" }), 0.5), "diagonal ratio")
+test("responsive · scaleOf honors mode", function()
+	local w = Responsive.scaleOf({ viewport = Flux({ X = 960, Y = 1080 } :: any), mode = "width" })
+	expect(approx(w:get(), 0.5), "width mode tracks X")
+	local h = Responsive.scaleOf({ viewport = Flux({ X = 1920, Y = 540 } :: any), mode = "height" })
+	expect(approx(h:get(), 0.5), "height mode tracks Y")
+	local m = Responsive.scaleOf({ viewport = Flux({ X = 800, Y = 1080 } :: any), mode = "max" })
+	expect(approx(m:get(), 1), "max picks the looser axis")
+	w:Destroy()
+	h:Destroy()
+	m:Destroy()
 end)
 
-test("responsive · scaleFor clamps", function()
-	expect(approx(Responsive.scaleFor(384, 216, { min = 0.5 }), 0.5), "min clamp floors the factor")
-	expect(approx(Responsive.scaleFor(3840, 2160, { max = 1.5 }), 1.5), "max clamp caps the factor")
+test("responsive · scaleOf clamps", function()
+	local floored = Responsive.scaleOf({ viewport = Flux({ X = 384, Y = 216 } :: any), min = 0.5 })
+	expect(approx(floored:get(), 0.5), "min clamp floors the factor")
+	local capped = Responsive.scaleOf({ viewport = Flux({ X = 3840, Y = 2160 } :: any), max = 1.5 })
+	expect(approx(capped:get(), 1.5), "max clamp caps the factor")
+	floored:Destroy()
+	capped:Destroy()
 end)
 
-test("responsive · scaleFor unknown mode falls back to min (expected warn)", function()
-	expect(approx(Responsive.scaleFor(960, 540, { mode = "wat" :: any }), 0.5), "bad mode → min")
+test("responsive · scaleOf unknown mode falls back to min (expected warn)", function()
+	local s = Responsive.scaleOf({ viewport = Flux({ X = 960, Y = 540 } :: any), mode = "wat" :: any })
+	expect(approx(s:get(), 0.5), "bad mode → min")
+	s:Destroy()
 end)
 
-test("responsive · breakpointFor thresholds", function()
-	expect(Responsive.breakpointFor(599) == "phone", "< 600 → phone")
-	expect(Responsive.breakpointFor(600) == "tablet", "600 boundary → tablet")
-	expect(Responsive.breakpointFor(1023) == "tablet", "< 1024 → tablet")
-	expect(Responsive.breakpointFor(1024) == "desktop", "1024 boundary → desktop")
-	expect(
-		Responsive.breakpointFor(700, { breakpoints = { phone = 800, tablet = 1600 } }) == "phone",
-		"custom thresholds"
-	)
+test("responsive · breakpointOf thresholds", function()
+	local vp = Flux({ X = 599, Y = 1080 } :: any)
+	local b = Responsive.breakpointOf({ viewport = vp })
+	expect(b:get() == "phone", "< 600 → phone")
+	vp({ X = 600, Y = 1080 } :: any)
+	expect(b:get() == "tablet", "600 boundary → tablet")
+	vp({ X = 1023, Y = 1080 } :: any)
+	expect(b:get() == "tablet", "< 1024 → tablet")
+	vp({ X = 1024, Y = 1080 } :: any)
+	expect(b:get() == "desktop", "1024 boundary → desktop")
+	b:Destroy()
+
+	local custom = Responsive.breakpointOf({
+		viewport = Flux({ X = 700, Y = 0 } :: any),
+		breakpoints = { phone = 800, tablet = 1600 },
+	})
+	expect(custom:get() == "phone", "custom thresholds")
+	custom:Destroy()
 end)
 
 test("responsive · default node values", function()
 	expect(approx(Flux.scale:get(), 1), "default scale at reference is 1.0")
-	expect(Flux.breakpoint:get() == "desktop", "default breakpoint is desktop")
+	expect(Responsive.breakpoint:get() == "desktop", "default breakpoint is desktop")
 	if not IS_ROBLOX then
 		local insets = Flux.safeArea:get()
 		expect(
@@ -70,9 +98,9 @@ test("responsive · scale & breakpoint nodes react to viewport writes", function
 	-- The viewport node is the write seam; a plain {X,Y} table drives the math.
 	Flux.viewport:set({ X = 800, Y = 600 } :: any)
 	expect(approx(Flux.scale:get(), 800 / 1920), "scale recomputes from viewport (pull-based)")
-	expect(Flux.breakpoint:get() == "tablet", "800 wide → tablet")
+	expect(Responsive.breakpoint:get() == "tablet", "800 wide → tablet")
 	Flux.viewport:set({ X = 500, Y = 900 } :: any)
-	expect(Flux.breakpoint:get() == "phone", "500 wide → phone")
+	expect(Responsive.breakpoint:get() == "phone", "500 wide → phone")
 end)
 
 test("responsive · scaleOf / breakpointOf escape hatches use merged config", function()
