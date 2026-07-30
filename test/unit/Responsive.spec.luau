@@ -138,6 +138,17 @@ test("responsive · scaleOf/breakpointOf accept a custom viewport source (contai
 	fn:Destroy()
 end)
 
+test("responsive · platform resolves to a device class", function()
+	local platform = Responsive.platform
+	expect(
+		platform == "pc" or platform == "mobile" or platform == "console" or platform == "vr",
+		"platform is a known device class"
+	)
+	if not IS_ROBLOX then
+		expect(platform == "pc", "headless defaults to pc")
+	end
+end)
+
 rtest("responsive · scale node drives a real UIScale from viewport", function()
 	local uiScale
 	local s = Flux.scope(function()

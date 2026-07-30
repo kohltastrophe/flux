@@ -12,6 +12,7 @@ local signal = Graph.signal
 
 export type ScaleMode = "min" | "width" | "height" | "max"
 export type Breakpoint = "phone" | "tablet" | "desktop"
+export type Platform = "console" | "mobile" | "pc" | "vr"
 export type SafeAreaInsets = { top: number, bottom: number, left: number, right: number }
 export type Breakpoints = { phone: number, tablet: number }
 
@@ -141,6 +142,14 @@ local scale: Graph.Node<number> = scaleOf()
 local breakpoint: Graph.Node<Breakpoint> = breakpointOf()
 
 --[[
+	The device class detected at startup: `"vr"`, `"console"` (ten-foot interface), `"pc"`
+	(keyboard and mouse), or `"mobile"`; `"pc"` where detection is unavailable (server, headless).
+
+	[Open Documentation](https://flux.kohl.gg/guide/utilities/responsive#platform)
+]]
+local platform: Platform = "pc"
+
+--[[
 	Topbar / Core-UI inset pixels from `GuiService:GetGuiInset()`.
 
 	[Open Documentation](https://flux.kohl.gg/guide/utilities/responsive#safe-area)
@@ -154,6 +163,13 @@ local safeArea: Graph.Node<SafeAreaInsets> = signal(
 
 if IS_ROBLOX and game:GetService("RunService"):IsClient() then
 	local GuiService = game:GetService("GuiService")
+	local UserInputService = game:GetService("UserInputService")
+
+	platform = if UserInputService.VREnabled
+		then "vr"
+		elseif GuiService:IsTenFootInterface() then "console"
+		elseif UserInputService.KeyboardEnabled and UserInputService.MouseEnabled then "pc"
+		else "mobile"
 
 	local function recomputeSafeArea()
 		local topLeft, bottomRight = GuiService:GetGuiInset()
@@ -190,6 +206,7 @@ end
 
 return table.freeze({
 	config = config,
+	platform = platform,
 
 	viewport = viewport,
 	scale = scale,
