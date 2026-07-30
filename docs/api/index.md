@@ -93,6 +93,7 @@ A quick map of Flux's public surface, grouped by what you're trying to do. Signa
 | `context:get() -> T` · `context()`                        | Read the innermost provided value, else the default.       | [Context](/guide/concepts/context#providing-and-reading)                                |
 | `context:provide(value, fn) -> R` · `context(value, fn)`  | Run `fn` with the context set to `value`.                  | [Context](/guide/concepts/context#providing-and-reading)                                |
 | `Flux.wrap(tbl) -> { [any]: Node }`                       | Box a table's plain leaf values into nodes, in place.      | [Wrapping](/guide/concepts/wrapping#basic-usage)                                        |
+| `Flux.props(defaults, overrides?) -> { [any]: Node }`     | Merge overrides onto a defaults schema → new wrapped table. | [Wrapping](/guide/concepts/wrapping#props)                                             |
 | `Flux.async(source, fetcher?, initial?) -> Async<T>`      | Race-guarded fetch (`.data`/`.error`/`.loading`/`.state`). | [Async](/guide/concepts/async#creating-an-async-node)                                   |
 | `async:refetch()` · `async:mutate(v)` · `async:Destroy()` | Re-run fetcher / optimistic `.data` write / tear down.     | [Async](/guide/concepts/async#refetching-and-mutating)                                  |
 | `Flux.safe(tryFn, fallback, equals?) -> Node<T>`          | A Computed that falls back to `fallback` on error.         | [Error Handling](/guide/tips/errors#structured-error-handling-flux-safe-and-flux-catch) |

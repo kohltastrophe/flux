@@ -104,6 +104,8 @@ local function Card(props)
 end
 ```
 
+When your component also has **defaults** to merge beneath the caller's values, reach for [`Flux.props`](/guide/concepts/wrapping#props) instead: `Flux.props(DEFAULT, props)`{luau} takes only the keys `DEFAULT` declares, lays the caller's overrides on top, and returns a new fully-wrapped table, mutating neither input and leaving unknown keys (say, raw instance properties passed in the same table) for you to hand on to hydration.
+
 ### 3. Reading node-or-value props with `Flux.read`{lua}
 
 When you need a prop's value inside a larger expression, `Flux.read`{lua} evaluates a node (registering it as a dependency) or passes a plain value through unchanged:

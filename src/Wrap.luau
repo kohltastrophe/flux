@@ -81,4 +81,40 @@ local function wrap<T>(obj: T): Wrapped<T>
 	return obj :: any
 end
 
-return wrap
+-- Deep-copies plain data tables so wrapping never mutates a shared defaults schema; nodes and
+-- other metatabled values pass through by reference (a shared theme node is meant to be shared).
+local function cloneDefault(value: any): any
+	if type(value) ~= "table" or isNode(value) or getmetatable(value) ~= nil then
+		return value
+	end
+	local copy = table.clone(value)
+	for key, child in copy do
+		copy[key] = cloneDefault(child)
+	end
+	return copy
+end
+
+--[[
+Builds a component props table from a `defaults` schema and the caller's `overrides`. Only keys
+declared in `defaults` are taken (unknown override keys are ignored, leaving them for instance
+hydration), and the merged result is a <strong>new</strong> table passed through
+[`wrap`](https://flux.kohl.gg/guide/concepts/wrapping#basic-usage): plain values become
+[node](https://flux.kohl.gg/guide/concepts/signals)s, functions become computeds, and existing
+nodes pass through by reference. `defaults` is never mutated; plain nested table defaults are
+deep-copied per call, so instances never share state through the schema.
+
+[Open Documentation](https://flux.kohl.gg/guide/concepts/wrapping#props)
+]]
+local function props<T>(defaults: T, overrides: { [any]: any }?): Wrapped<T>
+	local result: { [any]: any } = table.clone(defaults :: any)
+	for key, value in result do
+		local override = if overrides ~= nil then overrides[key] else nil
+		result[key] = if override ~= nil then override else cloneDefault(value)
+	end
+	return wrap(result) :: any
+end
+
+return table.freeze({
+	wrap = wrap,
+	props = props,
+})
