@@ -15,6 +15,7 @@ local Conditional = require("@self/Conditional")
 local Context = require("@self/Context")
 local Directive = require("@self/Directive")
 local For = require("@self/For")
+local Interact = require("@self/Interact")
 local Layout = require("@self/Layout")
 local Responsive = require("@self/Responsive")
 local Safe = require("@self/Safe")
@@ -89,6 +90,15 @@ local Flux = {
 	[Open Documentation](https://flux.kohl.gg/guide/concepts/tracking)
 	]]
 	Graph = Graph,
+	--[[
+	<strong>Interact</strong>: transient interaction state. `exclusive` groups keep at most one boolean
+	[node](https://flux.kohl.gg/guide/concepts/signals) active per group (one open menu, one hovered
+	control); `pointIn` and `sunk` hit-test pointer coordinates against Roblox
+	[`GuiObject`](https://create.roblox.com/docs/reference/engine/classes/GuiObject) bounds and occlusion.
+
+	[Open Documentation](https://flux.kohl.gg/guide/utilities/interact)
+	]]
+	Interact = Interact,
 	--[[
 	<strong>Layout</strong>: layout and appearance helpers (`padding`, `corner`, `stroke`, `list`, `grid`,
 	`aspectRatio`, `flex`) that return ready-to-parent Roblox
@@ -168,6 +178,10 @@ local Flux = {
 	list = Layout.list,
 	grid = Layout.grid,
 	flex = Layout.flex,
+
+	exclusive = Interact.exclusive,
+	pointIn = Interact.pointIn,
+	sunk = Interact.sunk,
 
 	clean = Clean,
 	async = Async.new,
