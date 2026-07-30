@@ -162,6 +162,7 @@ export type Creatable = {
 	ImageHandleAdornment: ImageHandleAdornment,
 	ImageLabel: ImageLabel,
 	InputAction: InputAction,
+	InputActionLabel: InputActionLabel,
 	InputBinding: InputBinding,
 	InputContext: InputContext,
 	IntConstrainedValue: IntConstrainedValue,
