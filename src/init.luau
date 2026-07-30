@@ -181,7 +181,8 @@ local Flux = {
 	showKeyed = Conditional.showKeyed,
 	switch = Conditional.switch,
 	store = Store.new,
-	wrap = Wrap,
+	props = Wrap.props,
+	wrap = Wrap.wrap,
 }
 
 local FluxMT = {}

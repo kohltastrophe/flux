@@ -1,6 +1,6 @@
 ---
 title: Wrapping
-description: Recursively converting standard tables into individual reactive nodes in Flux.
+description: Recursively converting standard tables into individual reactive nodes, and merging component props over defaults.
 outline: deep
 ---
 
@@ -43,6 +43,36 @@ end, true) -- the `true` makes this an Effect (see [Effects](/guide/concepts/eff
 
 playerStats.health(75) -- the Effect reruns: "Health is now 75"
 ```
+
+## Props
+
+`Flux.props`{lua} builds on `wrap`{lua} for its most common call site: a reusable component merging the caller's values over a table of defaults. It takes a `defaults` schema and the caller's `overrides`, and returns a **new** wrapped table:
+
+```luau
+local DEFAULT = {
+    label = "",
+    padding = 8,
+    accent = Theme.accent, -- an existing node: shared by reference, intentionally
+}
+
+local function Badge(properties)
+    local props = Flux.props(DEFAULT, properties)
+    -- props.label, props.padding, props.accent are all nodes now
+
+    return Flux.new "TextLabel" {
+        Text = props.label,
+        TextColor3 = props.accent,
+    }
+end
+```
+
+Three things distinguish it from calling `Flux.wrap`{lua} yourself:
+
+- **The defaults table is a schema.** Only keys declared in `defaults` are read from `overrides`; unknown keys are ignored, so callers can mix component props and raw instance properties in one table and you can hand the rest to hydration.
+- **Nothing you pass in is mutated.** `wrap`{lua} converts in place; `props`{lua} returns a fresh table, so a module-level `DEFAULT` stays plain and reusable as the schema.
+- **Plain table defaults are deep-copied per call.** Two instances never share state through the schema, while node defaults (like a theme signal) still pass through by reference.
+
+Conversion itself is identical to `wrap`{lua}: plain values become [signals](/guide/concepts/signals), functions become [computeds](/guide/concepts/computeds), and existing nodes are left untouched.
 
 ## Lifecycle
 
