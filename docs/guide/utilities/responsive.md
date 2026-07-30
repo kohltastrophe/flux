@@ -1,6 +1,6 @@
 ---
 title: Responsive
-description: Reactive viewport, scale, breakpoint, and safe-area values for building UI that adapts to any screen.
+description: Reactive viewport, scale, breakpoint, and safe-area values, plus startup platform detection, for building UI that adapts to any screen.
 outline: deep
 ---
 
@@ -64,6 +64,20 @@ Flux.switch(Flux.Responsive.breakpoint) {
 
 > [!NOTE]
 > Breakpoints are **size classes, not hardware detection**: they come from viewport width, so a small windowed desktop client falls into `"phone"`{luau}. That is usually exactly what you want: a phone-sized window deserves the phone layout. The default thresholds are `< 600`{luau} (phone), `600–1024`{luau} (tablet), and `≥ 1024`{luau} (desktop).
+
+## Platform
+
+Where breakpoints answer "how big", `Flux.Responsive.platform`{lua} answers "what device": `"vr"`{luau}, `"console"`{luau} (ten-foot interface), `"pc"`{luau} (keyboard and mouse), or `"mobile"`{luau}. It is a plain string, not a node: the device class is detected **once at startup**, and off-client (server, headless) it is always `"pc"`{luau}:
+
+```luau
+new "TextButton" {
+    -- Console and touch devices deserve bigger hit targets.
+    Size = if Flux.Responsive.platform == "pc" then UDim2.fromOffset(160, 36) else UDim2.fromOffset(200, 48),
+}
+```
+
+> [!TIP]
+> Switch **layout** on `breakpoint`{lua}, which tracks the window live, and switch **input affordances** (hit-target size, button prompts, hover behavior) on `platform`{lua}, which reflects what the device _is_ rather than how big its window happens to be.
 
 ## Safe area
 
