@@ -77,6 +77,7 @@ else
 	require("./unit/Color.spec")
 	require("./unit/Responsive.spec")
 	require("./unit/Layout.spec")
+	require("./unit/Interact.spec")
 	require("./unit/Init.spec")
 end
 

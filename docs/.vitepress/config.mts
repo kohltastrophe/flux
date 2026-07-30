@@ -130,6 +130,7 @@ export default defineConfig({
 					items: [
 						{ text: "Responsive", link: "/guide/utilities/responsive" },
 						{ text: "Layout", link: "/guide/utilities/layout" },
+						{ text: "Interact", link: "/guide/utilities/interact" },
 					],
 				},
 				{
