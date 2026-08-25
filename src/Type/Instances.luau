@@ -273,6 +273,8 @@ export type Creatable = {
 	SpringConstraint: SpringConstraint,
 	StandalonePluginScripts: StandalonePluginScripts,
 	StarterGear: StarterGear,
+	StateMachineDefinition: StateMachineDefinition,
+	StateMachineTransitionDefinition: StateMachineTransitionDefinition,
 	StringValue: StringValue,
 	StudioAttachment: StudioAttachment,
 	StudioCallout: StudioCallout,
