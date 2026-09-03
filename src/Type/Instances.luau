@@ -97,6 +97,7 @@ export type Creatable = {
 	CompressorSoundEffect: CompressorSoundEffect,
 	ConeHandleAdornment: ConeHandleAdornment,
 	Configuration: Configuration,
+	ControlState: ControlState,
 	ControllerManager: ControllerManager,
 	ControllerPartSensor: ControllerPartSensor,
 	CornerWedgePart: CornerWedgePart,
@@ -210,7 +211,6 @@ export type Creatable = {
 	Plane: Plane,
 	PlaneConstraint: PlaneConstraint,
 	Player: Player,
-	PlayerControlState: PlayerControlState,
 	PluginAction: PluginAction,
 	PluginCapabilities: PluginCapabilities,
 	PointLight: PointLight,
@@ -412,6 +412,7 @@ export type Editable = Creatable & {
 	BulkImportService: BulkImportService,
 	CSGDictionaryService: CSGDictionaryService,
 	CacheableContentProvider: CacheableContentProvider,
+	CallingService: CallingService,
 	CalloutService: CalloutService,
 	Capture: Capture,
 	CaptureService: CaptureService,
@@ -912,6 +913,7 @@ export type Editable = Creatable & {
 	WindowProtocolService: WindowProtocolService,
 	Workspace: Workspace,
 	WorldRoot: WorldRoot,
+	WrapContentProvider: WrapContentProvider,
 	WrapDeformMeshProvider: WrapDeformMeshProvider,
 }
 
