@@ -1,0 +1,43 @@
+title = "Flux"
+description = "Documentation"
+
+[source]
+entries = ["src"]
+
+[repo]
+url = "https://github.com/kohltastrophe/flux"
+# branch = "main"
+
+[site]
+siteTitle = false
+logo = "/logo.svg"
+favicon = "/logo.svg"
+ogImage = "/logo.png"
+# footer = { copyright = "© Flux" }
+
+# Navbar entries. Unset: Guide, API, and Changelog entries as applicable.
+# [[site.nav]]
+# text = "Guide"
+# link = "/guide/getting-started"
+# activeMatch = "^/guide/"            # routes marking the entry current, past its link
+
+# Extra head tags on every page (analytics, site verification).
+# [[site.head]]
+# tag = "script"
+# attrs = { defer = "true", src = "https://plausible.io/js/script.js", "data-domain" = "docs.example.com" }
+
+[api]
+includePrivate = false
+linkRobloxTypes = true
+
+[docs]
+# Where the site lives (authored content + the generated machinery under it).
+# dir = ".luaudocs"
+# Published site URL: enables sitemap.xml and, for project pages
+# (user.github.io/repo/), the derived base path.
+url = "https://flux.kohl.gg"
+# Pull README.md into the landing page (moonwave hide markers honored).
+# includeReadme = true
+# llms.txt + llms-full.txt in public/ (guides, then API pages), so AI tooling
+# reads the docs without scraping HTML. On by default.
+# llms = false

@@ -1,7 +1,5 @@
 .meta
 node_modules
-docs/.vitepress/dist
-docs/.vitepress/cache
 sourcemap.json
 package-lock.json
 coverage.out

@@ -1,5 +1,5 @@
 <div align="right">
-<a href="https://flux.kohl.gg"><img align="left" src="docs/public/logo.svg" width="128" alt="Flux"></a>
+<a href="https://flux.kohl.gg"><img align="left" src=".luaudocs/public/logo.svg" width="128" alt="Flux"></a>
 <a href="https://flux.kohl.gg"><picture><source media="(prefers-color-scheme: dark)" srcset=".github/img/link-docs-dark.svg"><img alt="Docs" src=".github/img/link-docs.svg"></picture></a>
 <a href="https://github.com/kohltastrophe/flux/releases"><picture><source media="(prefers-color-scheme: dark)" srcset=".github/img/link-download-dark.svg"><img alt="Download" src=".github/img/link-download.svg"></picture></a>
 <a href="https://create.roblox.com/store/asset/18506925834"><picture><source media="(prefers-color-scheme: dark)" srcset=".github/img/link-creator-dark.svg"><img alt="Get it on the Creator Marketplace" src=".github/img/link-creator.svg"></picture></a>
@@ -21,7 +21,7 @@ _Flux is a declarative Luau library for creating user interfaces. It runs on fin
 
 <picture><source media="(prefers-color-scheme: dark)" srcset=".github/img/h3-lazy-dark.svg"><img alt="Be lazy yet effective" src=".github/img/h3-lazy.svg"></picture>
 
-<picture><img src="docs/public/autocomplete.min.svg" width="396" alt="Editor autocomplete for Flux: choosing the Frame class, completing the inherited Name property, and a type error on an invalid property."></picture>
+<picture><img src=".luaudocs/public/autocomplete.min.svg" width="396" alt="Editor autocomplete for Flux: choosing the Frame class, completing the inherited Name property, and a type error on an invalid property."></picture>
 
 </div>
 
@@ -85,7 +85,7 @@ Lazy reactivity is the engine. On top of it, Flux ships the rest of what you nee
 
 Download the latest `Flux.rbxm` from [Releases](https://github.com/kohltastrophe/flux/releases), drop it into Roblox Studio, and place the module in `ReplicatedStorage`. Rojo users can sync the `src` directory directly.
 
-From there, the **[Getting Started](https://flux.kohl.gg/guide/getting-started)** guide covers the core concepts and your first reactive components.
+From there, the **[Getting Started](https://flux.kohl.gg/guide/introduction/getting-started)** guide covers the core concepts and your first reactive components.
 
 ## Acknowledgements
 
