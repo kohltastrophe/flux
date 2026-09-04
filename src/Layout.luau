@@ -9,7 +9,7 @@ local warn = Compat.warn
 
 local computed = Graph.computed
 local isNode = Graph.isNode
-local rawDep = Graph.rawDep
+local new = Graph.new
 local readDep = Graph.readDep
 
 type Props = { [string]: any }
@@ -194,7 +194,7 @@ local function udim2Prop(value: any): any
 	return reactiveProp(value, toUDim2)
 end
 
--- Sets all four padding sides to the same (reactive) length, sharing one closure.
+-- Sets all four padding sides to the same static length.
 local function applyAllSides(props: Props, value: any)
 	local side = udimProp(value)
 	props.PaddingTop, props.PaddingBottom, props.PaddingLeft, props.PaddingRight = side, side, side, side
@@ -207,10 +207,16 @@ local function setSide(props: Props, prop: string, value: any)
 	end
 end
 
--- Reactive closure reading one inset field (e.g. `top`) off a struct source, defaulting to 0.
-local function structSide(source: any, field: string): () -> UDim
+-- Reactive closure for one padding side
+local function paddingSide(source: any, field: string): () -> UDim
 	return function()
-		return UDim.new(0, (readDep(source) :: any)[field] or 0)
+		local value = readDep(source)
+		if type(value) == "table" then
+			return toUDim(value[field] or 0)
+		elseif value == nil then
+			return UDim.new()
+		end
+		return toUDim(value)
 	end
 end
 
@@ -227,10 +233,10 @@ local function toFlexAlignment(value: any): EnumItem?
 end
 
 --[[
-Resolves one axis ("x"/"y") of a list's alignment to its (Alignment, Flex) prop values. The
-axis-pinned override wins; otherwise flexbox routing assigns `justify` to the main axis and
-`align` to the cross one based on `direction`. Reactive inputs produce closures re-deriving
-the routing; these write engine defaults where a static config would leave the property unset.
+Resolves one axis ("x"/"y") of a list's alignment to its (Alignment, Flex) prop values: an
+axis-pinned override wins, otherwise `justify` routes to the main axis and `align` to the cross one
+based on `direction`. Reactive inputs produce closures re-deriving the routing, which write engine
+defaults where a static config would leave the property unset.
 ]]
 local function listAlign(cfg: ListConfig, direction: any, axis: Direction, map: EnumMap, label: string): (any, any)
 	local pinned = if axis == "x" then cfg.horizontalAlign else cfg.verticalAlign
@@ -241,11 +247,15 @@ local function listAlign(cfg: ListConfig, direction: any, axis: Direction, map: 
 	end
 
 	-- Yields the chosen input and its config key, so a bad string warns as the key the user wrote.
+	-- A reactive pinned override that yields `nil` falls through to routing, like an absent one.
 	local function value(): (any, string)
 		if pinned ~= nil then
-			return readDep(pinned), label
+			local override = readDep(pinned)
+			if override ~= nil then
+				return override, label
+			end
 		end
-		local main = resolveEnum(FILL_DIRECTION, readDep(direction), "direction") == FILL_DIRECTION.x
+		local main = readDep(direction) == FILL_DIRECTION.x
 		if (axis == "x") == main then
 			return readDep(justify), "justify"
 		end
@@ -281,7 +291,8 @@ length (applied to all sides), a per-side `{ top, bottom, left, right, x, y }` t
 `{ top, bottom, left, right }` struct such as
 [`Flux.safeArea`](https://flux.kohl.gg/guide/utilities/responsive#safe-area). Plain `number` values are
 offset pixels; a [`UDim`](https://create.roblox.com/docs/reference/engine/datatypes/UDim) is used as-is.
-<em>Reactive sides bind and update in place.</em>
+<em>Reactive sides bind and update in place; a reactive source may change shape between updates, and
+`nil` reads as no padding.</em>
 
 [Open Documentation](https://flux.kohl.gg/guide/utilities/layout#padding)
 ]]
@@ -289,14 +300,13 @@ function Layout.padding(value: Length | PaddingSides | Graph.Node<any> | (() -> 
 	local props: Props = {}
 
 	if isReactiveValue(value) then
-		local source: any = if type(value) == "function" then computed(value :: any) else value
-		if type(rawDep(source)) == "table" then -- struct source, e.g. safeArea
-			props.PaddingTop = structSide(source, "top")
-			props.PaddingBottom = structSide(source, "bottom")
-			props.PaddingLeft = structSide(source, "left")
-			props.PaddingRight = structSide(source, "right")
-		else -- single length source, all sides
-			applyAllSides(props, source)
+		local source: any = new(value :: any) -- a function source becomes one computed shared by the sides
+		props.PaddingTop = paddingSide(source, "top")
+		props.PaddingBottom = paddingSide(source, "bottom")
+		props.PaddingLeft = paddingSide(source, "left")
+		props.PaddingRight = paddingSide(source, "right")
+		if source ~= value then
+			props._CLEAN = { source } -- the helper computed dies with the instance, not just its scope
 		end
 	elseif type(value) == "table" then
 		local sides = value :: PaddingSides
@@ -388,10 +398,13 @@ function Layout.list(config: ListConfig?): UIListLayout
 	if isReactiveValue(direction) then
 		local source = direction
 		direction = computed(function()
-			return resolveEnum(FILL_DIRECTION, readDep(source), "direction")
+			return resolveEnum(FILL_DIRECTION, readDep(source), "direction") or FILL_DIRECTION.y
 		end)
+		props._CLEAN = { direction }
+	else
+		direction = resolveEnum(FILL_DIRECTION, direction, "direction")
 	end
-	props.FillDirection = enumProp(FILL_DIRECTION, direction, "direction", FILL_DIRECTION.y)
+	props.FillDirection = direction
 
 	props.HorizontalAlignment, props.HorizontalFlex =
 		listAlign(cfg, direction, "x", HORIZONTAL_ALIGN, "horizontalAlign")
@@ -432,7 +445,15 @@ a child grows or shrinks inside a flex
 [Open Documentation](https://flux.kohl.gg/guide/utilities/layout#flex)
 ]]
 function Layout.flex(mode: Reactive<FlexMode | Enum.UIFlexMode>?): UIFlexItem
-	local resolved = enumProp(FLEX_MODE, mode or "fill", "flexMode", FLEX_MODE.fill)
+	local resolved: any
+	if isReactiveValue(mode) then
+		resolved = function()
+			local value = readDep(mode)
+			return resolveEnum(FLEX_MODE, if value == nil then "fill" else value, "flexMode") or FLEX_MODE.none
+		end
+	else
+		resolved = resolveEnum(FLEX_MODE, if mode == nil then "fill" else mode, "flexMode")
+	end
 	return construct("UIFlexItem", { FlexMode = resolved }) :: any
 end
 
