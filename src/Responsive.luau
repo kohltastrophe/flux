@@ -148,13 +148,25 @@ local scale: Graph.Node<number> = scaleOf()
 ]]
 local breakpoint: Graph.Node<Breakpoint> = breakpointOf()
 
+local RunService = if IS_ROBLOX then game:GetService("RunService") else nil
+local isClient = RunService ~= nil and RunService:IsClient() and RunService:IsRunning()
+
+local function detectPlatform(): Platform
+	local UserInputService = game:GetService("UserInputService")
+	return if UserInputService.VREnabled
+		then "vr"
+		elseif game:GetService("GuiService"):IsTenFootInterface() then "console"
+		elseif UserInputService.KeyboardEnabled and UserInputService.MouseEnabled then "pc"
+		else "mobile"
+end
+
 --[[
 	The device class detected at startup: `"vr"`, `"console"` (ten-foot interface), `"pc"`
-	(keyboard and mouse), or `"mobile"`; `"pc"` where detection is unavailable (server, headless).
+	(keyboard and mouse), or `"mobile"`; `"pc"` where detection is unavailable.
 
 	[Open Documentation](https://flux.kohl.gg/guide/utilities/responsive#platform)
 ]]
-local platform: Platform = "pc"
+local platform: Platform = if isClient then detectPlatform() else "pc"
 
 --[[
 	Topbar / Core-UI inset pixels from `GuiService:GetGuiInset()`.
@@ -168,15 +180,8 @@ local safeArea: Graph.Node<SafeAreaInsets> = signal(
 	end
 )
 
-if IS_ROBLOX and game:GetService("RunService"):IsClient() then
+if isClient then
 	local GuiService = game:GetService("GuiService")
-	local UserInputService = game:GetService("UserInputService")
-
-	platform = if UserInputService.VREnabled
-		then "vr"
-		elseif GuiService:IsTenFootInterface() then "console"
-		elseif UserInputService.KeyboardEnabled and UserInputService.MouseEnabled then "pc"
-		else "mobile"
 
 	local function recomputeSafeArea()
 		local topLeft, bottomRight = GuiService:GetGuiInset()
