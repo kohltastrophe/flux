@@ -549,14 +549,12 @@ end
 
 --[[
 Diffs the snapshot `newData` into the live store `proxy`, firing only the
-[node](https://flux.kohl.gg/guide/concepts/signals)s whose leaves actually changed and reusing unchanged nested
-proxies instead of tearing them down, ideal for folding a fresh server payload into existing reactive state
-without churning every dependent. Arrays diff positionally (index `i` against index `i`) by default; pass a `key`
-field name to match array elements by identity instead, so reordered or inserted rows keep their proxy (and their
-[`For.value`](https://flux.kohl.gg/guide/concepts/mapping#flux-forvalue-keyed-by-value) result) and only changed
-rows fire, the behaviour of Solid's `reconcile({ key })`. The key applies recursively to every nested array.
-`newData` should be a plain, acyclic snapshot. Returns `proxy`.
-@param key - Optional field name; when given, array elements are matched by `element[key]` rather than by position.
+[node](https://flux.kohl.gg/guide/concepts/signals)s whose leaves actually changed and reusing unchanged
+nested proxies instead of tearing them down. Arrays diff positionally by default; a `key` field name matches
+elements by identity instead, so reordered or inserted rows keep their proxy (and their
+[`For.value`](https://flux.kohl.gg/guide/concepts/mapping#flux-forvalue-keyed-by-value) result) and only
+changed rows fire. `newData` should be a plain, acyclic snapshot. Returns `proxy`.
+@param key - Optional field name; when given, array elements are matched by `element[key]` rather than by position, recursively through every nested array.
 
 [Open Documentation](https://flux.kohl.gg/guide/concepts/stores#reconciling-snapshots)
 ]]

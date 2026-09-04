@@ -774,15 +774,11 @@ end
 
 local Graph = {
 	--[[
-Setter/getter for dev-mode strict checks. When on, `update` is swapped for a double-run path:
-every reactive scope ([computeds](https://flux.kohl.gg/guide/concepts/computeds) and
-[effects](https://flux.kohl.gg/guide/concepts/effects) alike) runs a full second time so
-non-idempotent bodies surface in dev, and the graph errors on reactive cycles (re-entering a scope
-mid-run) and on destroying the scope that is currently running.
-- Instance binding writes run individually checked: a failing write reports the instance, key, and
-value that caused it, and no longer skips the node's remaining bindings.
-- Pass `true`/`false` to set the flag; call with no argument to read the current state.
-- Defaults on in development, off under production.
+Setter/getter for dev-mode strict checks. Pass `true`/`false` to set the flag, call with no
+argument to read it; defaults on in development, off under production. When on:
+- every reactive scope ([computeds](https://flux.kohl.gg/guide/concepts/computeds) and [effects](https://flux.kohl.gg/guide/concepts/effects) alike) runs a full second time, surfacing non-idempotent bodies in dev.
+- reactive cycles (re-entering a running scope) and destroying the running scope error.
+- instance binding writes are checked individually: a failure reports the instance, key, and value, and no longer skips the node's remaining bindings.
 
 [Open Documentation](https://flux.kohl.gg/guide/tips/strict#enabling-strict-mode)
 ]]
