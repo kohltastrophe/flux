@@ -1,0 +1,45 @@
+name: Docs
+on:
+  push:
+    branches:
+      - main
+    paths:
+      # API pages are generated from src docstrings; the authored site lives under .luaudocs.
+      - src/**
+      - .luaudocs/**
+      - luaudocs.toml
+      - default.project.json
+      - .github/workflows/docs.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # full history: the generated VitePress config enables lastUpdated
+      - uses: actions/setup-node@v6
+        with: { node-version: "22" }
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.npm
+            .luaudocs/node_modules
+          key: ${{ runner.os }}-luaudocs-0.2.0
+      - id: pages
+        uses: actions/configure-pages@v6
+      - run: npx luaudocs@0.2.0 build --url "${{ steps.pages.outputs.base_url }}"
+      - uses: actions/upload-pages-artifact@v5
+        with: { path: ".luaudocs/.vitepress/dist" }
+      - id: deployment
+        uses: actions/deploy-pages@v5
