@@ -100,10 +100,6 @@ Flux is heavily inspired by:
 
 Flux is free and MIT-licensed. Its ongoing development is made possible by its sponsors; if Flux is useful to you or your team, you can support it through [GitHub Sponsors](https://github.com/sponsors/kohltastrophe).
 
-**Current sponsors**
-
-- **[Infinite Studios](https://infinitestudios.dev)**
-
 ## License
 
 Flux is released under the [MIT License](LICENSE.md).
