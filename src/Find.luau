@@ -57,6 +57,7 @@ end
 
 type Fallback<Name> = index<Type.Editable & { [string]: Instance }, Name>
 
+export type Selection = { any }
 export type ClassSelector = <T>(className: T | keyof<Type.Editable>) -> (Type.EditProperties<Fallback<T>>) -> Selection
 export type Selector = <T>(name: T & Instance & string) -> (Type.EditProperties<T>) -> Selection
 
