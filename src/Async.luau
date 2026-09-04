@@ -73,10 +73,7 @@ Async.__index = Async
 --[[
 Creates a non-blocking asynchronous [node](https://flux.kohl.gg/guide/concepts/signals) that runs yielding
 work off the reactive graph and exposes its progress as four nodes: `.data`, `.error`, `.loading`, and
-`.state`. A race guard discards stale results, so only the latest fetch ever writes back. When a `source` is
-given and it reads `nil` or `false`, the fetch is gated off until the source turns truthy. Read those nodes
-inside a [computed](https://flux.kohl.gg/guide/concepts/computeds) or
-[effect](https://flux.kohl.gg/guide/concepts/effects) to render loading and error states reactively.
+`.state`. A race guard discards stale results, so only the latest fetch ever writes back.
 @param source - A tracked input: a [node](https://flux.kohl.gg/guide/concepts/signals) or a computation whose value is passed to the fetcher; the fetcher re-runs whenever it changes. Omit it (pass the fetcher first) for a one-shot fetch. A `nil`/`false` source value gates the fetch off until it becomes truthy.
 @param fetcher - The untracked yielding work, called as `fetcher(value, previous, refetching)` where `previous` is the previously resolved data and `refetching` flags a manual refetch. Reactive reads inside it are <strong>not</strong> tracked as dependencies.
 @param initialValue - The starting `.data` value before the first fetch resolves.
