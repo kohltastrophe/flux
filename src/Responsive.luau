@@ -48,6 +48,9 @@ local config: Config = {
 
 local EMPTY: PartialConfig = {}
 
+-- Unknown scale modes warn once per value: `scaleFor` runs inside every scale node's recompute.
+local warnedModes: { [string]: boolean } = {}
+
 -- Pure scale derivation: viewport (width, height) → UIScale factor (1.0 = at reference).
 -- Falls back to the live `config` field-by-field: this runs per recompute, so overridden
 -- fields stay fixed while the rest inherit later `config` mutations without allocating.
@@ -64,7 +67,11 @@ local function scaleFor(width: number, height: number, partial: PartialConfig): 
 		factor = math.max(width / ref.X, height / ref.Y)
 	else
 		if mode ~= "min" then
-			warn(`[Flux] unknown scale mode "{mode}"; falling back to "min"`)
+			local key = tostring(mode)
+			if not warnedModes[key] then
+				warnedModes[key] = true
+				warn(`[Flux] unknown scale mode "{mode}"; falling back to "min"`)
+			end
 		end
 		factor = math.min(width / ref.X, height / ref.Y)
 	end
