@@ -83,6 +83,35 @@ test("props · a table override replaces the default table wholesale", function(
 	expect(p.opts.b() == 3, "override-only nested keys survive (schema filters top level only)")
 end)
 
+test("props · never mutates or shares a caller's override table", function()
+	local DEFAULTS = { opts = { a = 1 } }
+	local SHARED = { a = 2 }
+	local p1 = Flux.props(DEFAULTS, { opts = SHARED })
+	local p2 = Flux.props(DEFAULTS, { opts = SHARED })
+	expect(SHARED.a == 2 and not Flux.isNode(SHARED.a), "override table left plain")
+	expect(p1.opts ~= SHARED and p1.opts ~= p2.opts, "each instance gets its own copy")
+	p1.opts.a(9)
+	expect(p2.opts.a() == 2, "instances never share state through a reused override")
+	local frozen = Flux.props(DEFAULTS, { opts = table.freeze({ a = 3 }) })
+	expect(frozen.opts.a() == 3, "a frozen override table is accepted")
+end)
+
+test("props · metatabled tables pass through by reference, untouched", function()
+	local theme = setmetatable({ color = "red" }, {})
+	local DEFAULTS = { theme = theme }
+	local a = Flux.props(DEFAULTS)
+	local b = Flux.props(DEFAULTS, { theme = theme })
+	expect(a.theme == theme and b.theme == theme, "shared by reference as a default and as an override")
+	expect(theme.color == "red", "a metatabled table is never wrapped in place")
+end)
+
+test("wrap · leaves nested metatabled tables untouched", function()
+	local proxy = setmetatable({ value = 1 }, {})
+	local t = Flux.wrap({ plain = { value = 1 }, proxy = proxy })
+	expect(Flux.isNode(t.plain.value), "plain nested table wrapped")
+	expect(t.proxy == proxy and proxy.value == 1, "metatabled nested table skipped, as in Wrapped<T>")
+end)
+
 test("wrap · wrapped signals survive scope teardown (GC-managed)", function()
 	-- Flux.wrap replaces primitives with plain signals, which the enclosing scope does not own:
 	-- they outlive its Destroy and the GC reclaims them once unreferenced.
