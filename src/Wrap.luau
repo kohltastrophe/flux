@@ -53,12 +53,11 @@ end
 export type Wrapped<T> = wrappedType<T, Graph.Node<any>>
 
 --[[
-Makes a table reactive <strong>in place</strong>: every plain leaf of `obj` is replaced with a
-[node](https://flux.kohl.gg/guide/concepts/signals) holding its value, recursing through nested tables and
-leaving existing [nodes](https://flux.kohl.gg/guide/concepts/signals) untouched. Returns the same table with
-its type preserved; each leaf reads back as its original value type, so `wrap({ hp = 100 }).hp()` is a
-`number`. Passing a non-table value returns a single node holding it. When created inside a
-[`Flux.scope`](https://flux.kohl.gg/guide/concepts/scopes), the new nodes are owned by that scope.
+Makes a table reactive <strong>in place</strong>: every plain leaf becomes a
+[node](https://flux.kohl.gg/guide/concepts/signals), recursing into nested plain tables and leaving
+existing nodes and metatabled tables (a class instance, a proxy) untouched. The table is returned
+with its type preserved, so `wrap({ hp = 100 }).hp()` is a `number`. A non-table value returns a
+single node holding it.
 
 [Open Documentation](https://flux.kohl.gg/guide/concepts/wrapping#basic-usage)
 ]]
@@ -72,7 +71,9 @@ local function wrap<T>(obj: T): Wrapped<T>
 			continue
 		end
 		if type(v) == "table" then
-			wrap(v)
+			if getmetatable(v) == nil then -- a metatabled table is opaque, as in `Wrapped<T>`
+				wrap(v)
+			end
 		else
 			(obj :: any)[k] = createNode(v)
 		end
@@ -81,35 +82,33 @@ local function wrap<T>(obj: T): Wrapped<T>
 	return obj :: any
 end
 
--- Deep-copies plain data tables so wrapping never mutates a shared defaults schema; nodes and
--- other metatabled values pass through by reference (a shared theme node is meant to be shared).
-local function cloneDefault(value: any): any
-	if type(value) ~= "table" or isNode(value) or getmetatable(value) ~= nil then
+-- Deep-copies plain data tables so wrapping never mutates a table the caller still holds (the
+-- defaults schema, a reused override); nodes and other metatabled values are shared by reference.
+local function clonePlain(value: any): any
+	if type(value) ~= "table" or getmetatable(value) ~= nil then
 		return value
 	end
 	local copy = table.clone(value)
 	for key, child in copy do
-		copy[key] = cloneDefault(child)
+		copy[key] = clonePlain(child)
 	end
 	return copy
 end
 
 --[[
-Builds a component props table from a `defaults` schema and the caller's `overrides`. Only keys
-declared in `defaults` are taken (unknown override keys are ignored, leaving them for instance
-hydration), and the merged result is a <strong>new</strong> table passed through
-[`wrap`](https://flux.kohl.gg/guide/concepts/wrapping#basic-usage): plain values become
-[node](https://flux.kohl.gg/guide/concepts/signals)s, functions become computeds, and existing
-nodes pass through by reference. `defaults` is never mutated; plain nested table defaults are
-deep-copied per call, so instances never share state through the schema.
+Builds a component props table from a `defaults` schema and the caller's `overrides`, keeping only
+keys declared in `defaults` (unknown override keys are left for instance hydration) and passing the
+merged result through [`wrap`](https://flux.kohl.gg/guide/concepts/wrapping#basic-usage). Neither
+input is mutated: nested plain tables are deep-copied per call, so instances never share state
+through the schema or a reused override table.
 
 [Open Documentation](https://flux.kohl.gg/guide/concepts/wrapping#props)
 ]]
-local function props<T>(defaults: T, overrides: { [any]: any }?): Wrapped<T>
+local function props<T, O>(defaults: T, overrides: O?): Wrapped<T>
 	local result: { [any]: any } = table.clone(defaults :: any)
 	for key, value in result do
-		local override = if overrides ~= nil then overrides[key] else nil
-		result[key] = if override ~= nil then override else cloneDefault(value)
+		local override = if overrides ~= nil then (overrides :: any)[key] else nil
+		result[key] = clonePlain(if override ~= nil then override else value)
 	end
 	return wrap(result) :: any
 end
