@@ -22,6 +22,7 @@ local keyed: (...any) -> (number, number) = function(arr, cache, nodes, currentK
 	for index, value in arr do
 		if value == nil then
 			warn(`For.value: index "{index}" has a nil value "{value}"`)
+			continue
 		elseif currentKeys[value] ~= nil then
 			warn("For.value: duplicate values share one mapped instance (the value is the cache key); use For.index")
 		else
