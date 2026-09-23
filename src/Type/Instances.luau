@@ -794,7 +794,6 @@ export type Editable = Creatable & {
 	SlimReplicationService: SlimReplicationService,
 	SlimService: SlimService,
 	SmoothVoxelsUpgraderService: SmoothVoxelsUpgraderService,
-	SnippetService: SnippetService,
 	SocialService: SocialService,
 	SolidModelContentProvider: SolidModelContentProvider,
 	SoundEffect: SoundEffect,
