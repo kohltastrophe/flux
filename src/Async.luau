@@ -1,15 +1,22 @@
 --!strict
+--[[
+Async resources: a fetcher runs off the graph, and its progress is exposed as nodes (`data`, `error`, `loading`,
+`state`). A race guard keeps only the latest fetch's result.
+
+```luau
+local profile = Flux.async(userId, function(id) return fetchProfile(id) end)
+```
+]]
 
 local Compat = require("./Compat")
 local Graph = require("./Graph")
 
+local effect = Graph.effect
 local raw = Graph.raw
-local new = Graph.new
-local readDep = Graph.readDep
-local rawDep = Graph.rawDep
+local read = Graph.read
+local signal = Graph.signal
 local untrack = Graph.untrack
 local retrack = Graph.retrack
-
 local task = Compat.task
 
 local function gatedOff(src: any, input: any): boolean
@@ -26,42 +33,67 @@ The state of an [async](https://flux.kohl.gg/guide/concepts/async) node, derived
 ]]
 export type AsyncState = "unresolved" | "pending" | "ready" | "refreshing" | "errored"
 
+-- An async resource: its progress as nodes, and `refetch`, `mutate` and `Destroy`.
 export type Async<T> = {
 	data: Graph.Node<T?>,
 	error: Graph.Node<string?>,
 	loading: Graph.Node<boolean>,
 	state: Graph.Node<AsyncState>,
-	Destroy: (self: Async<T>) -> (),
-	refetch: (self: Async<T>, info: any?) -> (),
-	mutate: (self: Async<T>, value: T) -> (),
-	_resolved: Graph.Node<boolean>,
+	--[[
+	Destroys the async node, cleaning up all resources.
+
+	[Open Documentation](https://flux.kohl.gg/guide/concepts/async)
+	]]
+	Destroy: (self: any) -> (),
+	--[[
+	Re-runs the fetcher with the current source value without writing the source node.
+	An optional `refetching` payload is forwarded to the fetcher (defaults to `true`).
+
+	[Open Documentation](https://flux.kohl.gg/guide/concepts/async)
+	]]
+	refetch: (self: any, refetching: any?) -> (),
+	--[[
+	Optimistically writes `data` and invalidates any in-flight fetch.
+
+	[Open Documentation](https://flux.kohl.gg/guide/concepts/async)
+	]]
+	mutate: (self: any, value: T) -> (),
+}
+
+--- @ignore
+type Data = {
+	data: Graph.Node<any>,
+	error: Graph.Node<string?>,
+	loading: Graph.Node<boolean>,
+	state: Graph.Node<AsyncState>,
+	_resolved: boolean,
 	_effect: Graph.Node<any>,
 	_src: any,
 	_fetcher: any,
 	_fetchId: number,
 }
 
-local function runFetcher<T>(self: Async<T>, input: any, currentId: number, refetching: boolean?)
+local function runFetcher(self: Data, input: any, currentId: number, refetching: any)
 	local ok, result = pcall(self._fetcher, input, raw(self.data), refetching)
 	if currentId == self._fetchId then
 		self.loading:set(false)
 		if ok then
-			self._resolved:set(true)
+			self._resolved = true
 			self.data:set(result)
+			self.state:set("ready")
 		else
 			self.error:set(tostring(result))
+			self.state:set("errored")
 		end
 	end
 end
 
---[[ Bumps the race guard and spawns a fetch with the freshly-read `input`. ]]
-local function trigger<T>(self: Async<T>, input: any, refetching: boolean?)
+local function trigger(self: Data, input: any, refetching: any)
 	self._fetchId += 1
 	local currentId = self._fetchId
-
 	self.loading:set(true)
 	self.error:set(nil)
-
+	self.state:set(if self._resolved then "refreshing" else "pending")
 	untrack()
 	task.spawn(runFetcher, self, input, currentId, refetching)
 	retrack()
@@ -78,9 +110,14 @@ work off the reactive graph and exposes its progress as four nodes: `.data`, `.e
 @param fetcher - The untracked yielding work, called as `fetcher(value, previous, refetching)` where `previous` is the previously resolved data and `refetching` flags a manual refetch. Reactive reads inside it are <strong>not</strong> tracked as dependencies.
 @param initialValue - The starting `.data` value before the first fetch resolves.
 
+```luau
+local profile = Flux.async(userId, function(id) return Players:GetNameFromUserIdAsync(id) end)
+Flux.new "TextLabel" { Text = function() return profile.data() or "Loading" end }
+```
+
 [Open Documentation](https://flux.kohl.gg/guide/concepts/async#creating-an-async-node)
 ]]
-function Async.new<S, T>(source: any, fetcher: ((S?, T, any) -> T) | T?, initialValue: T?): Async<T>
+local function create(source: any, fetcher: any, initialValue: any): Async<any>
 	local src: any = source
 	local fetch: any = fetcher
 	local init: any = initialValue
@@ -89,39 +126,32 @@ function Async.new<S, T>(source: any, fetcher: ((S?, T, any) -> T) | T?, initial
 	end
 
 	local self: any = setmetatable({
-		data = new(init),
-		error = new(nil :: string?),
-		loading = new(false),
-		state = nil :: any,
-		_resolved = new(false),
+		data = signal(init),
+		error = signal(nil :: string?),
+		loading = signal(false),
+		state = signal("unresolved" :: AsyncState),
+		_resolved = false,
 		_effect = nil :: any,
 		_src = src,
 		_fetcher = fetch,
 		_fetchId = 0,
 	}, Async)
 
-	self.state = new(function(): AsyncState
-		if self.error:get() ~= nil then
-			return "errored"
-		elseif self.loading:get() then
-			return if self._resolved:get() then "refreshing" else "pending"
-		elseif self._resolved:get() then
-			return "ready"
-		else
-			return "unresolved"
-		end
-	end)
-
-	self._effect = new(function()
-		local input = readDep(src)
+	self._effect = effect(function()
+		local input = read(src)
 		if gatedOff(src, input) then
 			self._fetchId += 1
 			self.loading:set(false)
 			self.error:set(nil)
+			self.state:set(if self._resolved then "ready" else "unresolved")
 			return
 		end
 		trigger(self, input, false)
-	end, true)
+	end)
+
+	if Graph.getOwner() then
+		Graph.cleanup(self)
+	end
 
 	return self
 end
@@ -131,25 +161,18 @@ Destroys the async node, cleaning up all resources.
 
 [Open Documentation](https://flux.kohl.gg/guide/concepts/async)
 ]]
-function Async.Destroy<T>(self: Async<T>)
+function Async.Destroy(self: Data)
+	if self._effect == nil then
+		return
+	end
 	self.state:Destroy()
-	self._resolved:Destroy()
 	self.data:Destroy()
 	self.error:Destroy()
 	self.loading:Destroy()
 	self._effect:Destroy()
-
-	self._fetchId += 1
-
-	-- Nil the fields but keep the shape intact, so a late refetch/mutate doesn't error
-	self.data = nil :: any
-	self.error = nil :: any
-	self.loading = nil :: any
-	self.state = nil :: any
-	self._resolved = nil :: any
-	self._effect = nil :: any
-	self._src = nil
-	self._fetcher = nil
+	local nextId = self._fetchId + 1
+	table.clear(self :: any)
+	self._fetchId = nextId
 end
 
 --[[
@@ -157,15 +180,16 @@ Optimistically writes `data` and invalidates any in-flight fetch.
 
 [Open Documentation](https://flux.kohl.gg/guide/concepts/async)
 ]]
-function Async.mutate<T>(self: Async<T>, value: T)
+function Async.mutate(self: Data, value: any)
 	if self._effect == nil then
 		return
 	end
 	self._fetchId += 1
+	self._resolved = true
 	self.loading:set(false)
 	self.error:set(nil)
-	self._resolved:set(true)
 	self.data:set(value)
+	self.state:set("ready")
 end
 
 --[[
@@ -174,16 +198,37 @@ An optional `refetching` payload is forwarded to the fetcher (defaults to `true`
 
 [Open Documentation](https://flux.kohl.gg/guide/concepts/async)
 ]]
-function Async.refetch<T>(self: Async<T>, refetching: any?)
+function Async.refetch(self: Data, refetching: any?)
 	if self._effect == nil then
 		return
 	end
 	local src = self._src
-	local input = rawDep(src)
+	local input = raw(src)
 	if gatedOff(src, input) then
 		return
 	end
 	trigger(self, input, if refetching == nil then true else refetching)
 end
+
+--[[
+Creates a non-blocking asynchronous [node](https://flux.kohl.gg/guide/concepts/signals) that runs yielding
+work off the reactive graph and exposes its progress as four nodes: `.data`, `.error`, `.loading`, and
+`.state`. A race guard discards stale results, so only the latest fetch ever writes back.
+@param source - A tracked input: a [node](https://flux.kohl.gg/guide/concepts/signals) or a computation whose value is passed to the fetcher; the fetcher re-runs whenever it changes. Omit it (pass the fetcher first) for a one-shot fetch. A `nil`/`false` source value gates the fetch off until it becomes truthy.
+@param fetcher - The untracked yielding work, called as `fetcher(value, previous, refetching)` where `previous` is the previously resolved data and `refetching` flags a manual refetch. Reactive reads inside it are <strong>not</strong> tracked as dependencies.
+@param initialValue - The starting `.data` value before the first fetch resolves.
+
+```luau
+local profile = Flux.async(userId, function(id) return Players:GetNameFromUserIdAsync(id) end)
+Flux.new "TextLabel" { Text = function() return profile.data() or "Loading" end }
+```
+
+[Open Documentation](https://flux.kohl.gg/guide/concepts/async#creating-an-async-node)
+]]
+Async.new = create :: (<S, T>(
+	source: S,
+	fetcher: (value: Graph.Unwrap<S>, previous: T?, refetching: any) -> T,
+	initialValue: T?
+) -> Async<T>) & (<T>(fetcher: (value: nil, previous: T?, refetching: any) -> T, initialValue: T?) -> Async<T>)
 
 return table.freeze(Async)

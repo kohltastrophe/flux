@@ -1,43 +1,64 @@
 --!strict
+--[[
+Layout instances with friendly, reactive arguments: `padding`, `corner`, `stroke`, `list`, `grid`, `flex`, `gradient`,
+`aspectRatio`, `sizeConstraint`, `textSizeConstraint`. Each is flat on `Flux`.
+
+```luau
+Flux.new "Frame" { Flux.list { gap = 8, align = "center" }, Flux.corner(12) }
+```
+]]
 
 local Compat = require("./Compat")
+local Edit = require("./Edit")
 local Graph = require("./Graph")
-local construct = require("./Construct")
 
-local IS_ROBLOX = Compat.isRoblox
+local construct = Edit.new
+
+local Color3 = Compat.Color3
+local ColorSequence = Compat.ColorSequence
+local ColorSequenceKeypoint = Compat.ColorSequenceKeypoint
+local Enum = Compat.Enum
+local NumberSequence = Compat.NumberSequence
+local NumberSequenceKeypoint = Compat.NumberSequenceKeypoint
+local UDim = Compat.UDim
+local UDim2 = Compat.UDim2
+local Vector2 = Compat.Vector2
+local typeof = Compat.typeof
 local warn = Compat.warn
 
 local computed = Graph.computed
+local isDynamic = Graph.isDynamic
 local isNode = Graph.isNode
 local new = Graph.new
-local readDep = Graph.readDep
+local read = Graph.read
 
+--- @ignore
 type Props = { [string]: any }
+--- @ignore
 type EnumMap = { [string]: EnumItem }
 
--- Re-exported from Graph: a value that may be static, a reactive Node, or a computation function.
+--- @ignore
 export type Reactive<T> = Graph.Reactive<T>
 export type Length = number | UDim
--- The struct a reactive padding source yields (e.g. `Flux.safeArea`); missing sides read as 0.
+export type ReactiveLength = Reactive<number> | Reactive<UDim>
 export type Insets = { top: number?, bottom: number?, left: number?, right: number? }
 export type Align = "start" | "center" | "end"
--- Adds the flex distribution values: space-* spread items along an axis; stretch/fill resize them to fill it.
 export type FlexAlign = Align | "between" | "around" | "evenly" | "stretch" | "fill" | "none"
 export type LineAlign = Align | "stretch" | "automatic"
 export type Direction = "x" | "y"
 export type FlexMode = "fill" | "grow" | "shrink" | "none"
 
 export type PaddingSides = {
-	top: Reactive<Length>?,
-	bottom: Reactive<Length>?,
-	left: Reactive<Length>?,
-	right: Reactive<Length>?,
-	x: Reactive<Length>?,
-	y: Reactive<Length>?,
+	top: ReactiveLength?,
+	bottom: ReactiveLength?,
+	left: ReactiveLength?,
+	right: ReactiveLength?,
+	x: ReactiveLength?,
+	y: ReactiveLength?,
 }
 
 export type ListConfig = {
-	gap: Reactive<Length>?,
+	gap: ReactiveLength?,
 	direction: Reactive<Direction | Enum.FillDirection>?,
 	align: Reactive<FlexAlign>?,
 	justify: Reactive<FlexAlign>?,
@@ -62,74 +83,107 @@ export type StrokeConfig = {
 	transparency: Reactive<number>?,
 	mode: Reactive<"contextual" | "border" | Enum.ApplyStrokeMode>?,
 	joins: Reactive<"round" | "bevel" | "miter" | Enum.LineJoinMode>?,
+	position: Reactive<"inner" | "center" | "outer" | Enum.BorderStrokePosition>?,
+	offset: Reactive<number | UDim>?,
 }
 
-local FILL_DIRECTION: EnumMap
-local HORIZONTAL_ALIGN: EnumMap
-local VERTICAL_ALIGN: EnumMap
-local FLEX_ALIGNMENT: EnumMap
-local ITEM_LINE_ALIGN: EnumMap
-local FLEX_MODE: EnumMap
-local ASPECT_TYPE: EnumMap
-local DOMINANT_AXIS: EnumMap
-local STROKE_MODE: EnumMap
-local LINE_JOIN: EnumMap
+export type CornerSides = {
+	radius: ReactiveLength?,
+	topLeft: ReactiveLength?,
+	topRight: ReactiveLength?,
+	bottomLeft: ReactiveLength?,
+	bottomRight: ReactiveLength?,
+	top: ReactiveLength?,
+	bottom: ReactiveLength?,
+	left: ReactiveLength?,
+	right: ReactiveLength?,
+}
 
-if IS_ROBLOX then
-	FILL_DIRECTION = { x = Enum.FillDirection.Horizontal, y = Enum.FillDirection.Vertical }
-	HORIZONTAL_ALIGN = {
-		start = Enum.HorizontalAlignment.Left,
-		center = Enum.HorizontalAlignment.Center,
-		["end"] = Enum.HorizontalAlignment.Right,
-	}
-	VERTICAL_ALIGN = {
-		start = Enum.VerticalAlignment.Top,
-		center = Enum.VerticalAlignment.Center,
-		["end"] = Enum.VerticalAlignment.Bottom,
-	}
-	FLEX_ALIGNMENT = {
-		none = Enum.UIFlexAlignment.None,
-		fill = Enum.UIFlexAlignment.Fill,
-		stretch = Enum.UIFlexAlignment.Fill,
-		between = Enum.UIFlexAlignment.SpaceBetween,
-		around = Enum.UIFlexAlignment.SpaceAround,
-		evenly = Enum.UIFlexAlignment.SpaceEvenly,
-	}
-	ITEM_LINE_ALIGN = {
-		automatic = Enum.ItemLineAlignment.Automatic,
-		start = Enum.ItemLineAlignment.Start,
-		center = Enum.ItemLineAlignment.Center,
-		["end"] = Enum.ItemLineAlignment.End,
-		stretch = Enum.ItemLineAlignment.Stretch,
-	}
-	FLEX_MODE = {
-		fill = Enum.UIFlexMode.Fill,
-		grow = Enum.UIFlexMode.Grow,
-		shrink = Enum.UIFlexMode.Shrink,
-		none = Enum.UIFlexMode.None,
-	}
-	ASPECT_TYPE = {
-		fit = Enum.AspectType.FitWithinMaxSize,
-		scale = Enum.AspectType.ScaleWithParentSize,
-	}
-	DOMINANT_AXIS = { width = Enum.DominantAxis.Width, height = Enum.DominantAxis.Height }
-	STROKE_MODE = { contextual = Enum.ApplyStrokeMode.Contextual, border = Enum.ApplyStrokeMode.Border }
-	LINE_JOIN = { round = Enum.LineJoinMode.Round, bevel = Enum.LineJoinMode.Bevel, miter = Enum.LineJoinMode.Miter }
-end
+export type GradientConfig = {
+	color: Reactive<Color3 | ColorSequence | { Color3 }>?,
+	transparency: Reactive<number | NumberSequence | { number }>?,
+	rotation: Reactive<number>?,
+	offset: Reactive<Vector2>?,
+	enabled: Reactive<boolean>?,
+}
 
--- A value the reactive pipeline must read through: a Node or a computation function.
-local function isReactiveValue(value: any): boolean
-	return isNode(value) or type(value) == "function"
+export type SizeConstraintConfig = {
+	min: Reactive<Vector2>?,
+	max: Reactive<Vector2>?,
+	minWidth: Reactive<number>?,
+	minHeight: Reactive<number>?,
+	maxWidth: Reactive<number>?,
+	maxHeight: Reactive<number>?,
+}
+
+export type TextSizeConstraintConfig = {
+	min: Reactive<number>?,
+	max: Reactive<number>?,
+}
+
+local EMPTY: any = table.freeze({})
+local ZERO_UDIM = UDim.new()
+local SORT_ORDER = Enum.SortOrder.LayoutOrder
+local FILL_DIRECTION: EnumMap = { x = Enum.FillDirection.Horizontal, y = Enum.FillDirection.Vertical }
+local HORIZONTAL_ALIGN: EnumMap = {
+	start = Enum.HorizontalAlignment.Left,
+	center = Enum.HorizontalAlignment.Center,
+	["end"] = Enum.HorizontalAlignment.Right,
+}
+local VERTICAL_ALIGN: EnumMap = {
+	start = Enum.VerticalAlignment.Top,
+	center = Enum.VerticalAlignment.Center,
+	["end"] = Enum.VerticalAlignment.Bottom,
+}
+local FLEX_ALIGNMENT: EnumMap = {
+	none = Enum.UIFlexAlignment.None,
+	fill = Enum.UIFlexAlignment.Fill,
+	stretch = Enum.UIFlexAlignment.Fill,
+	between = Enum.UIFlexAlignment.SpaceBetween,
+	around = Enum.UIFlexAlignment.SpaceAround,
+	evenly = Enum.UIFlexAlignment.SpaceEvenly,
+}
+local ITEM_LINE_ALIGN: EnumMap = {
+	automatic = Enum.ItemLineAlignment.Automatic,
+	start = Enum.ItemLineAlignment.Start,
+	center = Enum.ItemLineAlignment.Center,
+	["end"] = Enum.ItemLineAlignment.End,
+	stretch = Enum.ItemLineAlignment.Stretch,
+}
+local FLEX_MODE: EnumMap = {
+	fill = Enum.UIFlexMode.Fill,
+	grow = Enum.UIFlexMode.Grow,
+	shrink = Enum.UIFlexMode.Shrink,
+	none = Enum.UIFlexMode.None,
+}
+local ASPECT_TYPE: EnumMap = {
+	fit = Enum.AspectType.FitWithinMaxSize,
+	scale = Enum.AspectType.ScaleWithParentSize,
+}
+local DOMINANT_AXIS: EnumMap = { width = Enum.DominantAxis.Width, height = Enum.DominantAxis.Height }
+local STROKE_MODE: EnumMap = { contextual = Enum.ApplyStrokeMode.Contextual, border = Enum.ApplyStrokeMode.Border }
+local LINE_JOIN: EnumMap = {
+	round = Enum.LineJoinMode.Round,
+	bevel = Enum.LineJoinMode.Bevel,
+	miter = Enum.LineJoinMode.Miter,
+}
+local STROKE_POSITION: EnumMap = {
+	inner = Enum.BorderStrokePosition.Inner,
+	center = Enum.BorderStrokePosition.Center,
+	outer = Enum.BorderStrokePosition.Outer,
+}
+
+local FLEX_ITEMS: { [EnumItem]: true } = {}
+for _, item in FLEX_ALIGNMENT do
+	FLEX_ITEMS[item] = true
 end
 
 local warnedEnums: { [string]: boolean } = {}
 
---[[ Friendly string → Enum; passes through a real Enum; a bad string warns and resolves `nil`, leaving the property on its engine default. ]]
 local function resolveEnum(map: EnumMap, value: any, label: string): any
 	if value == nil then
 		return nil
-	end
-	if type(value) == "string" then
+	elseif type(value) == "string" then
 		local mapped = map[value]
 		if mapped == nil then
 			local key = `{label}:{value}`
@@ -141,18 +195,13 @@ local function resolveEnum(map: EnumMap, value: any, label: string): any
 		end
 		return mapped
 	end
-	return value -- already an Enum
+	return value
 end
 
---[[
-Reactive-aware `resolveEnum`: a Node/function source becomes a closure re-resolving on every
-change. A closure cannot leave the property unset, so `default` (the engine default, always
-expressed as a map entry) is written when resolution fails.
-]]
 local function enumProp(map: EnumMap, value: any, label: string, default: EnumItem): any
-	if isReactiveValue(value) then
+	if isDynamic(value) then
 		return function()
-			local resolved = resolveEnum(map, readDep(value), label)
+			local resolved = resolveEnum(map, read(value), label)
 			return if resolved == nil then default else resolved
 		end
 	end
@@ -160,10 +209,7 @@ local function enumProp(map: EnumMap, value: any, label: string, default: EnumIt
 end
 
 local function toUDim(value: any): UDim
-	if type(value) == "number" then
-		return UDim.new(0, value)
-	end
-	return value
+	return if type(value) == "number" then UDim.new(0, value) else value
 end
 
 local function toUDim2(value: any): UDim2
@@ -177,15 +223,14 @@ local function toUDim2(value: any): UDim2
 end
 
 local function reactiveProp(value: any, convert: (any) -> any): any
-	if isReactiveValue(value) then
+	if isDynamic(value) then
 		return function()
-			return convert(readDep(value))
+			return convert(read(value))
 		end
 	end
 	return convert(value)
 end
 
--- Resolves a Length value to a UDim, preserving reactivity (Node/fn → computed).
 local function udimProp(value: any): any
 	return reactiveProp(value, toUDim)
 end
@@ -194,50 +239,115 @@ local function udim2Prop(value: any): any
 	return reactiveProp(value, toUDim2)
 end
 
--- Sets all four padding sides to the same static length.
-local function applyAllSides(props: Props, value: any)
-	local side = udimProp(value)
-	props.PaddingTop, props.PaddingBottom, props.PaddingLeft, props.PaddingRight = side, side, side, side
+local function cornerProp(sides: CornerSides, corner: string, vertical: string, horizontal: string): any
+	local entries = sides :: any
+	local value = entries[corner] or entries[vertical] or entries[horizontal] or sides.radius
+	return udimProp(if value == nil then 8 else value)
 end
 
--- Sets one padding side from a Length, skipping `nil` so the engine default shows through.
+local function spread(values: { any }, Keypoint: any, Sequence: any): any
+	local count = #values
+	if count == 1 then
+		return Sequence.new(values[1])
+	end
+	local keypoints = table.create(count)
+	for index, value in values do
+		keypoints[index] = Keypoint.new((index - 1) / (count - 1), value)
+	end
+	return Sequence.new(keypoints)
+end
+
+local function toColorSequence(value: any): ColorSequence
+	local kind = typeof(value)
+	if kind == "ColorSequence" then
+		return value
+	elseif kind == "Color3" then
+		return ColorSequence.new(value :: Color3)
+	elseif kind == "table" and #value > 0 then
+		return spread(value, ColorSequenceKeypoint, ColorSequence)
+	end
+	return ColorSequence.new(Color3.new(1, 1, 1))
+end
+
+local function toNumberSequence(value: any): NumberSequence
+	local kind = typeof(value)
+	if kind == "NumberSequence" then
+		return value
+	elseif kind == "number" then
+		return NumberSequence.new(value :: number)
+	elseif kind == "table" and #value > 0 then
+		return spread(value, NumberSequenceKeypoint, NumberSequence)
+	end
+	return NumberSequence.new(0)
+end
+
+local function toAxisPair(vector: any, x: any, y: any, fallback: number): Vector2
+	local base = read(vector)
+	local width, height = read(x), read(y)
+	return Vector2.new(
+		if width ~= nil then width elseif base ~= nil then base.X else fallback,
+		if height ~= nil then height elseif base ~= nil then base.Y else fallback
+	)
+end
+
+local function axisPair(vector: any, x: any, y: any, fallback: number): any
+	if vector == nil and x == nil and y == nil then
+		return nil
+	end
+	if isDynamic(vector) or isDynamic(x) or isDynamic(y) then
+		return function(): Vector2
+			return toAxisPair(vector, x, y, fallback)
+		end
+	end
+	return toAxisPair(vector, x, y, fallback)
+end
+
 local function setSide(props: Props, prop: string, value: any)
 	if value ~= nil then
 		props[prop] = udimProp(value)
 	end
 end
 
--- Reactive closure for one padding side
 local function paddingSide(source: any, field: string): () -> UDim
 	return function()
-		local value = readDep(source)
-		if type(value) == "table" then
+		local value = read(source)
+		if typeof(value) == "table" then
 			return toUDim(value[field] or 0)
 		elseif value == nil then
-			return UDim.new()
+			return ZERO_UDIM
 		end
 		return toUDim(value)
 	end
 end
 
--- Flex distribution values (friendly strings and raw UIFlexAlignment) route to the axis
--- Flex property instead of the Alignment one.
 local function toFlexAlignment(value: any): EnumItem?
 	if type(value) == "string" then
 		return FLEX_ALIGNMENT[value]
 	end
-	if typeof(value) == "EnumItem" and (value :: EnumItem).EnumType == Enum.UIFlexAlignment then
-		return value
-	end
-	return nil
+	return if FLEX_ITEMS[value] then value else nil
 end
 
---[[
-Resolves one axis ("x"/"y") of a list's alignment to its (Alignment, Flex) prop values: an
-axis-pinned override wins, otherwise `justify` routes to the main axis and `align` to the cross one
-based on `direction`. Reactive inputs produce closures re-deriving the routing, which write engine
-defaults where a static config would leave the property unset.
-]]
+local function readListAlign(
+	pinned: any,
+	direction: any,
+	align: any,
+	justify: any,
+	axis: Direction,
+	label: string
+): (any, string)
+	if pinned ~= nil then
+		local override = read(pinned :: any)
+		if override ~= nil then
+			return override, label
+		end
+	end
+	local main = read(direction) == FILL_DIRECTION.x
+	if (axis == "x") == main then
+		return read(justify), "justify"
+	end
+	return read(align), "align"
+end
+
 local function listAlign(cfg: ListConfig, direction: any, axis: Direction, map: EnumMap, label: string): (any, any)
 	local pinned = if axis == "x" then cfg.horizontalAlign else cfg.verticalAlign
 	local align, justify = cfg.align, cfg.justify
@@ -246,38 +356,23 @@ local function listAlign(cfg: ListConfig, direction: any, axis: Direction, map: 
 		return nil, nil
 	end
 
-	-- Yields the chosen input and its config key, so a bad string warns as the key the user wrote.
-	-- A reactive pinned override that yields `nil` falls through to routing, like an absent one.
-	local function value(): (any, string)
-		if pinned ~= nil then
-			local override = readDep(pinned)
-			if override ~= nil then
-				return override, label
-			end
-		end
-		local main = readDep(direction) == FILL_DIRECTION.x
-		if (axis == "x") == main then
-			return readDep(justify), "justify"
-		end
-		return readDep(align), "align"
-	end
-
 	local reactive = if pinned ~= nil
-		then isReactiveValue(pinned) -- a static pinned override never re-routes
-		else isReactiveValue(direction) or isReactiveValue(align) or isReactiveValue(justify)
+		then isDynamic(pinned)
+		else isDynamic(direction) or isDynamic(align) or isDynamic(justify)
 	if reactive then
 		return function()
-			local v, source = value()
+			local v, source = readListAlign(pinned, direction, align, justify, axis, label)
 			return if toFlexAlignment(v) ~= nil then map.start else resolveEnum(map, v, source) or map.start
 		end, function()
-			return toFlexAlignment((value())) or FLEX_ALIGNMENT.none
+			local v, _ = readListAlign(pinned, direction, align, justify, axis, label)
+			return toFlexAlignment(v) or FLEX_ALIGNMENT.none
 		end
 	end
 
-	local v, source = value()
+	local v, source = readListAlign(pinned, direction, align, justify, axis, label)
 	local flex = toFlexAlignment(v)
 	if flex ~= nil then
-		return nil, flex
+		return map.start, flex
 	end
 	return resolveEnum(map, v, source), nil
 end
@@ -288,9 +383,7 @@ local Layout = {}
 Creates a [`UIPadding`](https://create.roblox.com/docs/reference/engine/classes/UIPadding) from a single
 length (applied to all sides), a per-side `{ top, bottom, left, right, x, y }` table, or a reactive
 [node](https://flux.kohl.gg/guide/concepts/signals) or function yielding a length or a
-`{ top, bottom, left, right }` struct such as
-[`Flux.safeArea`](https://flux.kohl.gg/guide/utilities/responsive#safe-area). Plain `number` values are
-offset pixels; a [`UDim`](https://create.roblox.com/docs/reference/engine/datatypes/UDim) is used as-is.
+`{ top, bottom, left, right }` struct. Plain `number` values are offset pixels; a [`UDim`](https://create.roblox.com/docs/reference/engine/datatypes/UDim) is used as-is.
 <em>Reactive sides bind and update in place; a reactive source may change shape between updates, and
 `nil` reads as no padding.</em>
 
@@ -299,23 +392,24 @@ offset pixels; a [`UDim`](https://create.roblox.com/docs/reference/engine/dataty
 function Layout.padding(value: Length | PaddingSides | Graph.Node<any> | (() -> Length | Insets)): UIPadding
 	local props: Props = {}
 
-	if isReactiveValue(value) then
-		local source: any = new(value :: any) -- a function source becomes one computed shared by the sides
+	if isDynamic(value) then
+		local source: any = new(value :: any)
 		props.PaddingTop = paddingSide(source, "top")
 		props.PaddingBottom = paddingSide(source, "bottom")
 		props.PaddingLeft = paddingSide(source, "left")
 		props.PaddingRight = paddingSide(source, "right")
 		if source ~= value then
-			props._CLEAN = { source } -- the helper computed dies with the instance, not just its scope
+			props.__CLEAN = { source }
 		end
-	elseif type(value) == "table" then
+	elseif typeof(value) == "table" then
 		local sides = value :: PaddingSides
 		setSide(props, "PaddingTop", sides.top or sides.y)
 		setSide(props, "PaddingBottom", sides.bottom or sides.y)
 		setSide(props, "PaddingLeft", sides.left or sides.x)
 		setSide(props, "PaddingRight", sides.right or sides.x)
-	else -- single length, all sides
-		applyAllSides(props, value)
+	else
+		local side = udimProp(value)
+		props.PaddingTop, props.PaddingBottom, props.PaddingLeft, props.PaddingRight = side, side, side, side
 	end
 
 	return construct("UIPadding", props) :: any
@@ -325,11 +419,22 @@ end
 Creates a [`UICorner`](https://create.roblox.com/docs/reference/engine/classes/UICorner) rounding the
 parent's corners. `radius` is offset pixels or a
 [`UDim`](https://create.roblox.com/docs/reference/engine/datatypes/UDim), optionally reactive; omit it
-for the engine default (8 px).
+for the engine default (8 px). A `{ topLeft, topRight, bottomLeft, bottomRight, top, bottom, left, right, radius }`
+table rounds each corner on its own, for a card whose header meets its body or a button at the end of a
+group; a corner named nowhere keeps the engine default.
 
 [Open Documentation](https://flux.kohl.gg/guide/utilities/layout#corner)
 ]]
-function Layout.corner(radius: Reactive<Length>?): UICorner
+function Layout.corner(radius: ReactiveLength | CornerSides?): UICorner
+	if type(radius) == "table" and not isNode(radius) and (radius :: any).Offset == nil then
+		local sides = radius :: CornerSides
+		return construct("UICorner", {
+			TopLeftRadius = cornerProp(sides, "topLeft", "top", "left"),
+			TopRightRadius = cornerProp(sides, "topRight", "top", "right"),
+			BottomLeftRadius = cornerProp(sides, "bottomLeft", "bottom", "left"),
+			BottomRightRadius = cornerProp(sides, "bottomRight", "bottom", "right"),
+		}) :: any
+	end
 	return construct("UICorner", { CornerRadius = udimProp(radius) }) :: any
 end
 
@@ -337,18 +442,24 @@ end
 Creates a [`UIStroke`](https://create.roblox.com/docs/reference/engine/classes/UIStroke) outlining the
 parent. `thickness` (px), `color`, and `transparency` bind reactively; `mode` is `"contextual"` (text
 outline on text objects, border otherwise) or `"border"`, and `joins` is `"round"`/`"bevel"`/`"miter"`,
-each also accepting the raw Enum or a reactive source.
+each also accepting the raw Enum or a reactive source. For a border, `position` is `"inner"` (drawn inside the
+parent's box, so nothing around it clips it and a thicker stroke grows inward), `"center"` or `"outer"` (the engine
+default), and `offset` moves it out (px or a `UDim`; negative moves it in).
 
 [Open Documentation](https://flux.kohl.gg/guide/utilities/layout#stroke)
 ]]
 function Layout.stroke(config: StrokeConfig?): UIStroke
-	local cfg: StrokeConfig = config or {}
+	local cfg: StrokeConfig = (config or EMPTY) :: any
 	return construct("UIStroke", {
 		Thickness = cfg.thickness,
 		Color = cfg.color,
 		Transparency = cfg.transparency,
 		ApplyStrokeMode = enumProp(STROKE_MODE, cfg.mode, "strokeMode", STROKE_MODE.contextual),
 		LineJoinMode = enumProp(LINE_JOIN, cfg.joins, "lineJoin", LINE_JOIN.round),
+		BorderStrokePosition = if cfg.position ~= nil
+			then enumProp(STROKE_POSITION, cfg.position, "strokePosition", STROKE_POSITION.outer)
+			else nil,
+		BorderOffset = if cfg.offset ~= nil then udimProp(cfg.offset) else nil,
 	}) :: any
 end
 
@@ -387,20 +498,21 @@ reactive `direction` flips.</em>
 [Open Documentation](https://flux.kohl.gg/guide/utilities/layout#list)
 ]]
 function Layout.list(config: ListConfig?): UIListLayout
-	local cfg: ListConfig = config or {}
-	local props: Props = {}
-
-	props.Padding = udimProp(cfg.gap)
-	props.Wraps = cfg.wraps
-	props.ItemLineAlignment = enumProp(ITEM_LINE_ALIGN, cfg.lineAlign, "lineAlign", ITEM_LINE_ALIGN.automatic)
+	local cfg: ListConfig = (config or EMPTY) :: any
+	local props: Props = {
+		SortOrder = SORT_ORDER,
+		Padding = udimProp(cfg.gap),
+		Wraps = cfg.wraps,
+		ItemLineAlignment = enumProp(ITEM_LINE_ALIGN, cfg.lineAlign, "lineAlign", ITEM_LINE_ALIGN.automatic),
+	}
 
 	local direction: any = cfg.direction
-	if isReactiveValue(direction) then
+	if isDynamic(direction) then
 		local source = direction
 		direction = computed(function()
-			return resolveEnum(FILL_DIRECTION, readDep(source), "direction") or FILL_DIRECTION.y
+			return resolveEnum(FILL_DIRECTION, read(source), "direction") or FILL_DIRECTION.y
 		end)
-		props._CLEAN = { direction }
+		props.__CLEAN = { direction }
 	else
 		direction = resolveEnum(FILL_DIRECTION, direction, "direction")
 	end
@@ -424,8 +536,9 @@ arranges siblings in a uniform grid. `cell` is the cell size and `gap` the spaci
 [Open Documentation](https://flux.kohl.gg/guide/utilities/layout#grid)
 ]]
 function Layout.grid(config: GridConfig?): UIGridLayout
-	local cfg: GridConfig = config or {}
+	local cfg: GridConfig = (config or EMPTY) :: any
 	return construct("UIGridLayout", {
+		SortOrder = SORT_ORDER,
 		CellSize = udim2Prop(cfg.cell),
 		CellPadding = udim2Prop(cfg.gap),
 		FillDirectionMaxCells = cfg.maxCells,
@@ -445,16 +558,73 @@ a child grows or shrinks inside a flex
 [Open Documentation](https://flux.kohl.gg/guide/utilities/layout#flex)
 ]]
 function Layout.flex(mode: Reactive<FlexMode | Enum.UIFlexMode>?): UIFlexItem
-	local resolved: any
-	if isReactiveValue(mode) then
-		resolved = function()
-			local value = readDep(mode)
-			return resolveEnum(FLEX_MODE, if value == nil then "fill" else value, "flexMode") or FLEX_MODE.none
-		end
-	else
-		resolved = resolveEnum(FLEX_MODE, if mode == nil then "fill" else mode, "flexMode")
+	if isDynamic(mode) then
+		return construct("UIFlexItem", {
+			FlexMode = function()
+				local value = read(mode)
+				return if value == nil
+					then FLEX_MODE.fill
+					else resolveEnum(FLEX_MODE, value, "flexMode") or FLEX_MODE.none
+			end,
+		}) :: any
 	end
-	return construct("UIFlexItem", { FlexMode = resolved }) :: any
+	return construct("UIFlexItem", {
+		FlexMode = if mode == nil then FLEX_MODE.fill else resolveEnum(FLEX_MODE, mode, "flexMode"),
+	}) :: any
+end
+
+--[[
+Creates a [`UIGradient`](https://create.roblox.com/docs/reference/engine/classes/UIGradient). `color` takes a
+[`Color3`](https://create.roblox.com/docs/reference/engine/datatypes/Color3), an array of stops spread evenly from start
+to end, or a [`ColorSequence`](https://create.roblox.com/docs/reference/engine/datatypes/ColorSequence); `transparency`
+takes a number, an array of stops, or a
+[`NumberSequence`](https://create.roblox.com/docs/reference/engine/datatypes/NumberSequence). `rotation` is in degrees,
+and `offset` and `enabled` map straight through. <em>Every value may be reactive; a reactive stop array re-spreads
+when it changes.</em>
+
+[Open Documentation](https://flux.kohl.gg/guide/utilities/layout#gradient)
+]]
+function Layout.gradient(config: GradientConfig?): UIGradient
+	local cfg: GradientConfig = (config or EMPTY) :: any
+	return construct("UIGradient", {
+		Color = if cfg.color ~= nil then reactiveProp(cfg.color, toColorSequence) else nil,
+		Transparency = if cfg.transparency ~= nil then reactiveProp(cfg.transparency, toNumberSequence) else nil,
+		Rotation = cfg.rotation,
+		Offset = cfg.offset,
+		Enabled = cfg.enabled,
+	}) :: any
+end
+
+--[[
+Creates a [`UISizeConstraint`](https://create.roblox.com/docs/reference/engine/classes/UISizeConstraint) bounding its
+parent's size. `min` and `max` are whole [`Vector2`](https://create.roblox.com/docs/reference/engine/datatypes/Vector2)
+bounds; `minWidth`, `minHeight`, `maxWidth`, and `maxHeight` set a single axis and win over the matching vector
+component. An axis nothing sets stays unconstrained. <em>Every value may be reactive.</em>
+
+[Open Documentation](https://flux.kohl.gg/guide/utilities/layout#sizeconstraint)
+]]
+function Layout.sizeConstraint(config: SizeConstraintConfig?): UISizeConstraint
+	local cfg: SizeConstraintConfig = (config or EMPTY) :: any
+	return construct("UISizeConstraint", {
+		MinSize = axisPair(cfg.min, cfg.minWidth, cfg.minHeight, 0),
+		MaxSize = axisPair(cfg.max, cfg.maxWidth, cfg.maxHeight, math.huge),
+	}) :: any
+end
+
+--[[
+Creates a [`UITextSizeConstraint`](https://create.roblox.com/docs/reference/engine/classes/UITextSizeConstraint)
+bounding the text size of its parent to `min`/`max` pixels; an omitted bound keeps the engine default (1 and 100). A
+`max` also caps the enlargement players get from a larger preferred
+[text size](https://flux.kohl.gg/guide/utilities/responsive#text-size). <em>Both values may be reactive.</em>
+
+[Open Documentation](https://flux.kohl.gg/guide/utilities/layout#textsizeconstraint)
+]]
+function Layout.textSizeConstraint(config: TextSizeConstraintConfig?): UITextSizeConstraint
+	local cfg: TextSizeConstraintConfig = (config or EMPTY) :: any
+	return construct("UITextSizeConstraint", {
+		MinTextSize = cfg.min,
+		MaxTextSize = cfg.max,
+	}) :: any
 end
 
 return table.freeze(Layout)

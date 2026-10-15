@@ -1,36 +1,493 @@
 --!strict
-
 local Bind = require("./Bind")
-local Clean = require("./Clean")
 local Compat = require("./Compat")
-local Directive = require("./Directive")
 local Graph = require("./Graph")
-local Find = require("./Find")
 local Type = require("./Type")
 
-local FIND_SYMBOL = Find.Symbol
-local MODEL_SYMBOL = Bind.MODEL_SYMBOL
+local IS_ROBLOX = Compat.isRoblox
+local Color3 = Compat.Color3
+local Enum = if IS_ROBLOX then Enum else Compat.Enum
+local compatTypeof = Compat.typeof
+local task = Compat.task
+local warn = Compat.warn
 
-local bindFrom = Bind.from
-local bindListen = Bind.listen
-local bindTo = Bind.to
+local dispose = Graph.dispose
+local get = Graph.Node.get
 local isNode = Graph.isNode
 local newNode = Graph.new
+local effect = Graph.effect
 local getOwner = Graph.getOwner
-local onDestroy = Graph.onDestroy
+local cleanup = Graph.cleanup
+local bindContext = Graph.bindContext
+
+local bindFrom = Bind.from
+local bindTo = Bind.to
+local isModel = Bind.isModel
+local onChanged = Bind.onChanged
+local onTagChanged = Bind.onTagChanged
+local setAttribute = Bind.setAttribute
+local setProperty = Bind.setProperty
+
+local kindOf = Bind.kindOf
+
+-- Flags & Defaults ----------------------------------------------------------------------------------------------------
+
+local Flags = {
+	--[[
+	Process-wide on/off switch for the automatic per-class defaults: flipping it affects every later `Flux.new` from any
+	script using this copy of Flux, so set it once at startup. When `true` (the default), every Roblox
+	[`Instance`](https://create.roblox.com/docs/reference/engine/classes/Instance) built by
+	[`Flux.new`](https://flux.kohl.gg/guide/roblox/creation#the-flux-new-function) has its matching `Flux.Defaults`
+	entries applied first. Set it to `false` to opt out globally and get raw, unstyled instances. One override stays
+	either way: `AutoButtonColor = false` on `TextButton` and `ImageButton`, since it changes how a button behaves
+	rather than how it looks (pass `AutoButtonColor = true` for the engine's behavior).
+
+	[Open Documentation](https://flux.kohl.gg/guide/roblox/defaults#disabling-defaults)
+	]]
+	defaults = true,
+}
+
+local WHITE = Color3.new(1, 1, 1)
+local BLACK = Color3.new(0, 0, 0)
+
+local function guiBase(extra: { [string]: unknown }?): { [string]: unknown }
+	local t: { [string]: unknown } = {
+		BackgroundColor3 = WHITE,
+		BorderColor3 = BLACK,
+		BorderSizePixel = 0,
+	}
+	if extra then
+		for k, v in extra do
+			t[k] = v
+		end
+	end
+	return t
+end
+
+local function textBase(extra: { [string]: unknown }?): { [string]: unknown }
+	local t = guiBase({
+		Font = Enum.Font.SourceSans,
+		Text = "",
+		TextColor3 = BLACK,
+	})
+	if extra then
+		for k, v in extra do
+			t[k] = v
+		end
+	end
+	return t
+end
+
+local Defaults: { [string]: { [string]: unknown } } = {
+	Part = {
+		Material = Enum.Material.SmoothPlastic,
+		Size = vector.create(1, 1, 1),
+		Anchored = true,
+	},
+	BillboardGui = {
+		ResetOnSpawn = false,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+	},
+	ScreenGui = {
+		ResetOnSpawn = false,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+	},
+	SurfaceGui = {
+		ResetOnSpawn = false,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+		PixelsPerStud = 50,
+		SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud,
+	},
+	Frame = guiBase(),
+	ImageButton = guiBase(),
+	ImageLabel = guiBase(),
+	VideoFrame = guiBase(),
+	ViewportFrame = guiBase(),
+	ScrollingFrame = guiBase({ ScrollBarImageColor3 = BLACK }),
+	TextBox = textBase({ ClearTextOnFocus = false }),
+	TextButton = textBase(),
+	TextLabel = textBase(),
+	UIListLayout = { SortOrder = Enum.SortOrder.LayoutOrder },
+	UIGridLayout = { SortOrder = Enum.SortOrder.LayoutOrder },
+	UITableLayout = { SortOrder = Enum.SortOrder.LayoutOrder },
+	UIPageLayout = { SortOrder = Enum.SortOrder.LayoutOrder },
+}
+
+-- Find ----------------------------------------------------------------------------------------------------------------
+
+local FIND_SYMBOL = table.freeze({ type = "Symbol" }) :: Type.Symbol
+
+local function indexParent(instance: Instance): Instance?
+	return instance.Parent
+end
+
+local function firstDescendant(instance: Instance, name: string): Instance?
+	return instance:FindFirstChild(name, true)
+end
+
+local function queryFirst(instance: Instance, query: string): Instance?
+	return instance:QueryDescendants(query)[1]
+end
+
+local function findPath(instance: Instance, pathStr: string): Instance?
+	local cur: Instance = instance
+	for _, segment in string.split(pathStr, ".") do
+		if segment == "" then
+			continue
+		end
+		local nextInst = if segment == "Parent" or segment == "^" then cur.Parent else cur:FindFirstChild(segment)
+		if not nextInst then
+			return nil
+		end
+		cur = nextInst
+	end
+	return cur
+end
+
+local function makeSelector(find: any): any
+	local fn = if type(find) ~= "string"
+		then find
+		elseif IS_ROBLOX then (game :: any)[find]
+		else function(instance: any, query: string): any
+			return instance[find](instance, query)
+		end
+	return function(query: string)
+		return function(properties: Type.Map<any>)
+			return { FIND_SYMBOL, fn, properties, query }
+		end
+	end
+end
+
+--- @ignore
+type Fallback<Name> = index<Type.Editable & { [string]: Instance }, Name>
+
+export type Selection = { any }
+export type ClassSelector = <T>(className: T | keyof<Type.Editable>) -> (Type.EditProperties<Fallback<T>>) -> Selection
+-- A name, path or query says nothing about the class it finds, so its property table is untyped.
+export type QuerySelector = (query: string) -> (Type.Map<any>) -> Selection
+export type ParentSelector = () -> (Type.Map<any>) -> Selection
+
+local function warnFind(query: string?, value: any)
+	local desc = if query == nil then "a Find selector" else `query "{query}"`
+	warn(`[Flux] Instance expected for {desc}, got {compatTypeof(value)}`)
+end
+
+local function resolveFind(applied: { any }, instance: Instance, apply: (Instance, Type.Map<any>) -> ())
+	local query = applied[4]
+	local result = applied[2](instance, query)
+	local properties = applied[3]
+	local kind = kindOf(result)
+
+	if kind == "Instance" then
+		apply(result, properties)
+	elseif kind == "table" then
+		for _, item in result do
+			if kindOf(item) == "Instance" then
+				apply(item, properties)
+			else
+				warnFind(query, item)
+			end
+		end
+	else
+		warnFind(query, result)
+	end
+end
+
+local Find = table.freeze({
+	--- @ignore
+	Symbol = FIND_SYMBOL,
+	--[[
+	Selects the first ancestor named `name` via
+	[`Instance:FindFirstAncestor`](https://create.roblox.com/docs/reference/engine/classes/Instance#FindFirstAncestor),
+	then applies the property table to it. Use to reach an
+	[`Instance`](https://create.roblox.com/docs/reference/engine/classes/Instance) above the hydrated element
+	in the tree.
+
+	[Open Documentation](https://flux.kohl.gg/guide/roblox/hydration#available-selectors)
+	]]
+	Ancestor = makeSelector("FindFirstAncestor") :: QuerySelector,
+	--[[
+	Selects the first ancestor of class `className` via
+	[`Instance:FindFirstAncestorOfClass`](https://create.roblox.com/docs/reference/engine/classes/Instance#FindFirstAncestorOfClass),
+	then applies the property table to that matched
+	[`Instance`](https://create.roblox.com/docs/reference/engine/classes/Instance). Matches the exact
+	`ClassName`.
+
+	[Open Documentation](https://flux.kohl.gg/guide/roblox/hydration#available-selectors)
+	]]
+	AncestorClass = makeSelector("FindFirstAncestorOfClass") :: ClassSelector,
+	--[[
+	Selects the first ancestor whose class is or inherits `className` via
+	[`Instance:FindFirstAncestorWhichIsA`](https://create.roblox.com/docs/reference/engine/classes/Instance#FindFirstAncestorWhichIsA),
+	then applies the property table. Unlike `AncestorClass`, this honors the
+	[`Instance`](https://create.roblox.com/docs/reference/engine/classes/Instance) inheritance chain.
+
+	[Open Documentation](https://flux.kohl.gg/guide/roblox/hydration#available-selectors)
+	]]
+	AncestorIsA = makeSelector("FindFirstAncestorWhichIsA") :: ClassSelector,
+	--[[
+	Selects the first child named `name` via
+	[`Instance:FindFirstChild`](https://create.roblox.com/docs/reference/engine/classes/Instance#FindFirstChild),
+	then applies the property table to it. The most common selector for reaching a named
+	[`Instance`](https://create.roblox.com/docs/reference/engine/classes/Instance) one level down.
+
+	[Open Documentation](https://flux.kohl.gg/guide/roblox/hydration#instance-selectors-flux-find)
+	]]
+	Child = makeSelector("FindFirstChild") :: QuerySelector,
+	--[[
+	Selects the first child of class `className` via
+	[`Instance:FindFirstChildOfClass`](https://create.roblox.com/docs/reference/engine/classes/Instance#FindFirstChildOfClass),
+	then applies the property table to that matched
+	[`Instance`](https://create.roblox.com/docs/reference/engine/classes/Instance). Matches the exact
+	`ClassName`.
+
+	[Open Documentation](https://flux.kohl.gg/guide/roblox/hydration#available-selectors)
+	]]
+	ChildClass = makeSelector("FindFirstChildOfClass") :: ClassSelector,
+	--[[
+	Selects the first child whose class is or inherits `className` via
+	[`Instance:FindFirstChildWhichIsA`](https://create.roblox.com/docs/reference/engine/classes/Instance#FindFirstChildWhichIsA),
+	then applies the property table. Unlike `ChildClass`, this honors the
+	[`Instance`](https://create.roblox.com/docs/reference/engine/classes/Instance) inheritance chain.
+
+	[Open Documentation](https://flux.kohl.gg/guide/roblox/hydration#available-selectors)
+	]]
+	ChildIsA = makeSelector("FindFirstChildWhichIsA") :: ClassSelector,
+	--[[
+	Selects the first descendant named `name` via a recursive
+	[`Instance:FindFirstChild`](https://create.roblox.com/docs/reference/engine/classes/Instance#FindFirstChild)
+	(`FindFirstChild(name, true)`), then applies the property table to it. Searches the entire subtree, not just direct children of the
+	[`Instance`](https://create.roblox.com/docs/reference/engine/classes/Instance).
+
+	[Open Documentation](https://flux.kohl.gg/guide/roblox/hydration#instance-selectors-flux-find)
+	]]
+	Descendant = makeSelector(firstDescendant) :: QuerySelector,
+	--[[
+	Selects the hydrated element's [`Instance.Parent`](https://create.roblox.com/docs/reference/engine/classes/Instance#Parent),
+	then applies the property table to it. Use to reach one level up the tree without naming the parent. Takes no
+	argument: `Find.Parent() { ... }`.
+
+	[Open Documentation](https://flux.kohl.gg/guide/roblox/hydration#instance-selectors-flux-find)
+	]]
+	Parent = makeSelector(indexParent) :: ParentSelector,
+	--[[
+	Walks a `.`-separated path from the hydrated element, one [`Instance:FindFirstChild`](https://create.roblox.com/docs/reference/engine/classes/Instance#FindFirstChild)
+	step per segment, then applies the property table to the final [`Instance`](https://create.roblox.com/docs/reference/engine/classes/Instance). A `Parent` or `^` segment
+	climbs to [`Instance.Parent`](https://create.roblox.com/docs/reference/engine/classes/Instance#Parent) instead; empty segments are skipped. If any step misses, nothing is applied.
+
+	[Open Documentation](https://flux.kohl.gg/guide/roblox/hydration#instance-selectors-flux-find)
+	]]
+	Path = makeSelector(findPath) :: QuerySelector,
+	--[[
+	Selects <strong>every</strong> descendant matching a Roblox path query via
+	[`Instance:QueryDescendants`](https://create.roblox.com/docs/reference/engine/classes/Instance#QueryDescendants),
+	applying the property table to each matched
+	[`Instance`](https://create.roblox.com/docs/reference/engine/classes/Instance). Fan out one property table
+	across many elements at once.
+
+	[Open Documentation](https://flux.kohl.gg/guide/roblox/hydration#instance-selectors-flux-find)
+	]]
+	Query = makeSelector("QueryDescendants") :: QuerySelector,
+	--[[
+	Selects only the <strong>first</strong> descendant matching a Roblox path query via
+	[`Instance:QueryDescendants`](https://create.roblox.com/docs/reference/engine/classes/Instance#QueryDescendants),
+	then applies the property table to that single
+	[`Instance`](https://create.roblox.com/docs/reference/engine/classes/Instance). The single-match counterpart
+	to `Query`.
+
+	[Open Documentation](https://flux.kohl.gg/guide/roblox/hydration#instance-selectors-flux-find)
+	]]
+	QueryFirst = makeSelector(queryFirst) :: QuerySelector,
+	--- @ignore
+	resolve = resolveFind,
+})
+
+-- Split ---------------------------------------------------------------------------------------------------------------
+
+-- `T` with every property optional.
+--- @ignore
+export type function Partial(t: type): type
+	if not t:is("table") then
+		return t
+	end
+	local result = types.newtable()
+	for key, prop in t:properties() do
+		local valueType = prop.read or prop.write
+		if valueType then
+			result:setproperty(key, types.optional(valueType))
+		end
+	end
+	local indexer = t:indexer()
+	if indexer then
+		result:setindexer(indexer.index, indexer.readresult)
+	end
+	return result
+end
+
+--- @ignore
+type function groupKeys(group: type): type
+	local keys = types.newtable()
+	if group:is("nil") then
+		return keys
+	elseif group:is("union") or group:is("intersection") then
+		for _, part in group:components() do
+			local partKeys = groupKeys(part)
+			if partKeys:is("string") then
+				return partKeys
+			end
+			for key in partKeys:properties() do
+				keys:setproperty(key, key)
+			end
+		end
+		return keys
+	elseif not group:is("table") then
+		return types.string
+	end
+	local indexer = group:indexer()
+	if indexer then
+		local result = indexer.readresult
+		for _, part in if result:is("union") then result:components() else { result } do
+			local name = if part:is("singleton") then part:value() else nil
+			if type(name) == "string" then
+				keys:setproperty(part, part)
+			elseif name ~= true then
+				return types.string
+			end
+		end
+	end
+	for key in group:properties() do
+		keys:setproperty(key, key)
+	end
+	return keys
+end
+
+--- @ignore
+type function pickWhere(t: type, group: type, prior: type, inGroup: type): type
+	if not t:is("table") then
+		return t
+	end
+	local wanted, excluded = groupKeys(group), groupKeys(prior)
+	local wantAll = inGroup:is("singleton") and inGroup:value() == false
+	if wanted:is("string") or excluded:is("string") then
+		return Partial(t)
+	end
+	local function has(names: type, key: type): boolean
+		return names:readproperty(key) ~= nil
+	end
+	local result = types.newtable()
+	for key, prop in t:properties() do
+		local valueType = prop.read or prop.write
+		local inWanted = has(wanted, key)
+		if valueType and not has(excluded, key) and inWanted ~= wantAll then
+			result:setproperty(key, valueType)
+		end
+	end
+	local indexer = t:indexer()
+	if indexer and wantAll then
+		result:setindexer(indexer.index, indexer.readresult)
+	end
+	return result
+end
+
+-- The members of `T` a `split` group named by `G` receives. Required members stay required. When the names are only known as `string` (an unannotated array), every member is optional.
+--- @ignore
+export type Pick<T, G> = pickWhere<T, G, nil, true>
+-- The members of `T` that no `split` group took: what goes on to the root instance.
+--- @ignore
+export type Omit<T, G> = pickWhere<T, nil, G, false>
 
 --[[
-Two-way binds `node` to `instance[property]` (or attribute): drives the
-instance from the node first so the authored value wins, then writes the node
-back on every instance-side change. Registers both teardowns on `_CLEAN`.
+Splits a props table by key into fresh tables: one per `keys` group holding just the keys that group names, then a
+final table with everything else (instance properties, numeric children, `__EVENT`-style directives), ready to forward
+to a root instance. A group is an array of key names or a table whose keys are used; a key named by several groups
+goes to the first. Values move by reference and `props` itself is left untouched.
+
+With one group, it is typed as a `Pick` of the props type and the rest as its `Omit`, keeping required members
+required. That needs the names as types: pass a schema table, or annotate a name array
+(`local OWN: { "label" | "onClick" } = ...`). An unannotated array only says `{ string }`, and several groups are more
+than the solver can pick through, so those tables are `Partial` (every member optional).
+
+```luau
+local OWN: { "label" | "onClick" } = { "label", "onClick" }
+local own, rest = Flux.split(props, OWN) -- own.label: string, own.onClick: (() -> ())?
+```
+
+[Open Documentation](https://flux.kohl.gg/guide/concepts/components#splitting-props-with-flux-split)
 ]]
-local function bindModel(node: any, instance: Instance, property: string, _CLEAN: { any }, isAttribute: boolean?)
+local function split(props: any, keys: any, ...: any): ...any
+	if select("#", ...) == 0 then
+		local own = {}
+		local rest = {}
+		if type(props) == "table" then
+			if keys[1] ~= nil then
+				for _, key in keys do
+					local val = props[key]
+					if val ~= nil then
+						own[key] = val
+					end
+				end
+				for key, value in props :: any do
+					if own[key] == nil then
+						rest[key] = value
+					end
+				end
+			else
+				for key, value in props :: any do
+					local target = if keys[key] ~= nil then own else rest
+					target[key] = value
+				end
+			end
+		end
+		return own, rest
+	end
+
+	local groups = table.pack(keys, ...)
+	local count = groups.n
+	local owners: { [any]: number } = {}
+	local results: { { [any]: any } } = {}
+
+	for index = 1, count do
+		results[index] = {}
+		local group = groups[index]
+		if group[1] ~= nil then
+			for _, key in group do
+				if owners[key] == nil then
+					owners[key] = index
+				end
+			end
+		else
+			for key in group do
+				if owners[key] == nil then
+					owners[key] = index
+				end
+			end
+		end
+	end
+
+	local rest = {}
+	results[count + 1] = rest
+	if type(props) == "table" then
+		for key, value in props :: any do
+			local owner = owners[key]
+			local target = if owner ~= nil then results[owner] else rest
+			target[key] = value
+		end
+	end
+
+	return table.unpack(results :: any, 1, count + 1)
+end
+
+type Split =
+	(<T, G>(props: T?, keys: G) -> (Pick<T, G>, Omit<T, G>))
+	& (<T>(props: T?, first: { [any]: any }, second: { [any]: any }, ...{ [any]: any }) -> ...Partial<T>)
+
+-- Edit & Construct ----------------------------------------------------------------------------------------------------
+
+local function bindModel(node: any, instance: Instance, property: string, _CLEAN: { any }, isAttribute: boolean)
 	table.insert(_CLEAN, bindTo(node, instance, property, isAttribute))
 	local _, disconnect = bindFrom(node, instance, property, isAttribute)
 	table.insert(_CLEAN, disconnect)
 end
-
-type tagValue = Directive.tagValue
 
 local tagCounts: { [Instance]: { [string]: number } } = setmetatable({}, { __mode = "k" }) :: any
 
@@ -60,7 +517,7 @@ local function removeTagRef(instance: Instance, tag: string)
 	end
 end
 
-local function bindTag(instance: Instance, tagValue: tagValue, _CLEAN: { any })
+local function bindTag(instance: Instance, tagValue: any, _CLEAN: { any })
 	if type(tagValue) == "string" then
 		addTagRef(instance, tagValue)
 		return
@@ -70,7 +527,7 @@ local function bindTag(instance: Instance, tagValue: tagValue, _CLEAN: { any })
 	end
 
 	if isNode(tagValue) then
-		local node = tagValue :: Graph.Node<string>
+		local node = tagValue :: Graph.Node<any>
 		local currentSet: { [string]: boolean } = {}
 
 		local function updateTags(newTag: string | { string })
@@ -82,7 +539,6 @@ local function bindTag(instance: Instance, tagValue: tagValue, _CLEAN: { any })
 			elseif type(newTag) == "string" then
 				newSet[newTag] = true
 			end
-
 			for tag in newSet do
 				if not currentSet[tag] then
 					addTagRef(instance, tag)
@@ -93,12 +549,16 @@ local function bindTag(instance: Instance, tagValue: tagValue, _CLEAN: { any })
 					removeTagRef(instance, tag)
 				end
 			end
-
 			currentSet = newSet
 		end
 
-		table.insert(_CLEAN, bindListen(node, updateTags))
 		updateTags(node:peek())
+		table.insert(
+			_CLEAN,
+			effect(function()
+				updateTags(get(node))
+			end)
+		)
 	elseif type(tagValue) == "table" then
 		for _, value in tagValue do
 			bindTag(instance, value, _CLEAN)
@@ -106,33 +566,140 @@ local function bindTag(instance: Instance, tagValue: tagValue, _CLEAN: { any })
 	end
 end
 
-local task = Compat.task
+local function stripUnmanagedTag(instance: Instance, tag: string)
+	local counts = tagCounts[instance]
+	if (not counts or not counts[tag]) and instance:HasTag(tag) then
+		instance:RemoveTag(tag)
+	end
+end
+
+local function bindNamedTag(instance: Instance, tag: string, tagValue: any, _CLEAN: { any })
+	if isModel(tagValue) then
+		local modelNode = tagValue[2]
+		bindNamedTag(instance, tag, modelNode, _CLEAN)
+		modelNode:set(instance:HasTag(tag))
+		local disconnect = onTagChanged(instance, tag, function(hasTag)
+			modelNode:set(hasTag)
+		end)
+		modelNode:onDestroy(disconnect)
+		table.insert(_CLEAN, disconnect)
+		return
+	elseif type(tagValue) == "function" then
+		tagValue = newNode(tagValue :: any)
+		table.insert(_CLEAN, tagValue)
+	end
+
+	if isNode(tagValue) then
+		local node = tagValue :: Graph.Node<any>
+		local active = not not node:peek()
+		if active then
+			addTagRef(instance, tag)
+		else
+			stripUnmanagedTag(instance, tag)
+		end
+		table.insert(
+			_CLEAN,
+			effect(function()
+				local shouldHave = not not get(node)
+				if shouldHave ~= active then
+					active = shouldHave
+					if shouldHave then
+						addTagRef(instance, tag)
+					else
+						removeTagRef(instance, tag)
+					end
+				end
+			end)
+		)
+	elseif tagValue then
+		addTagRef(instance, tag)
+	else
+		stripUnmanagedTag(instance, tag)
+	end
+end
+
+local function applyAttribute(
+	instance: Instance,
+	attrName: string,
+	attrVal: any,
+	seenAttrs: { [any]: boolean }?,
+	_CLEAN: { any }
+)
+	if seenAttrs then
+		if seenAttrs[attrName] then
+			return
+		end
+		seenAttrs[attrName] = true
+	end
+	if isModel(attrVal) then
+		bindModel(attrVal[2], instance, attrName, _CLEAN, true)
+	else
+		if type(attrVal) == "function" then
+			attrVal = newNode(attrVal)
+			table.insert(_CLEAN, attrVal)
+		end
+		if isNode(attrVal) then
+			table.insert(_CLEAN, bindTo(attrVal, instance, attrName, true))
+		else
+			setAttribute(instance, attrName, attrVal)
+		end
+	end
+end
+
+local function connectChanged(
+	instance: Instance,
+	name: string,
+	isAttribute: boolean,
+	isTag: boolean,
+	value: any,
+	label: string,
+	_CLEAN: { any }
+)
+	if isNode(value) then
+		error(
+			`{label} is a node: use Flux.model(node) for two-way binding or Flux.property(instance, prop) to follow a property`,
+			0
+		)
+	elseif type(value) ~= "function" then
+		error(`{label} expects a function called with the new value, got {compatTypeof(value)}`, 0)
+	end
+	if not isAttribute and not isTag and kindOf((instance :: any)[name]) == "RBXScriptSignal" then
+		error(`{label} is an event, not a property: connect \`{name}\` as a top-level key`, 0)
+	end
+	if isTag then
+		table.insert(_CLEAN, onTagChanged(instance, name, bindContext(value)))
+	else
+		table.insert(_CLEAN, onChanged(instance, name, isAttribute, bindContext(value)))
+	end
+end
 
 local function edit(
 	instance: Instance,
 	properties: Type.Map<any>,
 	seenAttrs: { [any]: boolean }?,
 	seenProps: { [any]: boolean }?,
-	inheritedClean: { any }?
-): Instance
-	local actions = {}
-	local signals = {}
-	local toFlatten: { any }? = nil
+	inheritedClean: { any }?,
+	startOrder: number?
+): number
+	local actions: { any }? = nil
+	local signals: { any }? = nil
+	local childKeys: { number }? = nil
+	local hasFlatten = false
+	local order = startOrder or 1
 
-	local _ATTR = properties._ATTR
-	local _USER_CLEAN = properties._CLEAN
+	local _ATTR = properties.__ATTR
+	local _USER_CLEAN = properties.__CLEAN
 	local _CLEAN = inheritedClean or (if _USER_CLEAN then table.clone(_USER_CLEAN) else {})
 	if inheritedClean and _USER_CLEAN then
 		for _, item in _USER_CLEAN do
 			table.insert(_CLEAN, item)
 		end
 	end
-	local _EVENT = properties._EVENT
-	local _TAG = properties._TAG
-	local _REF = properties._REF
+	local _EVENT = properties.__EVENT
+	local _TAG = properties.__TAG
+	local _REF = properties.__REF
 	local parent = properties.Parent
 
-	-- prevents two nodes fighting over the parent (possible in flattened tables)
 	if parent and seenProps then
 		if seenProps.Parent then
 			parent = nil
@@ -144,35 +711,102 @@ local function edit(
 	for property, value in properties do
 		if
 			property == "Parent"
-			or property == "_TAG"
-			or property == "_ATTR"
-			or property == "_CLEAN"
-			or property == "_EVENT"
-			or property == "_REF"
+			or property == "__TAG"
+			or property == "__ATTR"
+			or property == "__CLEAN"
+			or property == "__EVENT"
+			or property == "__REF"
 		then
 			continue
 		end
 
-		if type(property) == "number" and property == math.floor(property) then -- numeric index
-			if typeof(value) == "Instance" then -- child
-				Bind.applyLayoutOrder(value, property)
-				value.Parent = instance
+		if type(property) == "string" and string.byte(property) == 95 then
+			local second = string.byte(property, 2)
+			if second == 97 and string.sub(property, 1, 6) == "_attr_" then
+				local attrName = string.sub(property, 7)
+				if attrName == "" then
+					error('attribute name after "_attr_" cannot be empty', 0)
+				end
+				applyAttribute(instance, attrName, value, seenAttrs, _CLEAN)
+				continue
+			elseif second == 116 and string.sub(property, 1, 5) == "_tag_" then
+				local tagName = string.sub(property, 6)
+				if tagName == "" then
+					error('tag name after "_tag_" cannot be empty', 0)
+				end
+				if seenProps then
+					if seenProps[property] then
+						continue
+					end
+					seenProps[property] = true
+				end
+				bindNamedTag(instance, tagName, value, _CLEAN)
+				continue
+			end
+
+			local name: string
+			local isAttr = false
+			local isTag = false
+			if second == 95 then
+				if string.sub(property, 1, 7) == "__attr_" then
+					name = string.sub(property, 8)
+					if name == "" then
+						error('attribute name after "__attr_" cannot be empty', 0)
+					end
+					isAttr = true
+				elseif string.sub(property, 1, 6) == "__tag_" then
+					name = string.sub(property, 7)
+					if name == "" then
+						error('tag name after "__tag_" cannot be empty', 0)
+					end
+					isTag = true
+				else
+					name = string.sub(property, 2)
+				end
 			else
-				if type(value) == "function" then -- init action
+				if second == nil then
+					error('property name after "_" cannot be empty', 0)
+				end
+				name = string.sub(property, 2)
+			end
+			if seenProps then
+				if seenProps[property] then
+					continue
+				end
+				seenProps[property] = true
+			end
+			connectChanged(instance, name, isAttr, isTag, value, `"{property}"`, _CLEAN)
+			continue
+		end
+
+		if type(property) == "number" and property == math.floor(property) then
+			if kindOf(value) == "Instance" then
+				if not childKeys then
+					childKeys = { property }
+				else
+					table.insert(childKeys, property)
+				end
+			elseif type(value) == "function" then
+				if not actions then
+					actions = { value }
+				else
 					table.insert(actions, value)
-				elseif type(value) == "table" then
-					if value[1] == FIND_SYMBOL then -- selectors
-						Find.resolve(value, instance, function(found: Instance, props: Type.Map<any>)
-							edit(found, props)
-						end)
-					elseif isNode(value) == true then -- children binder (e.g. forValue/forIndex)
-						table.insert(_CLEAN, Bind.children(value, instance, property))
-					elseif value[1] ~= MODEL_SYMBOL then -- flatten tables into root recursively
-						if toFlatten then
-							table.insert(toFlatten, value)
-						else
-							toFlatten = { value }
-						end
+				end
+			elseif type(value) == "table" then
+				if value[1] == FIND_SYMBOL then
+					resolveFind(value, instance, edit :: any)
+				elseif isNode(value) then
+					if not childKeys then
+						childKeys = { property }
+					else
+						table.insert(childKeys, property)
+					end
+				elseif not isModel(value) then
+					hasFlatten = true
+					if not childKeys then
+						childKeys = { property }
+					else
+						table.insert(childKeys, property)
 					end
 				end
 			end
@@ -181,22 +815,15 @@ local function edit(
 
 		if type(value) == "function" then
 			local signal = (instance :: any)[property]
-			if typeof(signal) == "RBXScriptSignal" then -- signal shorthand
-				signals[signal] = value -- implicit instance.signal:Connect()
+			if kindOf(signal) == "RBXScriptSignal" then
+				if not signals then
+					signals = { signal, value }
+				else
+					table.insert(signals, signal)
+					table.insert(signals, value)
+				end
 				continue
 			end
-
-			if seenProps then
-				if seenProps[property] then
-					continue
-				end
-				seenProps[property] = true
-			end
-
-			value = newNode(value) -- implicit memo
-			table.insert(_CLEAN, value)
-			table.insert(_CLEAN, bindTo(value, instance, property))
-			continue
 		end
 
 		if seenProps then
@@ -206,40 +833,26 @@ local function edit(
 			seenProps[property] = true
 		end
 
-		if type(value) == "table" and value[1] == MODEL_SYMBOL then -- two-way binding (Flux.model)
-			bindModel(value[2], instance, property, _CLEAN)
-			continue
+		if type(value) == "function" then
+			value = newNode(value)
+			table.insert(_CLEAN, value)
 		end
 
-		if isNode(value) then -- instance.property <== value
-			table.insert(_CLEAN, bindTo(value, instance, property))
-		else -- assign to property
-			(instance :: any)[property] = value
+		if isModel(value) then
+			bindModel(value[2], instance, property, _CLEAN, false)
+		elseif isNode(value) then
+			table.insert(_CLEAN, bindTo(value, instance, property, false))
+		else
+			setProperty(instance, property, value)
+			if property == "LayoutOrder" and value == 0 then
+				Bind.pinOrder(instance)
+			end
 		end
 	end
 
 	if _ATTR then
 		for attrName, attrVal in _ATTR do
-			if seenAttrs then
-				if seenAttrs[attrName] then
-					continue
-				end
-				seenAttrs[attrName] = true
-			end
-
-			if type(attrVal) == "table" and attrVal[1] == MODEL_SYMBOL then -- two-way binding (Flux.model)
-				bindModel(attrVal[2], instance, attrName, _CLEAN, true)
-			else
-				if type(attrVal) == "function" then
-					attrVal = newNode(attrVal) -- implicit memo
-					table.insert(_CLEAN, attrVal)
-				end
-				if isNode(attrVal) then -- instance.attr <== value
-					table.insert(_CLEAN, bindTo(attrVal, instance, attrName, true))
-				else -- assign to attr
-					instance:SetAttribute(attrName, attrVal)
-				end
-			end
+			applyAttribute(instance, attrName, attrVal, seenAttrs, _CLEAN)
 		end
 	end
 
@@ -248,107 +861,164 @@ local function edit(
 	end
 
 	if _EVENT then
-		local _EVENT_ATTR = _EVENT._ATTR
-
+		local _EVENT_ATTR = _EVENT.__ATTR
+		local _EVENT_TAG = _EVENT.__TAG
 		for property, value in _EVENT do
-			if property == "_ATTR" then
+			if property == "__ATTR" or property == "__TAG" then
 				continue
 			end
-
-			if isNode(value) then -- value <== instance.property
-				local _, disconnect = bindFrom(value, instance, property)
-				table.insert(_CLEAN, disconnect)
-			elseif typeof((instance :: any)[property]) == "RBXScriptSignal" then -- instance.signal:Connect()
-				signals[(instance :: any)[property]] = value
-			else -- instance.property:Connect()
-				local disconnect = instance:GetPropertyChangedSignal(property):Connect(function()
-					value((instance :: any)[property])
-				end)
-				table.insert(_CLEAN, disconnect)
-			end
+			connectChanged(instance, property, false, false, value, `__EVENT.{property}`, _CLEAN)
 		end
-
 		if _EVENT_ATTR then
 			for attribute, value in _EVENT_ATTR do
-				if isNode(value) then -- value <== instance.attr
-					local _, disconnect = bindFrom(value, instance, attribute, true)
-					table.insert(_CLEAN, disconnect)
-				else -- instance.attr:Connect()
-					local disconnect = instance:GetAttributeChangedSignal(attribute):Connect(function()
-						value(instance:GetAttribute(attribute))
-					end)
-					table.insert(_CLEAN, disconnect)
-				end
+				connectChanged(instance, attribute, true, false, value, `__EVENT.__ATTR.{attribute}`, _CLEAN)
+			end
+		end
+		if _EVENT_TAG then
+			for tag, value in _EVENT_TAG do
+				connectChanged(instance, tag, false, true, value, `__EVENT.__TAG.{tag}`, _CLEAN)
 			end
 		end
 	end
 
 	if _REF then
-		if type(_REF) == "function" then -- pass reference to callback
-			table.insert(_CLEAN, (_REF :: any)(instance) :: any)
-		elseif isNode(_REF) then -- pass reference to value node
+		if type(_REF) == "function" then
+			local refClean = (_REF :: any)(instance)
+			if refClean ~= nil then
+				table.insert(_CLEAN, refClean)
+			end
+		elseif isNode(_REF) then
 			_REF:set(instance)
 		end
 	end
 
-	if toFlatten then
-		if not seenAttrs then
-			seenAttrs = {}
-			if _ATTR then
-				for attrName in _ATTR do
-					seenAttrs[attrName] = true
-				end
+	if hasFlatten and not seenAttrs then
+		seenAttrs = {}
+		if _ATTR then
+			for attrName in _ATTR do
+				seenAttrs[attrName] = true
 			end
-
-			seenProps = {}
-			for key in properties do
-				if type(key) ~= "number" then -- numeric entries never reach the seenProps checks
-					seenProps[key] = true
+		end
+		seenProps = {}
+		for key in properties do
+			if type(key) ~= "number" then
+				seenProps[key] = true
+				if type(key) == "string" and string.sub(key, 1, 6) == "_attr_" then
+					seenAttrs[string.sub(key, 7)] = true
 				end
 			end
 		end
+	end
 
-		for _, value in toFlatten do
-			edit(instance, value, seenAttrs, seenProps, _CLEAN)
+	if childKeys then
+		if #childKeys > 1 then
+			table.sort(childKeys)
+		end
+		for _, key in childKeys do
+			local child: any = properties[key]
+			if kindOf(child) == "Instance" then
+				order = Bind.applyLayoutOrder(child, order)
+				child.Parent = instance
+			elseif isNode(child) then
+				table.insert(_CLEAN, Bind.children(child :: any, instance, order))
+				order += 1
+			else
+				order = edit(instance, child :: any, seenAttrs, seenProps, _CLEAN, order)
+			end
 		end
 	end
 
-	for _, action in actions do
-		task.defer(action, instance)
+	if actions then
+		for _, action in actions do
+			task.defer(bindContext(action), instance)
+		end
 	end
 
-	for signal, callback in signals do
-		table.insert(_CLEAN, signal:Connect(callback) :: any)
+	if signals then
+		for index = 1, #signals, 2 do
+			table.insert(_CLEAN, signals[index]:Connect(bindContext(signals[index + 1])) :: any)
+		end
 	end
 
+	if type(parent) == "function" then
+		parent = newNode(parent)
+		table.insert(_CLEAN, parent)
+	end
 	local parentIsNode = isNode(parent)
 
-	-- an inherited _CLEAN belongs to the root pass, which installs the single lifecycle hook
 	if not inheritedClean and (parentIsNode or next(_CLEAN) ~= nil) then
-		local connection = instance.Destroying:Once(function()
-			Clean(_CLEAN)
+		local function cleanAll()
+			dispose(_CLEAN)
 			table.clear(_CLEAN)
-		end)
-
+		end
+		table.insert(_CLEAN, instance.Destroying:Once(cleanAll))
 		if getOwner() then
-			onDestroy(function()
-				connection:Disconnect()
-				Clean(_CLEAN)
-				table.clear(_CLEAN)
-			end)
+			cleanup(cleanAll)
 		end
 	end
 
 	if parent then
-		if parentIsNode == true then -- reactively drive instance.Parent from node value
-			table.insert(_CLEAN, bindTo(parent, instance, "Parent"))
+		if parentIsNode then
+			table.insert(_CLEAN, bindTo(parent, instance, "Parent", false))
 		else
-			-- set Parent last so all children are configured before the instance enters the tree
 			instance.Parent = parent
 		end
 	end
 
+	return order
+end
+
+local function editInstance(instance: Instance, properties: Type.Map<any>): Instance
+	edit(instance, properties)
 	return instance
 end
 
-return edit
+local ALWAYS: { [string]: { [string]: unknown } } = {
+	TextButton = { AutoButtonColor = false },
+	ImageButton = { AutoButtonColor = false },
+}
+
+local function assign(instance: Instance, values: { [string]: unknown }?)
+	if values then
+		for key, value in values do
+			(instance :: any)[key] = value
+		end
+	end
+end
+
+local function constructInstance(className: string, properties: any): Instance
+	local instance = Compat.Instance.new(className)
+	assign(instance, ALWAYS[className])
+	assign(instance, if Flags.defaults then Defaults[className] else nil)
+	if getOwner() then
+		cleanup(instance)
+	end
+	return editInstance(instance, properties)
+end
+
+return table.freeze({
+	edit = editInstance,
+	new = constructInstance,
+	Flags = Flags,
+	Defaults = Defaults,
+	Find = Find,
+	--[[
+	Splits a props table by key into fresh tables: one per `keys` group holding just the keys that group names, then a
+	final table with everything else (instance properties, numeric children, `__EVENT`-style directives), ready to forward
+	to a root instance. A group is an array of key names or a table whose keys are used; a key named by several groups
+	goes to the first. Values move by reference and `props` itself is left untouched.
+
+	With one group, it is typed as a `Pick` of the props type and the rest as its `Omit`, keeping required members
+	required. That needs the names as types: pass a schema table, or annotate a name array
+	(`local OWN: { "label" | "onClick" } = ...`). An unannotated array only says `{ string }`, and several groups are more
+	than the solver can pick through, so those tables are `Partial` (every member optional).
+
+	```luau
+	local OWN: { "label" | "onClick" } = { "label", "onClick" }
+	local own, rest = Flux.split(props, OWN) -- own.label: string, own.onClick: (() -> ())?
+	```
+
+	[Open Documentation](https://flux.kohl.gg/guide/concepts/components#splitting-props-with-flux-split)
+	]]
+	split = split :: Split,
+})
