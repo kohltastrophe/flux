@@ -1,19 +1,30 @@
 --!strict
+--[[
+The screen and the player as shared nodes: viewport, UI scale, breakpoint, input device and accessibility settings.
+Available as `Flux.Responsive`. For safe areas (the topbar, notches, rounded corners), set the engine's
+`ScreenGui.ScreenInsets` (`CoreUISafeInsets` or `DeviceSafeInsets`) and `ScreenGui.SafeAreaCompatibility` instead.
+
+```luau
+Flux.new "UIScale" { Scale = Flux.Responsive.scale }
+```
+]]
 
 local Compat = require("./Compat")
 local Graph = require("./Graph")
 
-local IS_ROBLOX = Compat.isRoblox
+local getService = Compat.getService
 local warn = Compat.warn
 
 local computed = Graph.computed
-local readDep = Graph.readDep
+local read = Graph.read
 local signal = Graph.signal
 
 export type ScaleMode = "min" | "width" | "height" | "max"
 export type Breakpoint = "phone" | "tablet" | "desktop"
 export type Platform = "console" | "mobile" | "pc" | "vr"
-export type SafeAreaInsets = { top: number, bottom: number, left: number, right: number }
+export type DisplaySize = "Small" | "Medium" | "Large"
+export type Input = "keyboard" | "touch" | "gamepad"
+export type TextSize = "Medium" | "Large" | "Larger" | "Largest"
 export type Breakpoints = { phone: number, tablet: number }
 
 export type Config = {
@@ -33,7 +44,7 @@ export type PartialConfig = {
 	viewport: Graph.Reactive<Vector2>?,
 }
 
-local DEFAULT_SIZE = (if IS_ROBLOX then Vector2.new(1920, 1080) else { X = 1920, Y = 1080 }) :: any
+local DEFAULT_SIZE = Compat.Vector2.new(1920, 1080)
 
 --[[
 	Live defaults shared by every derived node; mutate once at startup.
@@ -47,24 +58,20 @@ local config: Config = {
 }
 
 local EMPTY: PartialConfig = {}
-
--- Unknown scale modes warn once per value: `scaleFor` runs inside every scale node's recompute.
 local warnedModes: { [string]: boolean } = {}
 
--- Pure scale derivation: viewport (width, height) → UIScale factor (1.0 = at reference).
--- Falls back to the live `config` field-by-field: this runs per recompute, so overridden
--- fields stay fixed while the rest inherit later `config` mutations without allocating.
 local function scaleFor(width: number, height: number, partial: PartialConfig): number
 	local ref = partial.reference or config.reference
+	local refX, refY = math.max(ref.X, 1), math.max(ref.Y, 1)
 	local mode = partial.mode or config.mode
 
 	local factor: number
 	if mode == "width" then
-		factor = width / ref.X
+		factor = width / refX
 	elseif mode == "height" then
-		factor = height / ref.Y
+		factor = height / refY
 	elseif mode == "max" then
-		factor = math.max(width / ref.X, height / ref.Y)
+		factor = math.max(width / refX, height / refY)
 	else
 		if mode ~= "min" then
 			local key = tostring(mode)
@@ -73,7 +80,7 @@ local function scaleFor(width: number, height: number, partial: PartialConfig): 
 				warn(`[Flux] unknown scale mode "{mode}"; falling back to "min"`)
 			end
 		end
-		factor = math.min(width / ref.X, height / ref.Y)
+		factor = math.min(width / refX, height / refY)
 	end
 
 	local min = if partial.min ~= nil then partial.min else config.min
@@ -88,7 +95,6 @@ local function scaleFor(width: number, height: number, partial: PartialConfig): 
 	return factor
 end
 
--- Pure breakpoint derivation: viewport width → size class.
 local function breakpointFor(width: number, partial: PartialConfig): Breakpoint
 	local breakpoints = partial.breakpoints or config.breakpoints
 	if width < breakpoints.phone then
@@ -115,7 +121,7 @@ local function scaleOf(partial: PartialConfig?): Graph.Node<number>
 	local cfg = partial or EMPTY
 	local source = cfg.viewport or viewport
 	return computed(function(): number
-		local vp = readDep(source) :: Vector2
+		local vp = read(source) :: Vector2
 		return scaleFor(vp.X, vp.Y, cfg)
 	end)
 end
@@ -129,7 +135,7 @@ local function breakpointOf(partial: PartialConfig?): Graph.Node<Breakpoint>
 	local cfg = partial or EMPTY
 	local source = cfg.viewport or viewport
 	return computed(function(): Breakpoint
-		local vp = readDep(source) :: Vector2
+		local vp = read(source) :: Vector2
 		return breakpointFor(vp.X, cfg)
 	end)
 end
@@ -140,7 +146,6 @@ end
 	[Open Documentation](https://flux.kohl.gg/guide/utilities/responsive#scale)
 ]]
 local scale: Graph.Node<number> = scaleOf()
-
 --[[
 	Size class derived from `viewport` width.
 
@@ -148,50 +153,96 @@ local scale: Graph.Node<number> = scaleOf()
 ]]
 local breakpoint: Graph.Node<Breakpoint> = breakpointOf()
 
-local RunService = if IS_ROBLOX then game:GetService("RunService") else nil
+local RunService = getService("RunService")
 local isClient = RunService ~= nil and RunService:IsClient() and RunService:IsRunning()
+local tenFoot = isClient and getService("GuiService"):IsTenFootInterface()
 
 local function detectPlatform(): Platform
-	local UserInputService = game:GetService("UserInputService")
-	return if UserInputService.VREnabled
+	local UserInputService = getService("UserInputService")
+	return if getService("VRService").VREnabled
 		then "vr"
-		elseif game:GetService("GuiService"):IsTenFootInterface() then "console"
+		elseif tenFoot then "console"
 		elseif UserInputService.KeyboardEnabled and UserInputService.MouseEnabled then "pc"
 		else "mobile"
 end
 
 --[[
-	The device class detected at startup: `"vr"`, `"console"` (ten-foot interface), `"pc"`
-	(keyboard and mouse), or `"mobile"`; `"pc"` where detection is unavailable.
+	The device class: `"vr"`, `"console"` (ten-foot interface), `"pc"` (keyboard and mouse), or `"mobile"`. Live on
+	the client, so plugging in a keyboard and mouse or putting on a headset changes it; `"pc"` elsewhere.
 
 	[Open Documentation](https://flux.kohl.gg/guide/utilities/responsive#platform)
 ]]
-local platform: Platform = if isClient then detectPlatform() else "pc"
+local platform: Graph.Node<Platform> = signal((if isClient then detectPlatform() else "pc") :: Platform)
+--[[
+	How large the screen is physically (`GuiService.ViewportDisplaySize`): `"Small"` (phones, tablets, handhelds),
+	`"Medium"` (laptops and monitors, the default) or `"Large"` (TVs). Live on the client; where the engine lacks the
+	property a ten-foot interface counts as `"Large"`.
+
+	[Open Documentation](https://flux.kohl.gg/guide/utilities/responsive#display-size)
+]]
+local displaySize: Graph.Node<DisplaySize> = signal((if tenFoot then "Large" else "Medium") :: DisplaySize)
+
+local INPUT_BY_NAME: { [string]: Input } = {
+	KeyboardAndMouse = "keyboard",
+	Keyboard = "keyboard",
+	MouseMovement = "keyboard",
+	MouseButton1 = "keyboard",
+	MouseButton2 = "keyboard",
+	MouseButton3 = "keyboard",
+	MouseWheel = "keyboard",
+	Touch = "touch",
+	Gamepad = "gamepad",
+}
+for slot = 1, 8 do
+	INPUT_BY_NAME[`Gamepad{slot}`] = "gamepad"
+end
+
+local function inputFor(name: string): Input?
+	return INPUT_BY_NAME[name]
+end
+
+local INPUT_BY_PLATFORM: { [Platform]: Input } = {
+	pc = "keyboard",
+	mobile = "touch",
+	console = "gamepad",
+	vr = "gamepad",
+}
 
 --[[
-	Topbar / Core-UI inset pixels from `GuiService:GetGuiInset()`.
+	The input the player is using right now: `"keyboard"` (keyboard and mouse), `"touch"`, or `"gamepad"`. Follows
+	`UserInputService.PreferredInput` live on the client, so picking up a controller switches it; elsewhere it holds
+	the mode matching `platform`.
 
-	[Open Documentation](https://flux.kohl.gg/guide/utilities/responsive#safe-area)
+	[Open Documentation](https://flux.kohl.gg/guide/utilities/responsive#input)
 ]]
-local safeArea: Graph.Node<SafeAreaInsets> = signal(
-	{ top = 0, bottom = 0, left = 0, right = 0 },
-	function(a: SafeAreaInsets, b: SafeAreaInsets): boolean
-		return a.top == b.top and a.bottom == b.bottom and a.left == b.left and a.right == b.right
-	end
-)
+local input: Graph.Node<Input> = signal(INPUT_BY_PLATFORM[platform:peek()] :: Input)
+--[[
+	The player's preferred text size (`GuiService.PreferredTextSize`): `"Medium"` (default), `"Large"`, `"Larger"`, or
+	`"Largest"`. The engine already draws text larger to match, so use it to make room around text, never to
+	multiply `TextSize` again.
+
+	[Open Documentation](https://flux.kohl.gg/guide/utilities/responsive#text-size)
+]]
+local textSize: Graph.Node<TextSize> = signal("Medium" :: TextSize)
+--[[
+	Whether the player asked for reduced motion (`GuiService.ReducedMotionEnabled`). When `true`, swap movement and
+	scaling animations for instant changes or simple fades.
+
+	[Open Documentation](https://flux.kohl.gg/guide/utilities/responsive#reduced-motion)
+]]
+local reducedMotion: Graph.Node<boolean> = signal(false)
+--[[
+	The player's background transparency preference (`GuiService.PreferredTransparency`), from `0` (opaque
+	backgrounds) to `1` (the default). Multiply translucent `BackgroundTransparency` values by it.
+
+	[Open Documentation](https://flux.kohl.gg/guide/utilities/responsive#preferred-transparency)
+]]
+local preferredTransparency: Graph.Node<number> = signal(1)
 
 if isClient then
-	local GuiService = game:GetService("GuiService")
-
-	local function recomputeSafeArea()
-		local topLeft, bottomRight = GuiService:GetGuiInset()
-		safeArea:set({
-			top = topLeft.Y,
-			bottom = bottomRight.Y,
-			left = topLeft.X,
-			right = bottomRight.X,
-		})
-	end
+	local GuiService = getService("GuiService")
+	local Workspace = getService("Workspace")
+	local UserInputService = getService("UserInputService")
 
 	local viewportConnection: RBXScriptConnection?
 	local function bindCamera(camera: Camera?)
@@ -203,17 +254,68 @@ if isClient then
 			viewport:set(camera.ViewportSize)
 			viewportConnection = camera:GetPropertyChangedSignal("ViewportSize"):Connect(function()
 				viewport:set(camera.ViewportSize)
-				recomputeSafeArea()
 			end)
 		end
 	end
 
-	bindCamera(workspace.CurrentCamera)
-	workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
-		bindCamera(workspace.CurrentCamera)
+	bindCamera(Workspace.CurrentCamera)
+	Workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
+		bindCamera(Workspace.CurrentCamera)
 	end)
-	GuiService:GetPropertyChangedSignal("TopbarInset"):Connect(recomputeSafeArea)
-	recomputeSafeArea()
+
+	local function mirror(
+		object: Instance,
+		property: string,
+		node: Graph.Node<any>,
+		map: ((value: any) -> any)?
+	): boolean
+		local ok, changed = pcall(object.GetPropertyChangedSignal, object, property)
+		if not ok then
+			return false
+		end
+		local function sync()
+			local rawValue = (object :: any)[property]
+			local value = if map then map(rawValue) else rawValue
+			if value ~= nil then
+				node:set(value)
+			end
+		end
+		sync()
+		changed:Connect(sync)
+		return true
+	end
+
+	local function nameOf(item: EnumItem): string
+		return item.Name
+	end
+	local function inputOf(item: EnumItem): Input?
+		return inputFor(item.Name)
+	end
+	local function syncPlatform()
+		platform:set(detectPlatform())
+	end
+	local function bindPlatform(object: Instance, property: string)
+		local ok, changed = pcall(object.GetPropertyChangedSignal, object, property)
+		if ok then
+			changed:Connect(syncPlatform)
+		end
+	end
+
+	if not mirror(UserInputService, "PreferredInput", input, inputOf) then
+		UserInputService.LastInputTypeChanged:Connect(function(lastInputType: Enum.UserInputType)
+			local mode = inputFor(lastInputType.Name)
+			if mode ~= nil then
+				input:set(mode)
+			end
+		end)
+	end
+	mirror(GuiService, "PreferredTextSize", textSize, nameOf)
+	mirror(GuiService, "ViewportDisplaySize", displaySize, nameOf)
+	bindPlatform(UserInputService, "KeyboardEnabled")
+	bindPlatform(UserInputService, "MouseEnabled")
+	bindPlatform(getService("VRService"), "VREnabled")
+	mirror(GuiService, "ReducedMotionEnabled", reducedMotion)
+	mirror(GuiService, "PreferredTransparency", preferredTransparency)
 end
 
 return table.freeze({
@@ -223,8 +325,16 @@ return table.freeze({
 	viewport = viewport,
 	scale = scale,
 	breakpoint = breakpoint,
-	safeArea = safeArea,
+	displaySize = displaySize,
+
+	input = input,
+	textSize = textSize,
+	reducedMotion = reducedMotion,
+	preferredTransparency = preferredTransparency,
 
 	scaleOf = scaleOf,
 	breakpointOf = breakpointOf,
+
+	--- @ignore
+	_inputFor = inputFor,
 })

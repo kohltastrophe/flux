@@ -1,32 +1,81 @@
 --!strict
+--[[
+Flux: fine-grained reactive UI for Roblox. The reactive graph and the instance API are flat on `Flux`; utilities live
+in namespaces (`Flux.Color`, `Flux.Find`, `Flux.Interact`, `Flux.Motion`, `Flux.Responsive`, `Flux.Store`, and the
+`Flux.Defaults` and `Flux.Flags` settings).
 
-local Defaults = require("@self/Defaults")
-local Edit = require("@self/Edit")
-local Find = require("@self/Find")
-local Flags = require("@self/Flags")
-local Graph = require("@self/Graph")
-local Motion = require("@self/Motion")
-local Type = require("@self/Type")
+```luau
+local count = Flux.signal(0)
+Flux.new "TextButton" {
+	Parent = gui,
+	Text = function() return `Clicked {count()} times` end,
+	Activated = function() count(count() + 1) end,
+}
+```
+]]
 
 local Async = require("@self/Async")
 local Bind = require("@self/Bind")
-local Clean = require("@self/Clean")
+local Clock = require("@self/Clock")
 local Conditional = require("@self/Conditional")
-local Context = require("@self/Context")
-local Directive = require("@self/Directive")
-local For = require("@self/For")
+local Edit = require("@self/Edit")
+local Graph = require("@self/Graph")
 local Interact = require("@self/Interact")
 local Layout = require("@self/Layout")
+local Motion = require("@self/Motion")
 local Responsive = require("@self/Responsive")
-local Safe = require("@self/Safe")
-local Selector = require("@self/Selector")
 local Store = require("@self/Store")
-local Wrap = require("@self/Wrap")
+local Type = require("@self/Type")
 
 export type Node<T> = Graph.Node<T>
+export type State<T> = Graph.State<T>
 export type Reactive<T> = Graph.Reactive<T>
+export type Unwrap<T> = Graph.Unwrap<T>
+export type Owner = Graph.Owner
+export type Cleanable = Graph.Cleanable
+-- The property table `Flux.new(className)` accepts (typed properties and events, directives, numeric children), with a
+-- component's own props from `Extra` merged in.
+export type Props<ClassName, Extra = {}> = Type.Merge<Type.Properties<Type.Resolve<ClassName>>, Extra>
+export type Child = Type.Child
+export type Children = Type.Children
+-- A component: a function building an instance from its props.
+export type Component<P, I = Instance> = (props: P) -> I
+export type Partial<T> = Edit.Partial<T>
+export type Pick<T, G> = Edit.Pick<T, G>
+export type Omit<T, G> = Edit.Omit<T, G>
 
-local construct = require("@self/Construct")
+export type Async<T> = Async.Async<T>
+export type AsyncState = Async.AsyncState
+export type Context<T> = Graph.Context<T>
+export type Selector<K> = Conditional.Selector<K>
+export type Spring<T> = Motion.Spring<T>
+export type HoverOptions = Interact.HoverOptions
+
+export type Breakpoint = Responsive.Breakpoint
+export type Input = Responsive.Input
+export type Platform = Responsive.Platform
+export type TextSize = Responsive.TextSize
+export type DisplaySize = Responsive.DisplaySize
+
+export type Length = Layout.Length
+export type ReactiveLength = Layout.ReactiveLength
+export type Insets = Layout.Insets
+export type Align = Layout.Align
+export type FlexAlign = Layout.FlexAlign
+export type LineAlign = Layout.LineAlign
+export type Direction = Layout.Direction
+export type FlexMode = Layout.FlexMode
+export type PaddingSides = Layout.PaddingSides
+export type CornerSides = Layout.CornerSides
+export type ListConfig = Layout.ListConfig
+export type GridConfig = Layout.GridConfig
+export type StrokeConfig = Layout.StrokeConfig
+export type GradientConfig = Layout.GradientConfig
+export type SizeConstraintConfig = Layout.SizeConstraintConfig
+export type TextSizeConstraintConfig = Layout.TextSizeConstraintConfig
+
+local construct = Edit.new
+local editInstance = Edit.edit
 
 local Constructors = setmetatable({}, {
 	__index = function(self: any, class: string)
@@ -44,133 +93,170 @@ local Constructors = setmetatable({}, {
 
 local Flux = {
 	--[[
-	<strong>Bind</strong>: low-level hydration primitives behind
-	[`Flux.model`](https://flux.kohl.gg/guide/roblox/creation#flux-model-two-way-binding-in-one-key), the `_EVENT`
-	directive, and child parenting. Binds a node to or from a Roblox
-	[`Instance`](https://create.roblox.com/docs/reference/engine/classes/Instance) property or attribute.
+	<strong>Clock</strong>: the time Flux and your code run on. `now` (monotonic) and `wall` (Unix, server-synced) read
+	it; `delay`, `wait`, `defer`, `cancel` and `connect(phase, fn)` schedule on it, like `task.*` and the RunService
+	frame signals. Tests turn on a manual clock (`manual(true)`; always on headless) and move it with
+	`step(seconds, frameLength?)`, which runs due timers, frame subscribers, springs, tweens and a flush in order; `drain`
+	runs deferred work and `reset` drops what is pending.
 
-	[Open Documentation](https://flux.kohl.gg/guide/roblox/hydration)
+	[Open Documentation](https://flux.kohl.gg/guide/tips/testing)
 	]]
-	Bind = Bind,
+	Clock = table.freeze({
+		now = Clock.now,
+		wall = Clock.wall,
+		delay = Clock.delay,
+		wait = Clock.wait,
+		defer = Clock.defer,
+		cancel = Clock.cancel,
+		connect = Clock.connect,
+		manual = Clock.manual,
+		isManual = Clock.isManual,
+		step = Clock.step,
+		drain = Clock.drain,
+		reset = Clock.reset,
+	}),
 	--[[
 	<strong>Color</strong>: a perceptual
-	[`Color3`](https://create.roblox.com/docs/reference/engine/datatypes/Color3) toolkit working in
-	gamut-clipped Oklab. Provides `lighten`/`darken`, `mix`, `rotateHue`, and WCAG `contrast`/`readable`.
+	[`Color3`](https://create.roblox.com/docs/reference/engine/datatypes/Color3) toolkit working in gamut-clipped
+	Oklab: `lighten`/`saturate` (negative amounts darken/desaturate), `mix`, `rotateHue`, and WCAG `contrast`/`readable`.
 
 	[Open Documentation](https://flux.kohl.gg/guide/motion/color)
 	]]
 	Color = Motion.Color,
 	--[[
-	<strong>Defaults</strong>: per-class default properties auto-applied to every Roblox
+	<strong>Defaults</strong>: per-class default properties applied to every
 	[`Instance`](https://create.roblox.com/docs/reference/engine/classes/Instance) built by
 	[`Flux.new`](https://flux.kohl.gg/guide/roblox/creation#the-flux-new-function). Mutable.
 
 	[Open Documentation](https://flux.kohl.gg/guide/roblox/defaults)
 	]]
-	Defaults = Defaults,
+	Defaults = Edit.Defaults,
 	--[[
-	<strong>Find</strong>: Instance selectors for hydration. `Child`, `Descendant`, `Ancestor`, `Query`, and
-	class-filtered variants apply props to matched descendants of a Roblox
-	[`Instance`](https://create.roblox.com/docs/reference/engine/classes/Instance).
+	<strong>Find</strong>: instance selectors for hydration. `Child`, `Descendant`, `Ancestor`, `Query` and their
+	class-filtered variants apply props to matching instances around the one being edited.
 
 	[Open Documentation](https://flux.kohl.gg/guide/roblox/hydration#instance-selectors-flux-find)
 	]]
-	Find = Find,
+	Find = Edit.Find,
 	--[[
-	<strong>Flags</strong>: global toggles. `Flags.defaults` enables or disables the automatic per-class
-	defaults system applied by [`Flux.new`](https://flux.kohl.gg/guide/roblox/creation#the-flux-new-function).
+	<strong>Flags</strong>: process-wide switches. `Flags.defaults` turns the per-class defaults of
+	[`Flux.new`](https://flux.kohl.gg/guide/roblox/creation#the-flux-new-function) on or off.
 
 	[Open Documentation](https://flux.kohl.gg/guide/roblox/defaults#disabling-defaults)
 	]]
-	Flags = Flags,
+	Flags = Edit.Flags,
 	--[[
-	<strong>Graph</strong>: the low-level reactive graph. Most members are surfaced flat on `Flux`
-	(`Flux.read`, `Flux.retrack`, `Flux.untrack`, …); reach into the namespace for `Flux.flush`.
-
-	[Open Documentation](https://flux.kohl.gg/guide/concepts/tracking)
-	]]
-	Graph = Graph,
-	--[[
-	<strong>Interact</strong>: transient interaction state. `exclusive` groups keep at most one boolean
-	[node](https://flux.kohl.gg/guide/concepts/signals) active per group (one open menu, one hovered
-	control); `pointIn` and `sunk` hit-test pointer coordinates against Roblox
-	[`GuiObject`](https://create.roblox.com/docs/reference/engine/classes/GuiObject) bounds and occlusion.
+	<strong>Interact</strong>: interaction state as read-only boolean nodes (`hover`, `press`, `selected`,
+	`focused`) and the hit tests `pointIn`, `sunk` and `covered`.
 
 	[Open Documentation](https://flux.kohl.gg/guide/utilities/interact)
 	]]
-	Interact = Interact,
+	Interact = table.freeze({
+		pointIn = Interact.pointIn,
+		sunk = Interact.sunk,
+		covered = Interact.covered,
+		hover = Interact.hover,
+		press = Interact.press,
+		selected = Interact.selected,
+		focused = Interact.focused,
+	}),
 	--[[
-	<strong>Layout</strong>: layout and appearance helpers (`padding`, `corner`, `stroke`, `list`, `grid`,
-	`aspectRatio`, `flex`) that return ready-to-parent Roblox
-	[`Instance`](https://create.roblox.com/docs/reference/engine/classes/Instance)s with reactive arguments.
+	<strong>Motion</strong>: the engine behind [`Flux.spring`](https://flux.kohl.gg/guide/motion/spring) and
+	[`Flux.tween`](https://flux.kohl.gg/guide/motion/tween). `step(dt?)` advances every motion (wired to the frame
+	automatically); call it yourself only to step motion in tests.
 
-	[Open Documentation](https://flux.kohl.gg/guide/utilities/layout)
+	[Open Documentation](https://flux.kohl.gg/guide/tips/testing#full-engine-tests-in-ci)
 	]]
-	Layout = Layout,
+	Motion = table.freeze({
+		step = Motion.step,
+	}),
 	--[[
-	<strong>Motion</strong>: animation. `spring` and `tween` return animated
-	[node](https://flux.kohl.gg/guide/concepts/signals)s; it also hosts the
-	[`Color`](https://flux.kohl.gg/guide/motion/color) toolkit and `step`.
-
-	[Open Documentation](https://flux.kohl.gg/guide/motion/spring)
-	]]
-	Motion = Motion,
-	--[[
-	<strong>Responsive</strong>: viewport-driven UI. `viewport`, `scale`, `breakpoint`, and `safeArea` are
-	shared reactive [node](https://flux.kohl.gg/guide/concepts/signals)s that update as the Roblox
-	[`Camera`](https://create.roblox.com/docs/reference/engine/classes/Camera) viewport changes.
+	<strong>Responsive</strong>: the screen and the player as nodes: `viewport`, `scale` and `breakpoint` follow the
+	camera; `displaySize` and `platform` say what the screen and the device are; `input` follows the input
+	device; `textSize`, `reducedMotion` and `preferredTransparency` follow the accessibility settings. `scaleOf`/`breakpointOf` build per-surface variants; `config` holds the defaults.
 
 	[Open Documentation](https://flux.kohl.gg/guide/utilities/responsive)
 	]]
-	Responsive = Responsive,
+	Responsive = table.freeze({
+		config = Responsive.config,
+		platform = Responsive.platform,
+		viewport = Responsive.viewport,
+		scale = Responsive.scale,
+		breakpoint = Responsive.breakpoint,
+		displaySize = Responsive.displaySize,
+		input = Responsive.input,
+		textSize = Responsive.textSize,
+		reducedMotion = Responsive.reducedMotion,
+		preferredTransparency = Responsive.preferredTransparency,
+		scaleOf = Responsive.scaleOf,
+		breakpointOf = Responsive.breakpointOf,
+	}),
 	--[[
-	<strong>Store</strong>: deep reactive proxies over plain tables. Write a nested field and only the
-	[node](https://flux.kohl.gg/guide/concepts/signals)s whose leaves changed re-run.
+	<strong>Store</strong>: helpers for [`Flux.store`](https://flux.kohl.gg/guide/concepts/stores) proxies:
+	`insert`, `remove` and `move` for arrays, `reconcile` to diff in a snapshot, `unwrap` for the raw table, and
+	`Destroy`.
 
 	[Open Documentation](https://flux.kohl.gg/guide/concepts/stores)
 	]]
-	Store = Store,
+	Store = table.freeze({
+		insert = Store.insert,
+		remove = Store.remove,
+		move = Store.move,
+		reconcile = Store.reconcile,
+		unwrap = Store.unwrap,
+		Destroy = Store.Destroy,
+	}),
 
-	flush = Graph.flush,
-	strict = Graph.strict,
-
-	scope = Graph.scope,
+	-- The reactive graph
 	signal = Graph.signal,
 	computed = Graph.computed,
 	effect = Graph.effect,
-
+	createSignal = Graph.createSignal,
+	createMemo = Graph.createMemo,
+	createEffect = Graph.createEffect,
+	getter = Graph.getter,
+	setter = Graph.setter,
+	scope = Graph.scope,
+	flush = Graph.flush,
+	cleanup = Graph.cleanup,
+	dispose = Graph.dispose,
 	getOwner = Graph.getOwner,
 	withOwner = Graph.withOwner,
-	cleanup = Graph.cleanup,
-
-	isNode = Graph.isNode,
-	isReactive = Graph.isReactive,
-
-	raw = Graph.raw,
 	read = Graph.read,
+	raw = Graph.raw,
 	untrack = Graph.untrack,
 	retrack = Graph.retrack,
-
+	isNode = Graph.isNode,
+	isReactive = Graph.isReactive,
 	on = Bind.on,
-	listen = Bind.listen,
+
+	-- State
+	context = Graph.context,
+	bindContext = Graph.bindContext,
+	async = Async.new,
+	selector = Conditional.selector,
+	store = Store.new,
+	split = Edit.split,
+	safe = Graph.safe,
+
+	-- Instances and control flow
+	property = Bind.property,
 	model = Bind.model,
-
-	attr = Directive.attr,
-	event = Directive.event,
-	onDestroy = Directive.onDestroy,
-	ref = Directive.ref,
-	tag = Directive.tag,
-
-	-- TODO: better context using scopes
-	context = Context.new,
-
+	isModel = Bind.isModel,
+	modelNode = Bind.modelNode,
+	show = Conditional.show,
+	showKeyed = Conditional.showKeyed,
+	switch = Conditional.switch,
+	otherwise = Conditional.otherwise,
+	presence = Conditional.presence,
+	pick = Conditional.pick,
+	fallback = Conditional.fallback,
+	forValue = Conditional.forValue,
+	forIndex = Conditional.forIndex,
 	spring = Motion.spring,
 	tween = Motion.tween,
 
-	viewport = Responsive.viewport,
-	scale = Responsive.scale,
-	safeArea = Responsive.safeArea,
-
+	-- Layout instances
 	padding = Layout.padding,
 	corner = Layout.corner,
 	stroke = Layout.stroke,
@@ -178,25 +264,9 @@ local Flux = {
 	list = Layout.list,
 	grid = Layout.grid,
 	flex = Layout.flex,
-
-	exclusive = Interact.exclusive,
-	pointIn = Interact.pointIn,
-	sunk = Interact.sunk,
-
-	clean = Clean,
-	async = Async.new,
-	safe = Safe.safe,
-	catch = Safe.catch,
-	forValue = For.value,
-	forIndex = For.index,
-	selector = Selector.new,
-	default = Conditional.default,
-	show = Conditional.show,
-	showKeyed = Conditional.showKeyed,
-	switch = Conditional.switch,
-	store = Store.new,
-	props = Wrap.props,
-	wrap = Wrap.wrap,
+	gradient = Layout.gradient,
+	sizeConstraint = Layout.sizeConstraint,
+	textSizeConstraint = Layout.textSizeConstraint,
 }
 
 local FluxMT = {}
@@ -204,41 +274,56 @@ local FluxMT = {}
 local bindNode = Bind.node
 
 --[[
-The terse constructor: `Flux(value)` wraps a static value, `Flux(fn)` a
-[computed](https://flux.kohl.gg/guide/concepts/computeds), `Flux(fn, true)` an
-[effect](https://flux.kohl.gg/guide/concepts/effects), and `Flux(instance, property)` binds a new node from
-a Roblox [`Instance`](https://create.roblox.com/docs/reference/engine/classes/Instance) property or attribute.
-@param obj - A static value, a computation function, or a Roblox [`Instance`](https://create.roblox.com/docs/reference/engine/classes/Instance) to bind from.
-@param effectOrProperty - When `obj` is a function, `true` marks it an [effect](https://flux.kohl.gg/guide/concepts/effects); when `obj` is an [`Instance`](https://create.roblox.com/docs/reference/engine/classes/Instance), the property or attribute name to bind.
+The terse constructor: `Flux(value)` is a [signal](https://flux.kohl.gg/guide/concepts/signals), `Flux(fn)` a
+[computed](https://flux.kohl.gg/guide/concepts/computeds), and `Flux(instance, property)` a node following a Roblox
+[`Instance`](https://create.roblox.com/docs/reference/engine/classes/Instance) property, `"$Attribute"` /
+`"_attr_Attribute"`, or `"#Tag"` / `"_tag_Tag"`. A node is returned as is. The result is a `Node<any>`; use
+`Flux.signal`, `Flux.computed`, `Flux.effect` and `Flux.property` for typed nodes.
+
+```luau
+local size = Flux(frame, "AbsoluteSize")
+```
 
 [Open Documentation](https://flux.kohl.gg/guide/concepts/signals#creating-a-signal)
 ]]
-function FluxMT.__call<T>(self: any, obj: (() -> T) | T, effectOrProperty: boolean? | string?): Graph.Node<T>
-	return bindNode(obj, effectOrProperty)
+function FluxMT.__call(_: any, obj: any, propertyName: string?): Graph.Node<any>
+	return bindNode(obj, propertyName)
 end
 
 --[[
-Hydrates an existing Roblox [`Instance`](https://create.roblox.com/docs/reference/engine/classes/Instance),
-applying reactive properties, event handlers, and directives just like
-[`Flux.new`](https://flux.kohl.gg/guide/roblox/creation#the-flux-new-function), but onto an
-[`Instance`](https://create.roblox.com/docs/reference/engine/classes/Instance) you already have. Returns a
-function that takes the property table. Called inside a [`Flux.scope`](https://flux.kohl.gg/guide/concepts/scopes), the
-bindings are owned by that scope and disconnected when it is destroyed.
+Hydrates an existing Roblox [`Instance`](https://create.roblox.com/docs/reference/engine/classes/Instance): applies
+reactive properties, events and directives like
+[`Flux.new`](https://flux.kohl.gg/guide/roblox/creation#the-flux-new-function), onto an instance you already have.
+Inside a [`Flux.scope`](https://flux.kohl.gg/guide/concepts/scopes) the bindings end with the scope.
+
+```luau
+Flux.edit(existingLabel) { Text = function() return `HP {health()}` end }
+```
 
 [Open Documentation](https://flux.kohl.gg/guide/roblox/hydration#the-flux-edit-function)
 ]]
 function Flux.edit<T>(instance: T & Instance)
 	return function(properties: Type.EditProperties<T>): T
-		return Edit(instance, properties)
+		return editInstance(instance, properties)
 	end
 end
 
 --[[
-Creates a new Roblox [`Instance`](https://create.roblox.com/docs/reference/engine/classes/Instance) of
-`className` with per-class [defaults](https://flux.kohl.gg/guide/roblox/defaults) applied, then returns a
-function that takes a property table of static values, reactive
-[node](https://flux.kohl.gg/guide/concepts/signals)s, children, and directives. Created inside a
-[`Flux.scope`](https://flux.kohl.gg/guide/concepts/scopes), the instance is owned by that scope and destroyed with it.
+Creates a Roblox [`Instance`](https://create.roblox.com/docs/reference/engine/classes/Instance) of `className` with
+its per-class [defaults](https://flux.kohl.gg/guide/roblox/defaults), then takes a property table of values, nodes,
+getters, events, children, prefix keys (`_Prop`, `_attr_Name`, `__attr_Name`, `_tag_Name`, `__tag_Name`), and
+directives (`__EVENT`, `__ATTR`, `__TAG`, `__REF`, `__CLEAN`). Created inside a
+[`Flux.scope`](https://flux.kohl.gg/guide/concepts/scopes), the instance is destroyed with it.
+
+```luau
+Flux.new "Frame" {
+	Size = UDim2.fromScale(1, 1),
+	BackgroundTransparency = function() return if hovered() then 0 else 0.5 end,
+	_attr_Kind = "Panel",
+	_tag_Interactive = true,
+	Flux.new "UICorner" {},
+}
+```
 
 [Open Documentation](https://flux.kohl.gg/guide/roblox/creation#the-flux-new-function)
 ]]
@@ -247,10 +332,24 @@ function Flux.new<T>(className: T | keyof<Type.Creatable>)
 end
 
 if game then
-	game:GetService("RunService").Heartbeat:Connect(function()
-		Motion.step()
-		Graph.flush()
+	local RunService = game:GetService("RunService")
+	local frame = if RunService:IsClient() then RunService.PreRender else RunService.Heartbeat
+	frame:Connect(function()
+		if not Clock.isManual() then
+			Motion.step()
+			Graph.flush()
+		end
 	end)
 end
 
-return table.freeze(setmetatable(Flux, table.freeze(FluxMT)))
+Clock._internal.setFrame(function(dt: number)
+	Motion.step(dt)
+	Graph.flush()
+end)
+
+--- @ignore
+type FluxCall = {
+	__call: (self: any, obj: any, propertyName: string?) -> Graph.Node<any>,
+}
+
+return table.freeze(setmetatable(Flux, table.freeze(FluxMT) :: FluxCall))
