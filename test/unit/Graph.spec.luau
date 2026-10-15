@@ -15,22 +15,10 @@ end
 local test = sert.test
 local expect = sert
 local expectError = sert.fails
-local new = Flux.Graph.new
+local new = Flux
 local flush = Flux.flush
 local untrack = Flux.untrack
 local retrack = Flux.retrack
-local Graph = Flux.Graph
-
--- Run `fn` with strict ON, always restoring the flag afterward (a leaked-ON
--- flag would double-run every later test). Re-raises any error after restoring.
-local function withStrict(fn: () -> ())
-	Flux.strict(true)
-	local ok, err = pcall(fn)
-	Flux.strict(false)
-	if ok == false then
-		error(err, 2)
-	end
-end
 
 test("value · read/write and call sugar", function()
 	local v = Flux(10)
@@ -103,9 +91,9 @@ test("value · update() re-fires dependents without writing", function()
 		runs += 1
 		return #items()
 	end)
-	Flux(function()
+	Flux.effect(function()
 		seen = #items()
-	end, true)
+	end)
 	flush()
 	expect(c() == 1 and runs == 1 and seen == 1, "baseline evaluation")
 
@@ -238,10 +226,10 @@ end)
 test("effect · deferred, runs on flush, re-runs on change", function()
 	local v = Flux(0)
 	local runs, last = 0, nil
-	Flux(function()
+	Flux.effect(function()
 		runs += 1
 		last = v()
-	end, true)
+	end)
 	expect(runs == 0, "effect is deferred, not run on creation")
 	flush()
 	expect(runs == 1 and last == 0, "effect runs on flush")
@@ -253,12 +241,12 @@ end)
 test("effect · survives a suppressed error and stays reactive (expected warn)", function()
 	local v = Flux(1)
 	local runs = 0
-	Flux(function()
+	Flux.effect(function()
 		runs += 1
 		if v() == 2 then
 			error("effect failure (expected warn)")
 		end
-	end, true)
+	end)
 	flush()
 	expect(runs == 1, "baseline run")
 	v(2)
@@ -272,12 +260,12 @@ end)
 test("effect · survives an error on its very first run (expected warn)", function()
 	local v = Flux(2)
 	local runs = 0
-	Flux(function()
+	Flux.effect(function()
 		runs += 1
 		if v() == 2 then
 			error("first-run failure (expected warn)")
 		end
-	end, true)
+	end)
 	flush()
 	expect(runs == 1, "first run errored")
 	v(3)
@@ -285,31 +273,13 @@ test("effect · survives an error on its very first run (expected warn)", functi
 	expect(runs == 2, "effect stays subscribed to sources read before the error")
 end)
 
-test("effect · survives a first-run error under strict mode (expected warn)", function()
-	withStrict(function()
-		local v = Flux(2)
-		local runs = 0
-		Flux(function()
-			runs += 1
-			if v() == 2 then
-				error("first-run failure (expected warn)")
-			end
-		end, true)
-		flush()
-		expect(runs == 1, "first run errored")
-		v(3)
-		flush()
-		expect(runs == 3, "effect recovered; strict double-runs the successful pass")
-	end)
-end)
-
 test("effect · batches multiple writes per flush", function()
 	local v = Flux(0)
 	local runs, last = 0, nil
-	Flux(function()
+	Flux.effect(function()
 		runs += 1
 		last = v()
-	end, true)
+	end)
 	flush()
 	expect(runs == 1 and last == 0, "baseline")
 	v(1)
@@ -323,13 +293,13 @@ end)
 test("effect · cleanup runs before each re-run", function()
 	local trigger = Flux(0)
 	local effectRuns, cleanups = 0, 0
-	Flux(function()
+	Flux.effect(function()
 		effectRuns += 1
 		local _ = trigger()
 		Flux.cleanup(function()
 			cleanups += 1
 		end)
-	end, true)
+	end)
 	flush()
 	expect(effectRuns == 1 and cleanups == 0, "no cleanup before first re-run")
 	trigger(1)
@@ -349,7 +319,7 @@ end)
 test("effect · cleanup rejects uncleanable objects, naming the type", function()
 	local scope = Flux.scope(function()
 		expectError(function()
-			Flux.cleanup({} :: any)
+			Flux.cleanup({ a = 1 } :: any)
 		end, "cannot cleanup given object: table")
 		expectError(function()
 			Flux.cleanup(5 :: any)
@@ -371,10 +341,10 @@ end)
 test("effect · stops re-running after Destroy", function()
 	local v = Flux(0)
 	local runs = 0
-	local e = Flux(function()
+	local e = Flux.effect(function()
 		runs += 1
 		local _ = v()
-	end, true)
+	end)
 	flush()
 	expect(runs == 1, "baseline")
 	e:Destroy()
@@ -386,12 +356,12 @@ end)
 test("node · cleanup runs exactly once on Destroy", function()
 	local trigger = Flux(0)
 	local cleanups = 0
-	local e = Flux(function()
+	local e = Flux.effect(function()
 		local _ = trigger()
 		Flux.cleanup(function()
 			cleanups += 1
 		end)
-	end, true)
+	end)
 	flush()
 	expect(cleanups == 0, "cleanup has not run before Destroy")
 	e:Destroy()
@@ -419,18 +389,18 @@ test("flush · re-entrant flush from an effect is a no-op", function()
 	local a = new(1)
 	local b = new(0)
 	local innerRuns = 0
-	local _inner = new(function()
+	local _inner = Flux.effect(function()
 		b:get()
 		innerRuns += 1
-	end, true)
+	end)
 	flush()
 	local tailRan = 0
-	local _outer = new(function()
+	local _outer = Flux.effect(function()
 		a:get()
 		b:set(b:peek() + 1)
 		flush() -- re-entrant: must be a no-op, not a cyclic-read error
 		tailRan += 1
-	end, true)
+	end)
 	flush()
 	expect(tailRan == 1, "effect body completes")
 	a:set(2)
@@ -502,22 +472,19 @@ test("untrack · zero-arg pair suppresses reads until track()", function()
 	local tracked = new(1)
 	local suppressed = new(10)
 	local runs = 0
-	local c = new(function()
+	local c = Flux.computed(function()
 		runs += 1
 		local a = tracked:get() -- dependency
 		untrack()
 		local b = suppressed:get() -- inside the bracket: NOT a dependency
 		retrack()
 		return a + b
-	end, true)
-	flush()
-	expect(runs == 1 and c:get() == 11, "initial")
+	end)
+	expect(c:get() == 11 and runs == 1, "initial")
 	suppressed:set(20)
-	flush()
-	expect(runs == 1, "read between untrack()/track() never became a dependency")
+	expect(c:get() == 11 and runs == 1, "read between untrack()/track() never became a dependency")
 	tracked:set(2)
-	flush()
-	expect(runs == 2 and c:get() == 22, "a tracked read still re-triggers; bracketed read re-evaluated")
+	expect(c:get() == 22 and runs == 2, "a tracked read still re-triggers; bracketed read re-evaluated")
 end)
 
 test("scope · owns reactions; plain signals survive for the GC", function()
@@ -619,7 +586,7 @@ test("scope · nested scopes cascade on root destroy", function()
 end)
 
 test("scope · cascade teardown strips owned reactions like a direct Destroy; signals survive", function()
-	-- Destroying a reaction (direct or via an owning scope) strips its inner node table but leaves
+	-- Destroying a reaction (direct or via an owning scope) clears its FN/VALUE/OBSERVERS but leaves
 	-- the wrapper + metatable intact, so isNode stays true and the GC reclaims the wrapper. A plain
 	-- signal is not owned, so the cascade leaves it intact (the GC reclaims it once unreferenced).
 	local direct = Flux(function()
@@ -628,7 +595,7 @@ test("scope · cascade teardown strips owned reactions like a direct Destroy; si
 	direct() -- evaluate the reaction
 	direct:Destroy()
 	expect(Flux.isNode(direct) == true, "directly destroyed reaction keeps its metatable")
-	expect(direct() == nil and next(direct[Flux.Graph.Node.__type]) == nil, "its inner table is present but stripped")
+	expect(direct() == nil and direct[1][7] == nil, "its inner table is present and its fn is cleared")
 
 	local leaf, nested, signal
 	local root = Flux.scope(function()
@@ -668,206 +635,50 @@ test("prev · computed receives its previous value as the first arg", function()
 	expect(runs == 2 and prevs[2] == 0, "second run sees the prior value 0")
 end)
 
-test("prev · effect receives its previous value (accumulator pattern)", function()
+test("prev · computed accumulator pattern across multiple updates", function()
 	local input = new(10)
 	local deltas = {}
-	local e = new(function(prev)
+	local c = new(function(prev)
 		local v = input:get()
 		deltas[#deltas + 1] = if prev ~= nil then v - prev else v
 		return v
-	end, true)
-	flush()
+	end)
+	expect(c:get() == 10, "first evaluation")
 	input:set(25)
-	flush()
+	expect(c:get() == 25, "second evaluation")
 	input:set(20)
-	flush()
+	expect(c:get() == 20, "third evaluation")
 	expect(deltas[1] == 10, "first run delta is the value itself")
 	expect(deltas[2] == 15, "delta from 10 to 25")
 	expect(deltas[3] == -5, "delta from 25 to 20")
-	e:Destroy()
-end)
-
-test("strict · off by default; toggle via Flux.strict", function()
-	expect(Flux.strict() == false, "strict defaults off")
-	Flux.strict(true)
-	expect(Flux.strict() == true, "Flux.strict(true) enables")
-end)
-
-test("strict · pure computation runs twice but is silent and correct", function()
-	withStrict(function()
-		local a = new(2)
-		local runs = 0
-		local c = new(function()
-			runs += 1
-			return a:get() * 10
-		end)
-		expect(c:get() == 20, "value correct under strict")
-		expect(runs == 2, "strict double-runs the body on first evaluation")
-		a:set(3)
-		expect(c:get() == 30 and runs == 4, "re-eval double-runs again")
-	end)
-end)
-
-test("strict · impure body keeps the graph usable", function()
-	-- A non-pure body just runs twice; the value is the second pass's. The graph stays usable.
-	withStrict(function()
-		local a = new(1)
-		local hidden = 0
-		local c = new(function()
-			hidden += 1
-			return a:get() + hidden
-		end)
-		local _ = c:get()
-		expect(Graph.isReactive() == false, "context restored after the strict double-run")
-		a:set(2)
-		expect(type(c:get()) == "number", "graph stays usable after an impure double-run")
-	end)
-end)
-
-test("strict · dependency-set stays consistent across a branch flip", function()
-	withStrict(function()
-		local cond = new(true)
-		local x = new(1)
-		local y = new(100)
-		local c = new(function()
-			return if cond:get() then x:get() else y:get()
-		end)
-		expect(c:get() == 1, "branch true reads x")
-		expect(c() == 1, "stable re-read")
-		cond:set(false)
-		expect(c:get() == 100, "branch flip re-evaluates correctly under strict")
-	end)
-end)
-
-test("strict · accumulator body double-applies (feed-forward, like Vide)", function()
-	-- The second pass is fed the first pass's result, so a body that builds on its prev value
-	-- advances twice under strict, surfacing that it is not safe to run more than once.
-	withStrict(function()
-		local tick = new(0)
-		local c = new(function(prev)
-			tick:get()
-			return (prev or 0) + 1
-		end)
-		expect(c:get() == 2, "first eval: nil -> 1 -> 2 across the two passes")
-		tick:set(1)
-		expect(c:get() == 4, "second eval: 2 -> 3 -> 4 across the two passes")
-	end)
-end)
-
-test("strict · table-returning body re-evaluates cleanly", function()
-	-- The double-run doesn't compare results, so a body returning a fresh table each pass is fine;
-	-- the node simply keeps the second pass's table.
-	withStrict(function()
-		local a = new(1)
-		local c = new(function()
-			return { a:get() }
-		end)
-		expect(c:get()[1] == 1, "table memo value correct under strict")
-		a:set(2)
-		expect(c:get()[1] == 2, "table memo re-evaluates under strict")
-	end)
-end)
-
-test("strict · effects run twice per evaluation, like Vide", function()
-	-- Vide-style strict re-runs every reactive scope, effects included, so a non-idempotent
-	-- effect body surfaces its double-fire in dev rather than hiding behind a single run.
-	withStrict(function()
-		local a = new(1)
-		local fires = 0
-		local e = new(function()
-			a:get()
-			fires += 1
-		end, true)
-		flush()
-		expect(fires == 2, "effect body double-runs on creation under strict")
-		a:set(2)
-		flush()
-		expect(fires == 4, "effect double-runs again on change")
-		e:Destroy()
-	end)
-end)
-
-test("strict · a body that errors on the second pass propagates the error", function()
-	-- Unlike the old sandboxed diagnostic, the Vide-style double-run is authoritative: an error
-	-- on either pass propagates out of the read rather than being swallowed.
-	withStrict(function()
-		local calls = 0
-		local c = new(function()
-			calls += 1
-			if calls == 2 then
-				error("boom on the second pass")
-			end
-			return 42
-		end)
-		expectError(function()
-			return c:get()
-		end, "boom on the second pass", "second-pass error propagates out of the read")
-	end)
-end)
-
-test("strict · re-entrant computation errors as an active scope", function()
-	-- Reading a computed from within its own body means a dependency it should subscribe to is
-	-- still evaluating, a reactive cycle. Strict catches it via the active-scope stack.
-	withStrict(function()
-		local c
-		c = new(function()
-			return c:get() + 1
-		end)
-		expectError(function()
-			return c:get()
-		end, "already active", "self-referential computed errors under strict")
-	end)
-end)
-
-test("strict · destroying the running scope errors", function()
-	-- A body that destroys its own scope mid-run is caught instead of corrupting the graph.
-	withStrict(function()
-		local c
-		c = new(function()
-			c:Destroy()
-			return 1
-		end)
-		expectError(function()
-			return c:get()
-		end, "active scope", "destroying the active scope mid-run errors")
-	end)
-end)
-
-test("strict · disabling restores the single-run fast path", function()
-	Flux.strict(false)
-	local a = new(5)
-	local runs = 0
-	local c = new(function()
-		runs += 1
-		return a:get()
-	end)
-	expect(c:get() == 5 and runs == 1, "exactly one run when strict is off")
-	a:set(6)
-	expect(c:get() == 6 and runs == 2, "still single-run per eval")
+	c:Destroy()
 end)
 
 test("dispose · destroying a source prunes only that source from observers", function()
 	-- The dependency-list invariant: disposing a node must remove ONLY that node from each
-	-- observer's source list, never a live sibling. Regression for the swap that assigned
-	-- the loop-local variable instead of the array slot in normalDispose.
-	local SOURCES = 7 -- node-data slot for the source array (Graph.luau field layout)
+	-- observer's source list, never a live sibling.
 	local a = new(1)
 	local b = new(2)
 	local c = Flux.computed(function()
 		return a() + b()
 	end)
+	local eff = Flux.effect(function()
+		c()
+	end)
+	flush()
 	expect(c() == 3, "computed reads both sources")
 
 	a:Destroy()
 
-	local sources = c[Flux.Graph.Node.__type][SOURCES]
+	local inner = c[1]
 	local hasLive, hasDead = false, false
-	for _, node in sources do
-		hasLive = hasLive or node == b[Flux.Graph.Node.__type]
-		hasDead = hasDead or node == a[Flux.Graph.Node.__type]
+	for i = 11, inner[8] - 2, 2 do
+		hasLive = hasLive or inner[i] == b[1]
+		hasDead = hasDead or inner[i] == a[1]
 	end
 	expect(hasLive, "the live sibling source b is retained")
 	expect(not hasDead, "the destroyed source a is pruned")
+	eff:Destroy()
 end)
 
 test("value · node(nil) is a read; force or :set writes nil", function()
@@ -884,15 +695,279 @@ test("value · node(nil) is a read; force or :set writes nil", function()
 	expect(s() == nil, "node:set(nil) writes nil without force")
 end)
 
-test("cleanup · rejects a bare array (use Flux.clean for nested teardown)", function()
-	-- Flux.cleanup takes ONE cleanable; arrays are not recursed (that's Flux.clean's job).
-	-- A plain table without a Destroy/destroy/Disconnect/disconnect method is not cleanable.
+test("cleanup · rejects a bare array (use Flux.dispose for nested teardown)", function()
+	-- Flux.cleanup takes ONE cleanable; arrays with functions are cleanable via Flux.dispose.
+	-- A plain table with non-cleanable elements or non-empty keys without a teardown method is not cleanable.
 	local threw
 	local s = Flux.scope(function()
-		threw = not pcall(Flux.cleanup, { function() end, function() end })
+		threw = not pcall(Flux.cleanup, { a = 1 })
 	end)
 	s:Destroy()
-	expect(threw, "Flux.cleanup of a plain array errors; use Flux.clean for arrays")
+	expect(threw, "Flux.cleanup of a plain map errors")
+end)
+
+test("createSignal, createMemo & createEffect · lightweight tuple and function primitives", function()
+	local count, setCount = Flux.createSignal(2, function(a, b)
+		return math.abs(a - b) < 2
+	end)
+	local memoRuns = 0
+	local effectSeen = 0
+	local scope = Flux.scope(function()
+		local doubled = Flux.createMemo(function()
+			memoRuns += 1
+			return count() * 2
+		end, function(a, b)
+			return a == b
+		end)
+		Flux.createEffect(function()
+			effectSeen = doubled()
+		end)
+		expect(doubled() == 4 and memoRuns == 1, "createMemo evaluates lazily")
+	end)
+	flush()
+	expect(effectSeen == 4, "createEffect ran on flush")
+
+	-- Within custom equals tolerance (< 2): skipped unless forced
+	setCount(3)
+	flush()
+	expect(effectSeen == 4 and memoRuns == 1, "createSignal custom equals skipped propagation")
+
+	setCount(3, true)
+	flush()
+	expect(effectSeen == 6 and memoRuns == 2, "forced setCount propagated")
+
+	setCount(10)
+	flush()
+	expect(effectSeen == 20 and memoRuns == 3, "setCount beyond tolerance propagated")
+
+	scope:Destroy()
+	setCount(50)
+	flush()
+	expect(effectSeen == 20 and memoRuns == 3, "scope teardown stopped createEffect and createMemo")
+end)
+
+test("getter & setter · extract fast reader and writer functions from nodes", function()
+	local sig = Flux.signal(10)
+	local getSig = Flux.getter(sig)
+	local setSig = Flux.setter(sig)
+	expect(getSig() == 10, "signal getter reads value")
+	setSig(25)
+	expect(getSig() == 25 and sig:peek() == 25, "signal setter writes value")
+	setSig(nil :: any)
+	expect(getSig() == nil, "signal setter writes nil without force")
+	setSig(4)
+
+	local comp = Flux.computed(function()
+		return getSig() * 3
+	end)
+	local getComp = Flux.getter(comp)
+	local setComp = Flux.setter(comp)
+	expect(getComp() == 12, "computed getter reads and pulls")
+	setComp(99)
+	expect(getComp() == 99 and comp:peek() == 99, "computed setter overrides cached value")
+	setSig(5)
+	expect(getComp() == 15, "upstream change recomputes overridden computed")
+
+	-- Generic Node metatable path (mt == Graph.Node)
+	local sc = Flux.scope(function() end)
+	local nodeMT = getmetatable(sc :: any)
+	local genericNode: any = setmetatable({ (sig :: any)[1] }, nodeMT)
+	local getGeneric = Flux.getter(genericNode)
+	local setGeneric = Flux.setter(genericNode)
+	setGeneric(77)
+	expect(getGeneric() == 77 and genericNode:get() == 77 and genericNode:peek() == 77, "generic node getter/setter")
+
+	-- Scope node setter is a safe no-op
+	local setScope = Flux.setter(sc :: any)
+	expect(setScope("ignored") == "ignored", "scope setter returns value without mutating scope")
+	sc:Destroy()
+
+	sert.fails(function()
+		Flux.getter("not a node" :: any)
+	end, "Flux.getter expects a node")
+	sert.fails(function()
+		Flux.setter("not a node" :: any)
+	end, "Flux.setter expects a node")
+end)
+
+test("onObserved & onUnobserved · fire when a node gains and loses transitive effect observers", function()
+	local sig = Flux.signal(1)
+	local mid = Flux.computed(function()
+		return sig() * 10
+	end)
+	local sigObs, sigUnobs = 0, 0
+	local midObs, midUnobs = 0, 0
+	sig:onObserved(function()
+		sigObs += 1
+	end)
+	sig:onUnobserved(function()
+		sigUnobs += 1
+	end)
+	mid:onObserved(function()
+		midObs += 1
+	end)
+	mid:onUnobserved(function()
+		midUnobs += 1
+	end)
+
+	-- Reading mid outside an effect does not make it observed by an effect
+	expect(mid() == 10, "pulled value")
+	expect(sigObs == 0 and midObs == 0, "unobserved before any effect subscribes")
+
+	local eff = Flux.effect(function()
+		mid()
+	end)
+	flush()
+	expect(sigObs == 1 and midObs == 1, "both signal and intermediate computed became observed")
+	expect(sigUnobs == 0 and midUnobs == 0, "not unobserved while effect is alive")
+
+	eff:Destroy()
+	expect(sigUnobs == 1 and midUnobs == 1, "destroying the effect fires onUnobserved through the chain")
+end)
+
+test("computed · direct write via :set and call shorthand notifies observers", function()
+	local base = Flux.signal(2)
+	local comp = Flux.computed(function()
+		return base() * 5
+	end)
+	local seen = 0
+	local eff = Flux.effect(function()
+		seen = comp()
+	end)
+	flush()
+	expect(seen == 10, "initial computed value")
+
+	comp:set(42)
+	flush()
+	expect(seen == 42 and comp:peek() == 42, "computed:set(42) overrides and notifies effect")
+
+	comp(77)
+	flush()
+	expect(seen == 77, "computed(77) call-write overrides and notifies effect")
+
+	base:set(3)
+	flush()
+	expect(seen == 15, "upstream signal change re-evaluates the computed")
+	eff:Destroy()
+end)
+
+test("operators · arithmetic, comparison, concat, and tostring on nodes", function()
+	local a = Flux.signal(10)
+	local b = Flux.computed(function()
+		return 3
+	end)
+	expect(tostring(a) == "10" and tostring(b) == "3", "__tostring")
+	expect((a .. "px") == "10px" and ("v=" .. b) == "v=3" and (a .. b) == "103", "__concat")
+	expect(-a == -10 and -b == -3, "__unm")
+	expect(a + b == 13 and a + 5 == 15, "__add")
+	expect(a - b == 7 and 20 - a == 10, "__sub")
+	expect(a * b == 30, "__mul")
+	expect(a / 2 == 5, "__div")
+	expect(a // b == 3, "__idiv")
+	expect(a % b == 1, "__mod")
+	expect(b ^ 2 == 9, "__pow")
+	expect(b < a and not (a < b), "__lt")
+	expect(b <= a and a <= a and not (a <= b), "__le")
+end)
+
+test("withOwner & getOwner · rebind ownership and immediately dispose work on a destroyed owner", function()
+	expect(Flux.getOwner() == nil, "no owner at root")
+	local capturedOwner
+	local cleaned = 0
+	local scope = Flux.scope(function()
+		capturedOwner = Flux.getOwner()
+		expect(capturedOwner ~= nil, "getOwner returns active scope")
+	end)
+
+	-- Attach work to the live scope from outside
+	Flux.withOwner(capturedOwner, function()
+		Flux.cleanup(function()
+			cleaned += 1
+		end)
+	end)
+	expect(cleaned == 0, "cleanup attached to live owner waits for owner teardown")
+	scope:Destroy()
+	expect(cleaned == 1, "destroying the scope ran the withOwner cleanup")
+
+	-- Running withOwner on an already-destroyed owner disposes created work immediately
+	local lateCleaned = 0
+	Flux.withOwner(capturedOwner, function()
+		Flux.cleanup(function()
+			lateCleaned += 1
+		end)
+	end)
+	expect(lateCleaned == 1, "work registered on a destroyed owner is disposed as soon as fn returns")
+end)
+
+test("effect · nested synchronous effect creation does not clobber outer selfWritten requeue", function()
+	local sig = Flux.signal(0)
+	local outerRuns = 0
+	local innerRuns = 0
+	local outer = Flux.effect(function()
+		outerRuns += 1
+		local v = sig()
+		if v == 1 then
+			sig:set(2) -- marks outer as selfWritten
+			-- Create and synchronously evaluate a nested effect via untrack/scope or computed
+			local inner = Flux.effect(function()
+				innerRuns += 1
+			end)
+			inner:Destroy()
+		end
+	end)
+	flush()
+	expect(outerRuns == 1, "initial outer run")
+
+	sig:set(1)
+	flush()
+	expect(outerRuns == 3, "outer effect re-ran for v=1 and again for its self-write v=2")
+	expect(sig:peek() == 2, "self-write landed")
+	outer:Destroy()
+end)
+
+test("computed · self-referential computed does not overflow stack on upstream write", function()
+	local trigger = Flux.signal(1)
+	local comp: any
+	comp = Flux.computed(function(prev)
+		local t = trigger()
+		if t > 1 then
+			-- Reading comp() inside its own evaluation should not add a self-edge
+			local _ = comp()
+		end
+		return (prev or 0) + t
+	end)
+	expect(comp() == 1, "first evaluation")
+	trigger:set(2)
+	expect(comp() == 3, "second evaluation with self-read")
+	trigger:set(3)
+	expect(comp() == 6, "third evaluation did not cycle in raise()")
+	comp:Destroy()
+end)
+
+test("onObserved & onUnobserved · only fire on 0->1 and 1->0 effect observer transitions", function()
+	local sig = Flux.signal(10)
+	local obs, unobs = 0, 0
+	sig:onObserved(function()
+		obs += 1
+	end)
+	sig:onUnobserved(function()
+		unobs += 1
+	end)
+
+	local e1 = Flux.effect(function()
+		sig()
+	end)
+	local e2 = Flux.effect(function()
+		sig()
+	end)
+	flush()
+	expect(obs == 1 and unobs == 0, "onObserved fired once when 2 effects subscribed")
+
+	e1:Destroy()
+	expect(obs == 1 and unobs == 0, "destroying first of two effects does not fire onUnobserved")
+
+	e2:Destroy()
+	expect(obs == 1 and unobs == 1, "destroying last effect fires onUnobserved")
 end)
 
 return {}

@@ -29,19 +29,17 @@ else
 	sert = require("./sert") :: any
 end
 
--- Establish the clean baseline BEFORE each test: headless, strict defaults ON
--- (dev/unoptimized), so without this the very first test in a run sees strict enabled.
-sert.beforeEach(function()
-	Flux.strict(false)
-end)
-
--- afterEach resets the leak-prone globals a test might flip (strict, Flags.defaults,
+-- afterEach resets the leak-prone globals a test might flip (Flags.defaults,
 -- the responsive viewport singleton) so a throwing test can't leak them into the
 -- tests after it, and registration order across suites stays irrelevant.
 sert.afterEach(function()
-	Flux.strict(false)
 	Flux.Flags.defaults = true
-	Flux.viewport:set((if IS_ROBLOX then Vector2.new(1920, 1080) else { X = 1920, Y = 1080 }) :: any)
+	Flux.Responsive.viewport:set((if IS_ROBLOX then Vector2.new(1920, 1080) else { X = 1920, Y = 1080 }) :: any)
+	if IS_ROBLOX and Flux.Clock.isManual() then
+		Flux.Clock.manual(false)
+	else
+		Flux.Clock.reset()
+	end
 end)
 
 if IS_ROBLOX then

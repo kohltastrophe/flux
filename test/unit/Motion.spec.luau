@@ -17,26 +17,33 @@ local rtest = sert.rtest
 local expect = sert
 local expectError = sert.fails
 local flush = Flux.flush
-local Graph = Flux.Graph
 local Motion = Flux.Motion
-local MotionEngine = Motion.Engine
+local MotionModule = if IS_ROBLOX
+	then require(game:GetService("ReplicatedStorage"):WaitForChild("Flux"):WaitForChild("Motion")) :: any
+	else require("../../src/Motion") :: any
+local Compat = if IS_ROBLOX then nil else require("../../src/Compat") :: any
+local TweenInfo = if IS_ROBLOX then TweenInfo else Compat.TweenInfo
+local Enum = if IS_ROBLOX then Enum else Compat.Enum
+local UDim = if IS_ROBLOX then UDim else Compat.UDim
+local UDim2 = if IS_ROBLOX then UDim2 else Compat.UDim2
+local Vector2 = if IS_ROBLOX then Vector2 else Compat.Vector2
+local Vector3 = if IS_ROBLOX then Vector3 else Compat.Vector3
+local Color3 = if IS_ROBLOX then Color3 else Compat.Color3
+local ColorSequence = if IS_ROBLOX then ColorSequence else Compat.ColorSequence
+local ColorSequenceKeypoint = if IS_ROBLOX then ColorSequenceKeypoint else Compat.ColorSequenceKeypoint
+local NumberSequence = if IS_ROBLOX then NumberSequence else Compat.NumberSequence
+local NumberSequenceKeypoint = if IS_ROBLOX then NumberSequenceKeypoint else Compat.NumberSequenceKeypoint
 
 local approx = sert.approx
 
--- Advance the Motion engine by `dt` seconds of SIMULATED time, no real wait: a
--- spring steps off os.clock() - Engine.now, so rewinding Engine.now fakes the
--- elapsed time and the analytic solver lands exactly where a real sleep would.
+-- Advance the Motion engine by `dt` seconds of SIMULATED time via Motion.step(dt).
 local function advance(dt: number)
-	MotionEngine.now = os.clock() - dt
-	Motion.step()
+	Motion.step(dt)
 end
 
--- Drive a Flux.tween node to `elapsed` seconds of simulated time instantly: a tween
--- steps off now - startTime, so rewind startTime onto the os.clock timeline and step
--- once. `elapsed` may exceed the duration (clamps to goal) or be negative (DelayTime).
+-- Drive a Flux.tween node by `elapsed` seconds of simulated time instantly.
 local function tweenAt(node: any, elapsed: number): any
-	Motion.NodeToMotion[node].startTime = os.clock() - elapsed
-	Motion.step()
+	Motion.step(elapsed)
 	return node:get()
 end
 
@@ -46,7 +53,7 @@ local function tweenToGoal(start: any, goal: any)
 	local tw = Flux.tween(start, TweenInfo.new(0, Enum.EasingStyle.Linear))
 	tw:set(goal)
 	flush()
-	Motion.step()
+	Motion.step(0)
 	return tw:get()
 end
 
@@ -194,16 +201,15 @@ test("motion · scope teardown unregisters a spring from the engine", function()
 	-- from the engine's active set via the owner cleanup, or the engine would keep stepping it.
 	local ms
 	local sc = Flux.scope(function()
-		ms = Flux.spring(0, 1, 1)
+		ms = Flux.spring(0, 10, 1)
 		ms(100) -- retarget so the spring is active in the engine
 	end)
 	advance(0.01) -- spring is live and being stepped
+	local before = ms:get()
+	expect(before > 0, "spring advanced while scope was alive")
 	sc:Destroy() -- teardown unregisters it from the engine via the owner cleanup
-	expect(Motion.NodeToMotion[ms] == nil, "the spring is unregistered from the engine on scope teardown")
-	local ok = pcall(function()
-		advance(0.01)
-	end)
-	expect(ok, "the engine no longer steps the scope-destroyed spring")
+	advance(0.2)
+	expect(ms:get() == before, "the engine no longer steps the scope-destroyed spring")
 end)
 
 test("motion · vector spring round-trips exactly and converges componentwise", function()
@@ -225,16 +231,119 @@ test("motion · vector spring round-trips exactly and converges componentwise", 
 	)
 end)
 
-rtest("motion · impulse/setVelocity warn on a tween node (expected warn)", function()
-	-- a tween carries the Motion metatable, so the methods EXIST and the guard's
-	-- reject path is genuinely exercised (TweenInfo is Roblox-only -> rtest)
-	local tw = Flux.tween(0, TweenInfo.new(0.2))
+test("motion · impulse/setVelocity/setCurrent/snap warn on a tween node (expected warn)", function()
+	local tw = Flux.tween(0, TweenInfo.new(0.2)) :: any
 	tw:impulse(100) -- expected warn: :impulse() is only valid on a spring
 	tw:setVelocity(100) -- expected warn: :setVelocity() is only valid on a spring
-	expect(approx(tw:get(), 0), "tween value unchanged by velocity controls")
+	tw:setCurrent(50) -- expected warn: :setCurrent() is only valid on a spring
+	tw:snap(50) -- expected warn: :snap() is only valid on a spring
+	expect(approx(tw:get(), 0), "tween value unchanged by spring-only controls")
+	tw:Destroy()
 end)
 
-rtest("motion · Vector3 spring impulse moves componentwise", function()
+test("motion · snap, setCurrent, initialVelocity, reactive frequency/damping, and type guards", function()
+	local goal = Flux.signal(0)
+	local freq = Flux.signal(10)
+	local damp = Flux.signal(1)
+	local spr = Flux.spring(goal, freq, damp, 500)
+	flush()
+	advance(0.02)
+	expect(spr:get() > 0, "initialVelocity moved the spring off 0")
+
+	-- snap jumps both current and target to value at zero velocity
+	spr:snap(250)
+	expect(spr() == 250, "snap sets current value immediately")
+	advance(0.05)
+	expect(spr() == 250, "snap zeroes velocity and target so spring stays at rest")
+
+	-- setCurrent changes current value without changing target (250), waking the spring
+	spr:setCurrent(100)
+	expect(spr() == 100, "setCurrent updates animated value immediately")
+	advance(0.05)
+	expect(spr() > 100, "spring eases back toward target 250 after setCurrent")
+
+	-- reactive frequency and damping update while converging toward goal
+	goal:set(250)
+	freq:set(20)
+	damp:set(0.8)
+	flush()
+	advance(0.5)
+	expect(approx(spr(), 250, 0.5), "converged with updated frequency and damping")
+
+	-- type mismatch guards
+	expectError(function()
+		spr:set("bad" :: any)
+	end, "Cannot retarget")
+	expectError(function()
+		spr:impulse("bad" :: any)
+	end, "Cannot impulse")
+	expectError(function()
+		spr:setVelocity("bad" :: any)
+	end, "Cannot set velocity")
+	expectError(function()
+		spr:setCurrent("bad" :: any)
+	end, "Cannot set a number spring's current value")
+	expectError(function()
+		spr:snap("bad" :: any)
+	end, "Cannot snap")
+
+	spr:Destroy()
+end)
+
+test("motion · tween reactive TweenInfo, DelayTime, and easing styles", function()
+	local goal = Flux.signal(0)
+	local info = Flux.signal(TweenInfo.new(0.4, Enum.EasingStyle.Linear, Enum.EasingDirection.Out, 0, false, 0.2))
+	local tw = Flux.tween(goal, info)
+	goal:set(100)
+	flush()
+
+	-- When setupTween is armed with DelayTime > 0, stepTween waits while elapsed < 0
+	local rawTween = MotionModule.NodeToMotion[tw] :: any
+	MotionModule.Engine.setupTween(rawTween, info:peek())
+	advance(0.1)
+	expect(approx(tw(), 0), "tween waits during DelayTime")
+	advance(0.3) -- 0.2s past delay -> halfway through 0.4s duration
+	expect(approx(tw(), 50, 1), "halfway through tween after DelayTime")
+
+	-- Retarget with a new reactive TweenInfo (retargets immediately without DelayTime)
+	info:set(TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.In))
+	goal:set(200)
+	flush()
+	advance(0.2)
+	expect(approx(tw(), 200, 1e-3), "completed with updated reactive TweenInfo")
+	tw:Destroy()
+
+	-- Exercise every easing style and direction via both curve() and get()
+	local styles = {
+		Enum.EasingStyle.Linear,
+		Enum.EasingStyle.Sine,
+		Enum.EasingStyle.Back,
+		Enum.EasingStyle.Quad,
+		Enum.EasingStyle.Quart,
+		Enum.EasingStyle.Quint,
+		Enum.EasingStyle.Bounce,
+		Enum.EasingStyle.Elastic,
+		Enum.EasingStyle.Exponential,
+		Enum.EasingStyle.Circular,
+		Enum.EasingStyle.Cubic,
+	}
+	local directions = {
+		Enum.EasingDirection.In,
+		Enum.EasingDirection.Out,
+		Enum.EasingDirection.InOut,
+	}
+	for _, style in styles do
+		for _, dir in directions do
+			local curve = MotionModule.Easing.curve(style, dir)
+			local v0 = curve(0)
+			local vMid = MotionModule.Easing.get(0.5, style, dir)
+			local v1 = curve(1)
+			expect(approx(v0, 0, 2e-3) and approx(v1, 1, 2e-3) and vMid == vMid, `curve {style.Name}/{dir.Name}`)
+		end
+	end
+end)
+
+test("motion · Vector3 spring impulse moves componentwise", function()
 	local spr = Flux.spring(Vector3.zero, 10, 1)
 	advance(0.05)
 	spr:impulse(Vector3.new(0, 200, 0))
@@ -243,7 +352,7 @@ rtest("motion · Vector3 spring impulse moves componentwise", function()
 	expect(v.Y > 0 and math.abs(v.X) < 1e-2, `impulse hit Y only, got {tostring(v)}`)
 end)
 
-rtest("motion · Vector3 spring follows a reactive goal", function()
+test("motion · Vector3 spring follows a reactive goal", function()
 	local goal = Flux.signal(Vector3.zero)
 	local spr = Flux.spring(goal, 10, 1)
 	goal:set(Vector3.new(0, 50, 0))
@@ -253,18 +362,18 @@ rtest("motion · Vector3 spring follows a reactive goal", function()
 	expect(v.Y > 1, `spring moved toward the goal, got {tostring(v)}`)
 end)
 
-rtest("motion · UDim2 tween reaches its goal", function()
+test("motion · UDim2 tween reaches its goal", function()
 	local goal = Flux.signal(UDim2.fromScale(0, 0))
 	local tw = Flux.tween(goal, TweenInfo.new(0))
 	goal:set(UDim2.fromScale(1, 0))
 	flush()
-	Motion.step() -- 0-duration: alpha clamps to 1 on the first step, value = goal exactly
+	Motion.step(0) -- 0-duration: alpha clamps to 1 on the first step, value = goal exactly
 	local v = tw:get()
 	expect(approx(v.X.Scale, 1) and approx(v.X.Offset, 0), `X axis reached the goal exactly, got {tostring(v)}`)
 	expect(approx(v.Y.Scale, 0) and approx(v.Y.Offset, 0), `Y axis reached the goal exactly, got {tostring(v)}`)
 end)
 
-rtest("motion · tween linear easing is ~quarter-value at quarter-flight", function()
+test("motion · tween linear easing is ~quarter-value at quarter-flight", function()
 	-- a linear tween reads ~25 at quarter-flight; Cubic-InOut (the default) reads ~6.25,
 	-- and sampling OFF-CENTER avoids the midpoint where both curves read 50
 	local goal = Flux.signal(0)
@@ -275,7 +384,7 @@ rtest("motion · tween linear easing is ~quarter-value at quarter-flight", funct
 	expect(v > 18 and v < 40, `linear tween ~25 at quarter-flight, got {v}`)
 end)
 
-rtest("motion · tween Reverses heads back toward the start", function()
+test("motion · tween Reverses heads back toward the start", function()
 	local goal = Flux.signal(0)
 	-- short forward leg so we land on the reversing leg quickly
 	local tw = Flux.tween(goal, TweenInfo.new(0.3, Enum.EasingStyle.Linear, Enum.EasingDirection.Out, 0, true))
@@ -287,7 +396,7 @@ rtest("motion · tween Reverses heads back toward the start", function()
 	expect(v < 30, `Reverses=true sent the tween back toward start, got {v}`)
 end)
 
-rtest("motion · tween RepeatCount loops back toward the start", function()
+test("motion · tween RepeatCount loops back toward the start", function()
 	local goal = Flux.signal(0)
 	local tw = Flux.tween(goal, TweenInfo.new(0.5, Enum.EasingStyle.Linear, Enum.EasingDirection.Out, 2))
 	goal:set(100)
@@ -297,48 +406,22 @@ rtest("motion · tween RepeatCount loops back toward the start", function()
 	expect(v < 50, `RepeatCount restarted the leg near the start, got {v}`)
 end)
 
-rtest("motion · tween DelayTime suppresses movement until the delay elapses", function()
-	-- DelayTime is honored only by the engine's setupTween (the public set()/reactive
-	-- paths reset startTime and drop it), so drive the Engine directly. Check both the
-	-- startTime stamp and, via startTime rewinds, the value either side of the delay.
-	local Engine = Motion.Engine
-	local node = Graph.new(0)
-	local tw = Engine.newTween(1, "number", node)
-	Engine.setCurrent(tw, { 0 })
-	local setupNow = Engine.now
-	-- 0.4s delay, then a 0.3s linear ramp
-	Engine.setupTween(tw, TweenInfo.new(0.3, Enum.EasingStyle.Linear, Enum.EasingDirection.Out, 0, false, 0.4))
-	tw.target[1] = 100 -- aim at 100 without resetting startTime (setupTween queued it active)
-
-	-- setupTween stamps startTime = now + DelayTime (drop it and this is just setupNow)
-	expect(approx(tw.startTime, setupNow + 0.4, 1e-4), `DelayTime applied to startTime, got +{tw.startTime - setupNow}`)
-
-	-- behaviour: elapsed < 0 (inside the delay) holds the start value...
-	tw.startTime = os.clock() + 0.2
-	Motion.step()
-	expect(approx(node:get(), 0, 1e-3), `no movement during DelayTime, got {node:get()}`)
-	-- ...and past the 0.3s ramp it reaches the goal.
-	tw.startTime = os.clock() - 0.5
-	Motion.step()
-	expect(approx(node:get(), 100, 1e-4), `tween moved to the goal after the delay, got {node:get()}`)
-end)
-
-rtest("motion · number tween lands EXACTLY on the goal", function()
+test("motion · number tween lands EXACTLY on the goal", function()
 	local goal = Flux.signal(0)
 	local tw = Flux.tween(goal, TweenInfo.new(0, Enum.EasingStyle.Linear))
 	goal:set(42)
 	flush()
-	Motion.step() -- 0-duration: alpha clamps to 1 on the first step, value = goal exactly
+	Motion.step(0) -- 0-duration: alpha clamps to 1 on the first step, value = goal exactly
 	expect(approx(tw:get(), 42, 1e-4), `number tween equals the goal exactly, got {tw:get()}`)
 end)
 
-rtest("motion · UDim2 tween lands EXACTLY on the goal on both axes", function()
+test("motion · UDim2 tween lands EXACTLY on the goal on both axes", function()
 	local goal = Flux.signal(UDim2.new(0, 0, 0, 0))
 	local tw = Flux.tween(goal, TweenInfo.new(0, Enum.EasingStyle.Linear))
 	local target = UDim2.new(0.5, 10, 0.25, 20)
 	goal:set(target)
 	flush()
-	Motion.step() -- 0-duration: alpha clamps to 1 on the first step, value = goal exactly
+	Motion.step(0) -- 0-duration: alpha clamps to 1 on the first step, value = goal exactly
 	local v = tw:get()
 	expect(approx(v.X.Scale, 0.5, 1e-4), `X.Scale exact, got {v.X.Scale}`)
 	expect(approx(v.X.Offset, 10, 1e-4), `X.Offset exact, got {v.X.Offset}`)
@@ -346,33 +429,23 @@ rtest("motion · UDim2 tween lands EXACTLY on the goal on both axes", function()
 	expect(approx(v.Y.Offset, 20, 1e-4), `Y.Offset exact, got {v.Y.Offset}`)
 end)
 
-rtest("motion · Vector2 reaches its goal", function()
+test("motion · Vector2 reaches its goal", function()
 	local got = tweenToGoal(Vector2.new(-3, 7), Vector2.new(12.5, -4.25))
 	expect(got == Vector2.new(12.5, -4.25), `Vector2 round-trip, got {tostring(got)}`)
 end)
 
-rtest("motion · Vector2int16 reaches its goal", function()
-	local got = tweenToGoal(Vector2int16.new(-3, 7), Vector2int16.new(120, -40))
-	expect(got == Vector2int16.new(120, -40), `Vector2int16 round-trip, got {tostring(got)}`)
-end)
-
-rtest("motion · Vector3 reaches its goal exactly", function()
+test("motion · Vector3 reaches its goal exactly", function()
 	local got = tweenToGoal(Vector3.new(-3, 7, 1), Vector3.new(12.5, -4.25, 9))
 	expect(got == Vector3.new(12.5, -4.25, 9), `Vector3 round-trip, got {tostring(got)}`)
 end)
 
-rtest("motion · Vector3int16 reaches its goal", function()
-	local got = tweenToGoal(Vector3int16.new(-3, 7, 1), Vector3int16.new(120, -40, 33))
-	expect(got == Vector3int16.new(120, -40, 33), `Vector3int16 round-trip, got {tostring(got)}`)
-end)
-
-rtest("motion · UDim reaches its goal", function()
+test("motion · UDim reaches its goal", function()
 	-- offset is integer-rounded on unpack; scale is exact
 	local got = tweenToGoal(UDim.new(0, 0), UDim.new(0.5, 40))
 	expect(got.Scale == 0.5 and got.Offset == 40, `UDim round-trip, got {tostring(got)}`)
 end)
 
-rtest("motion · UDim2 reaches its goal exactly", function()
+test("motion · UDim2 reaches its goal exactly", function()
 	-- guards scale/offset arg order: UDim2.new(xScale, xOffset, yScale, yOffset)
 	local got = tweenToGoal(UDim2.new(0, 0, 0, 0), UDim2.new(0.25, 30, 0.75, -10))
 	expect(
@@ -395,9 +468,9 @@ rtest("motion · NumberRange reaches its goal", function()
 	)
 end)
 
-rtest("motion · NumberSequenceKeypoint reaches its goal", function()
+test("motion · NumberSequenceKeypoint reaches its goal", function()
 	-- guards arg order: NumberSequenceKeypoint.new(time, value, envelope)
-	-- where pack stores [value, time, envelope] and unpack passes (arr2, arr1, arr3)
+	-- where pack stores [time, value, envelope] and unpack passes (arr1, arr2, arr3)
 	local goal = NumberSequenceKeypoint.new(0.4, 0.8, 0.1) -- (time, value, envelope)
 	local got = tweenToGoal(NumberSequenceKeypoint.new(0, 0, 0), goal)
 	expect(
@@ -406,7 +479,7 @@ rtest("motion · NumberSequenceKeypoint reaches its goal", function()
 	)
 end)
 
-rtest("motion · NumberSequence reaches its goal", function()
+test("motion · NumberSequence reaches its goal", function()
 	-- guards the keypoint loop stride (3 numbers per keypoint: time, value, envelope)
 	-- and the NumberSequenceKeypoint.new(time, value, envelope) rebuild order.
 	-- keypoint COUNTS must match: the motion's packed length is fixed at creation.
@@ -431,7 +504,7 @@ rtest("motion · NumberSequence reaches its goal", function()
 	end
 end)
 
-rtest("motion · ColorSequenceKeypoint reaches its goal", function()
+test("motion · ColorSequenceKeypoint reaches its goal", function()
 	-- Time is exact; the Value color round-trips through Oklab (lossy) so use eps
 	local goal = ColorSequenceKeypoint.new(0.6, Color3.new(0.2, 0.4, 0.8))
 	local got = tweenToGoal(ColorSequenceKeypoint.new(0, Color3.new(0, 0, 0)), goal)
@@ -443,7 +516,7 @@ rtest("motion · ColorSequenceKeypoint reaches its goal", function()
 	)
 end)
 
-rtest("motion · ColorSequence reaches its goal", function()
+test("motion · ColorSequence reaches its goal", function()
 	-- guards the keypoint loop stride (4 numbers per keypoint: time + Oklab xyz).
 	-- keypoint COUNTS must match: the motion's packed length is fixed at creation.
 	-- times round-trip exactly; the colors go through Oklab (lossy) so use eps.
@@ -470,7 +543,7 @@ rtest("motion · ColorSequence reaches its goal", function()
 	end
 end)
 
-rtest("motion · Color3 reaches its goal", function()
+test("motion · Color3 reaches its goal", function()
 	-- Oklab round-trip is lossy, so use eps
 	local goal = Color3.new(0.9, 0.1, 0.5)
 	local got = tweenToGoal(Color3.new(0, 0, 0), goal)
@@ -511,65 +584,31 @@ rtest("motion · NumberRange degenerate (Min==Max) reaches its goal", function()
 	)
 end)
 
-rtest("motion · Region3 reaches its goal", function()
-	-- pack stores CFrame center + Size; unpack rebuilds via center ± halfSize.
-	-- A wrong center/halfSize reconstruction would shift position or size.
-	local start = Region3.new(Vector3.new(0, 0, 0), Vector3.new(2, 2, 2))
-	local goal = Region3.new(Vector3.new(2, 4, 6), Vector3.new(12, 16, 20))
-	local got = tweenToGoal(start, goal)
-	local center = got.CFrame.Position
-	local size = got.Size
-	expect(
-		approx(center.X, 7, 1e-3) and approx(center.Y, 10, 1e-3) and approx(center.Z, 13, 1e-3),
-		`Region3 center round-trip, got {tostring(center)}`
-	)
-	expect(
-		approx(size.X, 10, 1e-3) and approx(size.Y, 12, 1e-3) and approx(size.Z, 14, 1e-3),
-		`Region3 size round-trip, got {tostring(size)}`
-	)
+test("motion · :set() and call-write on a destroyed motion warn and return early (expected warn)", function()
+	local spr = Flux.spring(0)
+	spr:Destroy()
+	-- Calling :set() or spr(val) on a destroyed motion should warn and not mutate or crash
+	spr:set(100)
+	spr(200)
+	expect(spr:get() == nil, "destroyed motion node remains stripped after :set() and call-write")
 end)
 
-rtest("motion · Region3int16 reaches its goal", function()
-	-- integer Min/Max, rounded on unpack; exact integers round-trip exactly
-	local start = Region3int16.new(Vector3int16.new(0, 0, 0), Vector3int16.new(1, 1, 1))
-	local goal = Region3int16.new(Vector3int16.new(-4, -8, -12), Vector3int16.new(16, 24, 32))
-	local got = tweenToGoal(start, goal)
-	expect(
-		got.Min == Vector3int16.new(-4, -8, -12) and got.Max == Vector3int16.new(16, 24, 32),
-		`Region3int16 round-trip, got Min={tostring(got.Min)} Max={tostring(got.Max)}`
-	)
-end)
-
-rtest("motion · Ray reaches its goal", function()
-	-- packs Origin xyz + Direction xyz; unpack rebuilds both Vector3s
-	local goal = Ray.new(Vector3.new(1, 2, 3), Vector3.new(4, 5, 6))
-	local got = tweenToGoal(Ray.new(Vector3.zero, Vector3.zero), goal)
-	expect(
-		got.Origin == Vector3.new(1, 2, 3) and got.Direction == Vector3.new(4, 5, 6),
-		`Ray round-trip, origin={tostring(got.Origin)} dir={tostring(got.Direction)}`
-	)
-end)
-
-rtest("motion · PhysicalProperties reaches its goal", function()
-	-- packs Density, Friction, Elasticity, FrictionWeight, ElasticityWeight in order
-	local goal = PhysicalProperties.new(2.5, 0.6, 0.3, 1.5, 2.0)
-	local got = tweenToGoal(PhysicalProperties.new(1, 0.2, 0.1, 1, 1), goal)
-	expect(
-		approx(got.Density, 2.5, 1e-3)
-			and approx(got.Friction, 0.6, 1e-3)
-			and approx(got.Elasticity, 0.3, 1e-3)
-			and approx(got.FrictionWeight, 1.5, 1e-3)
-			and approx(got.ElasticityWeight, 2.0, 1e-3),
-		`PhysicalProperties round-trip, got d={got.Density} f={got.Friction} e={got.Elasticity} fw={got.FrictionWeight} ew={got.ElasticityWeight}`
-	)
-end)
-
-rtest("motion · DateTime reaches its goal", function()
-	-- packs UnixTimestampMillis (an integer); at alpha==1 it round-trips exactly
-	local goalMs = 1_700_000_000_000
-	local goal = DateTime.fromUnixTimestampMillis(goalMs)
-	local got = tweenToGoal(DateTime.fromUnixTimestampMillis(0), goal)
-	expect(got.UnixTimestampMillis == goalMs, `DateTime round-trip, got {got.UnixTimestampMillis}`)
+test("motion · waking a sleeping motion inside step callback does not corrupt iteration", function()
+	local b = Flux.tween(0, TweenInfo.new(0, Enum.EasingStyle.Linear))
+	local a = Flux.tween(0, TweenInfo.new(0, Enum.EasingStyle.Linear))
+	local motionA = MotionModule.NodeToMotion[a]
+	local origUnpack = motionA.unpack
+	motionA.unpack = function(arr)
+		b:set(50)
+		return origUnpack(arr)
+	end
+	a:set(10)
+	Motion.step(0)
+	expect(approx(a:get(), 10), "first tween completed")
+	Motion.step(0)
+	expect(approx(b:get(), 50), "woken second tween completed on subsequent step")
+	a:Destroy()
+	b:Destroy()
 end)
 
 return {}

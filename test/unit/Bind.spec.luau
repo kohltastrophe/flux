@@ -18,193 +18,142 @@ local expect = sert
 local expectError = sert.fails
 local flush = Flux.flush
 
-test("listen · receives updates until disconnected", function()
-	local v = Flux(1)
-	local received = {}
-	local disconnect = Flux.listen(v, function(val)
-		table.insert(received, val)
-	end)
-	expect(type(disconnect) == "function", "listen returns a disconnect function")
-	v(2)
-	flush()
-	v(3)
-	flush()
-	expect(received[#received] == 3, "listener observed the latest value")
-	disconnect()
-	v(4)
-	flush()
-	expect(table.find(received, 4) == nil, "listener stops firing after disconnect")
-end)
-
-test("model · rejects a non-node", function()
+test("model · wraps a node and isModel / modelNode inspect it", function()
 	expectError(function()
 		Flux.model("not a node")
 	end, "expects a reactive node")
+
+	local sig = Flux.signal("abc")
+	local wrapped = Flux.model(sig)
+	expect(Flux.isModel(wrapped) == true, "isModel recognizes a Flux.model value")
+	expect(Flux.isModel(sig) == false and Flux.isModel("abc") == false, "isModel is false for non-model values")
+	expect(Flux.modelNode(wrapped) == sig, "modelNode extracts the underlying node")
+	expect(Flux.modelNode(sig) == nil and Flux.modelNode(nil) == nil, "modelNode returns nil for non-model values")
 end)
 
-rtest("bind.to · strict mode applies remaining bindings when one write fails (expected warn)", function()
-	Flux.strict(true)
-	local ok, err = pcall(function()
-		local holder = Instance.new("ObjectValue")
-		local target = Instance.new("Folder")
-		local v = Flux(nil :: Instance?)
-		-- attributes are written before properties, and Instances are invalid attribute values,
-		-- so the attribute write fails first and must not starve the sibling property binding
-		Flux.Bind.to(v, holder, "ref", true)
-		Flux.Bind.to(v, holder, "Value")
-
-		v:set(target, true)
-		flush() -- expected warn: attribute write fails with instance/key/value context
-		expect(holder.Value == target, "property write applied after the attribute write failed")
-
-		v:set(nil, true)
-		flush()
-		expect(holder.Value == nil, "binding keeps working after a failed write")
-
-		holder:Destroy()
-		target:Destroy()
-	end)
-	Flux.strict(false)
-	if not ok then
-		error(err, 0)
-	end
+test("property & call · validate non-instance arguments", function()
+	expectError(function()
+		Flux.property("not an instance" :: any, "Name")
+	end, "Flux.property expects an Instance")
+	expectError(function()
+		Flux(123, "Name")
+	end, "only an Instance takes a property name")
 end)
 
-rtest(
-	"bind.to · a failing write reports context and applies remaining bindings without strict mode (expected warn)",
-	function()
-		local holder = Instance.new("ObjectValue")
-		local target = Instance.new("Folder")
-		local v = Flux(nil :: Instance?)
-		-- attributes are written before properties, and Instances are invalid attribute values,
-		-- so the attribute write fails first and must not starve the sibling property binding
-		Flux.Bind.to(v, holder, "ref", true)
-		Flux.Bind.to(v, holder, "Value")
-
-		v:set(target, true)
-		flush() -- expected warn: the failing attribute write reports instance/key/value context
-		expect(holder.Value == target, "property write applied after the attribute write failed")
-
-		v:set(nil, true)
-		flush()
-		expect(holder.Value == nil, "binding keeps working after a failed write")
-
-		holder:Destroy()
-		target:Destroy()
-	end
-)
-
-rtest("bind.children · stale disconnect doesn't sever the live binding", function()
-	local Bind = Flux.Bind
-	local screen = Instance.new("ScreenGui")
-	local parentA = Instance.new("Frame")
-	parentA.Name = "A"
-	parentA.Parent = screen
-	local parentB = Instance.new("Frame")
-	parentB.Name = "B"
-	parentB.Parent = screen
-
-	local c1 = Instance.new("Frame")
-	local node = Flux.signal(c1)
-	local discA = Bind.children(node, parentA)
-	expect(c1.Parent == parentA, "bound to A")
-
-	local discB = Bind.children(node, parentB) -- remount: rebind to B
-	expect(c1.Parent == parentB, "rebound to B")
-
-	discA() -- STALE disconnect (e.g. A's _CLEAN flushing later): must be a no-op
-	local c2 = Instance.new("Frame")
-	node:set(c2)
+rtest("property · follows an instance property reactively", function()
+	local label = Instance.new("TextLabel")
+	label.Text = "initial"
+	local prop = Flux.property(label, "Text")
+	local viaCall = Flux(label, "Text")
+	expect(prop:get() == "initial" and viaCall:get() == "initial", "seeded with initial property value")
+	label.Text = "changed"
+	task.wait()
 	flush()
-	expect(c2.Parent == parentB, "B binding survives the stale unbind")
-
-	discB() -- the CURRENT disconnect must still tear down
-	local c3 = Instance.new("Frame")
-	node:set(c3)
-	flush()
-	expect(c3.Parent == nil and c2.Parent == nil, "current unbind still works")
-	screen:Destroy()
+	expect(prop:get() == "changed" and viaCall:get() == "changed", "updates when property changes")
+	prop:Destroy()
+	viaCall:Destroy()
+	label:Destroy()
 end)
 
-rtest("bind.children · stale disconnect after same-parent rebind doesn't sever the live binding", function()
-	-- The parent-identity guard alone could not tell a stale disconnect from the
-	-- live one when both target the SAME parent; the per-call token does.
-	local Bind = Flux.Bind
-	local screen = Instance.new("ScreenGui")
-	local parent = Instance.new("Frame")
-	parent.Parent = screen
-
-	local c1 = Instance.new("Frame")
-	local node = Flux.signal(c1)
-	local discA = Bind.children(node, parent)
-	expect(c1.Parent == parent, "bound to parent")
-
-	local discB = Bind.children(node, parent) -- rebind to the SAME parent
-	expect(c1.Parent == parent, "still under parent after same-parent rebind")
-
-	discA() -- STALE: must be a no-op, NOT tear down the live discB binding
-	local c2 = Instance.new("Frame")
-	node:set(c2)
+rtest("property · follows an instance attribute reactively via $ and _attr_ prefixes", function()
+	local frame = Instance.new("Frame")
+	frame:SetAttribute("Score", 10)
+	local attr = Flux.property(frame, "$Score")
+	local attrUnderscore = Flux.property(frame, "_attr_Score")
+	local viaCall = Flux(frame, "$Score")
+	expect(
+		attr:get() == 10 and attrUnderscore:get() == 10 and viaCall:get() == 10,
+		"seeded with initial attribute value"
+	)
+	frame:SetAttribute("Score", 25)
+	task.wait()
 	flush()
-	expect(c2.Parent == parent, "live binding survives the stale same-parent unbind")
-
-	discB() -- the CURRENT disconnect must still tear down
-	local c3 = Instance.new("Frame")
-	node:set(c3)
-	flush()
-	expect(c3.Parent == nil and c2.Parent == nil, "current same-parent unbind still works")
-	screen:Destroy()
+	expect(attr:get() == 25 and attrUnderscore:get() == 25 and viaCall:get() == 25, "updates when attribute changes")
+	attr:Destroy()
+	attrUnderscore:Destroy()
+	viaCall:Destroy()
+	frame:Destroy()
 end)
 
-test("listen · a shared node keeps notifying after the first listener's scope dies", function()
-	-- getBindData lazily creates the node's single propagation effect on the FIRST bind.
-	-- It must be rooted, not owned by whatever scope is active then, otherwise that scope
-	-- dying disposes the effect while bindData survives, freezing every later bind/listen.
-	local node = Flux.signal("one")
-	local seen = {}
-	local scopeA = Flux.scope(function()
-		Flux.listen(node, function() end) -- first bind: creates the shared effect under scopeA
-	end)
-	Flux.listen(node, function(v)
-		table.insert(seen, v)
-	end)
+rtest("property · follows an instance tag reactively via # and _tag_ prefixes", function()
+	local frame = Instance.new("Frame")
+	local other = Instance.new("Frame")
+	frame:AddTag("PreExisting")
+	frame.Parent = workspace
+	other.Parent = workspace
 
-	node:set("two")
-	flush()
-	expect(seen[#seen] == "two", "listener notified while scopeA is alive")
+	local hasEnemy = Flux.property(frame, "#Enemy")
+	local hasEnemyUnderscore = Flux.property(frame, "_tag_Enemy")
+	local viaCall = Flux(frame, "#Enemy")
+	local hasPre = Flux.property(frame, "#PreExisting")
+	expect(
+		hasEnemy:get() == false and hasEnemyUnderscore:get() == false and viaCall:get() == false,
+		"seeded with false when tag is absent"
+	)
+	expect(hasPre:get() == true, "seeded with true when tag is already present")
 
-	scopeA:Destroy()
-	node:set("three")
+	other:AddTag("Enemy")
+	task.wait()
 	flush()
-	expect(seen[#seen] == "three", "surviving listener still notified after scopeA dies")
+	expect(hasEnemy:get() == false and hasEnemyUnderscore:get() == false, "tag added to another instance is ignored")
+
+	frame:AddTag("Enemy")
+	task.wait()
+	flush()
+	expect(
+		hasEnemy:get() == true and hasEnemyUnderscore:get() == true and viaCall:get() == true,
+		"updates to true when tag is added"
+	)
+
+	-- Unparenting fires GetInstanceRemovedSignal, but HasTag("Enemy") is still true
+	frame.Parent = nil
+	task.wait()
+	flush()
+	expect(hasEnemy:get() == true, "unparenting an instance does not falsely clear its #Tag node")
+	frame.Parent = workspace
+
+	frame:RemoveTag("Enemy")
+	task.wait()
+	flush()
+	expect(
+		hasEnemy:get() == false and hasEnemyUnderscore:get() == false and viaCall:get() == false,
+		"updates to false when tag is removed"
+	)
+
+	hasEnemy:Destroy()
+	hasEnemyUnderscore:Destroy()
+	frame:AddTag("Enemy")
+	task.wait()
+	flush()
+	expect(hasEnemy:get() == nil and viaCall:get() == true, "destroyed tag node stops following")
+
+	viaCall:Destroy()
+	hasPre:Destroy()
+	other:Destroy()
+	frame:Destroy()
 end)
 
-rtest("bind.children · re-parenting before a change flushes doesn't leak old children", function()
-	-- If the value changed but its bind effect hasn't flushed, re-targeting to a new parent
-	-- must still clear the stale child off the OLD parent (applyChildren's orphan sweep only
-	-- matches the new parent).
-	local Bind = Flux.Bind
-	local screen = Instance.new("ScreenGui")
-	local A = Instance.new("Frame")
-	A.Name = "A"
-	A.Parent = screen
-	local B = Instance.new("Frame")
-	B.Name = "B"
-	B.Parent = screen
-
-	local c1 = Instance.new("Frame")
-	local c2 = Instance.new("Frame")
-	local node = Flux.signal(c1)
-
-	Bind.children(node, A)
-	expect(c1.Parent == A, "c1 parented under A")
-
-	node:set(c2) -- change the value but do NOT flush the bind effect
-	Bind.children(node, B) -- retarget to B before the change syncs
-
-	expect(c2.Parent == B, "c2 parented under B")
-	expect(c1.Parent == nil, "stale c1 is not left behind under A")
-	screen:Destroy()
+rtest("property & call · reject non-string or empty prefix names on an Instance", function()
+	local frame = Instance.new("Frame")
+	expectError(function()
+		Flux.property(frame, 123 :: any)
+	end, "expects a property")
+	expectError(function()
+		Flux(frame, 123 :: any)
+	end, "expects a property")
+	expectError(function()
+		Flux.property(frame, "$")
+	end, 'after "$" cannot be empty')
+	expectError(function()
+		Flux.property(frame, "#")
+	end, 'after "#" cannot be empty')
+	expectError(function()
+		Flux.property(frame, "_attr_")
+	end, 'after "_attr_" cannot be empty')
+	expectError(function()
+		Flux.property(frame, "_tag_")
+	end, 'after "_tag_" cannot be empty')
+	frame:Destroy()
 end)
 
 return {}

@@ -12,9 +12,12 @@ else
 	sert = require("../sert") :: any
 end
 
-local rtest = sert.rtest
+local test = sert.test
 local expect = sert
 local Color = Flux.Color
+local Compat = if IS_ROBLOX then nil else require("../../src/Compat") :: any
+local Color3 = if IS_ROBLOX then Color3 else Compat.Color3
+local Vector3 = if IS_ROBLOX then Vector3 else Compat.Vector3
 
 local approx = sert.approx
 
@@ -22,7 +25,7 @@ local function rgbApprox(a, b, eps)
 	return approx(a.R, b.R, eps) and approx(a.G, b.G, eps) and approx(a.B, b.B, eps)
 end
 
-rtest("color · Oklab fromRGB/toRGB round-trips per channel", function()
+test("color · Oklab fromRGB/toRGB round-trips per channel", function()
 	local cases = {
 		Color3.new(0, 0, 0), -- black
 		Color3.new(1, 1, 1), -- white
@@ -44,7 +47,7 @@ rtest("color · Oklab fromRGB/toRGB round-trips per channel", function()
 	end
 end)
 
-rtest("color · Oklab fromLinear/toLinear round-trips per channel", function()
+test("color · Oklab fromLinear/toLinear round-trips per channel", function()
 	local cases = {
 		Color3.new(0, 0, 0),
 		Color3.new(1, 1, 1),
@@ -61,7 +64,7 @@ rtest("color · Oklab fromLinear/toLinear round-trips per channel", function()
 	end
 end)
 
-rtest("color · Oklab known values for linear black and white", function()
+test("color · Oklab known values for linear black and white", function()
 	-- Pure linear white maps to Oklab L=1, a=0, b=0; pure black to all zeros.
 	local white = Color.Oklab.fromLinear(Color3.new(1, 1, 1))
 	expect(approx(white.X, 1, 1e-4), `white L should be 1, got {white.X}`)
@@ -74,7 +77,7 @@ rtest("color · Oklab known values for linear black and white", function()
 	expect(approx(black.Z, 0, 1e-6), `black b should be 0, got {black.Z}`)
 end)
 
-rtest("color · sRGB fromLinear/toLinear round-trip and endpoints", function()
+test("color · sRGB fromLinear/toLinear round-trip and endpoints", function()
 	-- toLinear is the inverse of fromLinear (sRGB gamma curve).
 	local cases = {
 		Color3.new(0, 0, 0),
@@ -97,7 +100,7 @@ rtest("color · sRGB fromLinear/toLinear round-trip and endpoints", function()
 	expect(rgbApprox(Color.sRGB.toLinear(Color3.new(1, 1, 1)), Color3.new(1, 1, 1), 1e-7), "toLinear white")
 end)
 
-rtest("color · sRGB fromLinear matches a known mid-grey value", function()
+test("color · sRGB fromLinear matches a known mid-grey value", function()
 	-- Linear 0.5 encodes to sRGB ~0.7353569830 (standard sRGB OETF).
 	local encoded = Color.sRGB.fromLinear(Color3.new(0.5, 0.5, 0.5))
 	expect(approx(encoded.R, 0.7353569830, 1e-6), `sRGB encode of 0.5 should be ~0.73536, got {encoded.R}`)
@@ -106,61 +109,25 @@ rtest("color · sRGB fromLinear matches a known mid-grey value", function()
 	expect(approx(decoded.R, 0.5, 1e-6), `sRGB decode should be ~0.5, got {decoded.R}`)
 end)
 
-rtest("color · Oklab HCL round-trips and matches a known hue", function()
-	-- toHCL∘fromHCL is identity (within atan2 wrap) for in-range HCL triples. Hue is in degrees.
-	local hcls = {
-		Vector3.new(0, 0.0, 0.5), -- achromatic
-		Vector3.new(90, 0.1, 0.6),
-		Vector3.new(180, 0.2, 0.4),
-		Vector3.new(270, 0.15, 0.7),
-	}
-	for _, hcl in hcls do
-		local lab = Color.Oklab.fromHCL(hcl)
-		local back = Color.Oklab.toHCL(lab)
-		-- chroma and lightness must round-trip regardless of hue wrap
-		expect(approx(back.Y, hcl.Y, 1e-5), `HCL chroma round-trip for {hcl}: got {back.Y}`)
-		expect(approx(back.Z, hcl.Z, 1e-5), `HCL lightness round-trip for {hcl}: got {back.Z}`)
-		if hcl.Y > 1e-6 then
-			-- hue (X of HCL, degrees) round-trips when chroma is non-zero
-			local dh = math.abs(back.X - hcl.X)
-			dh = math.min(dh, math.abs(dh - 360)) -- allow wrap at 360°
-			expect(dh < 1e-3, `HCL hue round-trip for {hcl}: got {back.X}`)
-		end
-	end
-
-	-- fromHCL maps lightness to L (X) and zero chroma to zero a/b.
-	local lab = Color.Oklab.fromHCL(Vector3.new(108, 0, 0.42))
-	-- Vector3 components are 32-bit floats, so 0.42 round-trips with ~1e-7 error.
-	expect(approx(lab.X, 0.42, 1e-6), `fromHCL L should be lightness, got {lab.X}`)
-	expect(approx(lab.Y, 0, 1e-9), `fromHCL a should be 0 at zero chroma, got {lab.Y}`)
-	expect(approx(lab.Z, 0, 1e-9), `fromHCL b should be 0 at zero chroma, got {lab.Z}`)
-end)
-
-rtest("color · lighten/darken adjust Oklab L and invert each other", function()
+test("color · lighten adjusts Oklab L and negative delta darkens", function()
 	local c = Color3.new(0.4, 0.55, 0.7)
 	local lab = Color.Oklab.fromRGB(c)
 	expect(approx(Color.Oklab.lighten(lab, 0.1).X, lab.X + 0.1, 1e-6), "lighten adds to L")
-	-- darken(a) ≡ lighten(-a)
-	local d = Color.Oklab.darken(lab, 0.1)
-	local l = Color.Oklab.lighten(lab, -0.1)
-	expect(approx(d.X, l.X, 1e-9) and approx(d.Y, l.Y, 1e-9) and approx(d.Z, l.Z, 1e-9), "darken ≡ lighten(-a)")
 	-- L clamps to [0, 1]
 	expect(Color.Oklab.lighten(Color.Oklab.fromRGB(Color3.new(1, 1, 1)), 0.5).X <= 1, "L clamps at 1")
-	-- Color3 wrapper: lighten then darken by the same amount round-trips closely
-	local back = Color.darken(Color.lighten(c, 0.1), 0.1)
-	expect(rgbApprox(back, c, 1e-3), `lighten∘darken ≈ identity, got {back}`)
+	-- Color3 wrapper: lighten then lighten by negative amount round-trips closely
+	local back = Color.lighten(Color.lighten(c, 0.1), -0.1)
+	expect(rgbApprox(back, c, 1e-3), `lighten(+0.1)∘lighten(-0.1) ≈ identity, got {back}`)
 end)
 
-rtest("color · saturate/desaturate adjust chroma and invert each other", function()
+test("color · saturate adjusts chroma and negative delta desaturates", function()
 	local c = Color3.new(0.6, 0.3, 0.4)
 	local lab = Color.Oklab.fromRGB(c)
 	local chroma = math.sqrt(lab.Y ^ 2 + lab.Z ^ 2)
 	local sat = Color.Oklab.saturate(lab, 0.05)
 	expect(approx(math.sqrt(sat.Y ^ 2 + sat.Z ^ 2), chroma + 0.05, 1e-6), "saturate adds to chroma")
-	-- desaturate(a) ≡ saturate(-a)
-	local de = Color.Oklab.desaturate(lab, 0.05)
-	local sn = Color.Oklab.saturate(lab, -0.05)
-	expect(approx(de.Y, sn.Y, 1e-9) and approx(de.Z, sn.Z, 1e-9), "desaturate ≡ saturate(-a)")
+	local desat = Color.Oklab.saturate(lab, -0.05)
+	expect(approx(math.sqrt(desat.Y ^ 2 + desat.Z ^ 2), chroma - 0.05, 1e-6), "negative saturate reduces chroma")
 	-- hue direction (a:b ratio) preserved by saturate
 	expect(approx(sat.Y * lab.Z, sat.Z * lab.Y, 1e-9), "saturate preserves hue direction")
 	-- a gray has no hue to saturate
@@ -169,23 +136,27 @@ rtest("color · saturate/desaturate adjust chroma and invert each other", functi
 	expect(approx(stillGray.Y, 0, 1e-6) and approx(stillGray.Z, 0, 1e-6), "cannot saturate a gray")
 end)
 
-rtest("color · rotateHue rotates around the wheel", function()
+test("color · rotateHue rotates around the wheel", function()
 	local lab = Color.Oklab.fromRGB(Color3.new(0.8, 0.2, 0.2))
 	-- 360° is a full turn back to the start
 	local full = Color.Oklab.rotateHue(lab, 360)
 	expect(approx(full.Y, lab.Y, 1e-5) and approx(full.Z, lab.Z, 1e-5), "rotateHue 360° ≈ identity")
-	-- chroma and lightness preserved; hue advances by exactly 90°
+	-- chroma and lightness preserved; hue advances by 90°
 	local rot = Color.Oklab.rotateHue(lab, 90)
 	expect(approx(rot.X, lab.X, 1e-9), "rotateHue preserves L")
 	expect(
 		approx(math.sqrt(rot.Y ^ 2 + rot.Z ^ 2), math.sqrt(lab.Y ^ 2 + lab.Z ^ 2), 1e-6),
 		"rotateHue preserves chroma"
 	)
-	local dh = (Color.Oklab.toHCL(rot).X - Color.Oklab.toHCL(lab).X) % 360
+	local h1 = math.deg(math.atan2(lab.Z, lab.Y))
+	local h2 = math.deg(math.atan2(rot.Z, rot.Y))
+	local dh = (h2 - h1) % 360
 	expect(approx(dh, 90, 1e-3), `hue advances 90°, got {dh}`)
+	local rotatedColor = Color.rotateHue(Color3.new(0.8, 0.2, 0.2), 360)
+	expect(rgbApprox(rotatedColor, Color3.new(0.8, 0.2, 0.2), 1e-3), "Color.rotateHue 360° round-trips")
 end)
 
-rtest("color · grayscale removes chroma and preserves L", function()
+test("color · grayscale removes chroma and preserves L", function()
 	local lab = Color.Oklab.fromRGB(Color3.new(0.2, 0.7, 0.5))
 	local gray = Color.Oklab.grayscale(lab)
 	expect(approx(gray.Y, 0, 1e-9) and approx(gray.Z, 0, 1e-9), "grayscale zeroes chroma")
@@ -195,7 +166,7 @@ rtest("color · grayscale removes chroma and preserves L", function()
 	expect(approx(c.R, c.G, 1e-3) and approx(c.G, c.B, 1e-3), `grayscale Color3 is neutral, got {c}`)
 end)
 
-rtest("color · mix matches the engine's lab-lerp path", function()
+test("color · mix matches the engine's lab-lerp path", function()
 	local a = Color3.new(0.9, 0.1, 0.1)
 	local b = Color3.new(0.1, 0.1, 0.9)
 	-- endpoints
@@ -206,20 +177,7 @@ rtest("color · mix matches the engine's lab-lerp path", function()
 	expect(rgbApprox(Color.mix(a, b, 0.5), expected, 1e-6), "mix midpoint is the lab midpoint")
 end)
 
-rtest("color · fromTemperature spans warm to cool, normalised", function()
-	local warm = Color.fromTemperature(2000)
-	local cool = Color.fromTemperature(12000)
-	-- warm light is red-dominant, cool light is blue-dominant
-	expect(warm.R > warm.B, `2000K is warm (R>B), got {warm}`)
-	expect(cool.B > cool.R, `12000K is cool (B>R), got {cool}`)
-	-- max-channel normalised: the brightest channel is ~1
-	expect(approx(math.max(warm.R, warm.G, warm.B), 1, 1e-6), "warm normalised to max 1")
-	expect(approx(math.max(cool.R, cool.G, cool.B), 1, 1e-6), "cool normalised to max 1")
-	-- input clamps: below 1000K equals 1000K
-	expect(rgbApprox(Color.fromTemperature(500), Color.fromTemperature(1000), 1e-9), "temperature clamps low")
-end)
-
-rtest("color · luminance and contrast follow WCAG", function()
+test("color · luminance and contrast follow WCAG", function()
 	expect(approx(Color.luminance(Color3.new(1, 1, 1)), 1, 1e-6), "white luminance is 1")
 	expect(approx(Color.luminance(Color3.new(0, 0, 0)), 0, 1e-6), "black luminance is 0")
 	-- 21:1 for black on white, symmetric, 1:1 for equal colours
@@ -229,7 +187,7 @@ rtest("color · luminance and contrast follow WCAG", function()
 	expect(approx(Color.contrast(c, c), 1, 1e-9), "contrast with self is 1")
 end)
 
-rtest("color · readable picks the more legible text colour", function()
+test("color · readable picks the more legible text colour", function()
 	local white = Color3.new(1, 1, 1)
 	local black = Color3.new(0, 0, 0)
 	expect(Color.readable(white) == black, "black text on white")
@@ -239,7 +197,7 @@ rtest("color · readable picks the more legible text colour", function()
 	expect(Color.readable(Color3.new(0.95, 0.95, 0.8), navy, white) == navy, "picks the higher-contrast candidate")
 end)
 
-rtest("color · gamut clip keeps colours in range and preserves hue", function()
+test("color · gamut clip keeps colours in range and preserves hue", function()
 	-- Saturating a primary pushes it out of gamut; the result must stay valid.
 	local pushed = Color.saturate(Color3.new(1, 0, 0), 0.3)
 	expect(pushed.R >= 0 and pushed.R <= 1, `clip R in range, got {pushed.R}`)
@@ -248,8 +206,9 @@ rtest("color · gamut clip keeps colours in range and preserves hue", function()
 	-- The clipped colour keeps (approximately) the original hue, unlike a per-channel clamp.
 	local outOfGamut = Vector3.new(0.7, 0.3, 0.1) -- high-chroma lab, outside sRGB
 	local clipped = Color.Oklab.toRGB(outOfGamut, true)
-	local hueIn = Color.Oklab.toHCL(outOfGamut).X
-	local hueOut = Color.Oklab.toHCL(Color.Oklab.fromRGB(clipped)).X
+	local hueIn = math.deg(math.atan2(outOfGamut.Z, outOfGamut.Y)) % 360
+	local labOut = Color.Oklab.fromRGB(clipped)
+	local hueOut = math.deg(math.atan2(labOut.Z, labOut.Y)) % 360
 	local dh = math.abs(hueIn - hueOut)
 	dh = math.min(dh, 360 - dh)
 	expect(dh < 2, `gamut clip preserves hue within 2°, got {dh}`)

@@ -197,7 +197,7 @@ rtest("layout · a reactive enum prop writes the engine default for an unknown v
 end)
 
 rtest("layout · a reactive pinned override that yields nil falls through to routing", function()
-	local pin = Flux.Graph.signal(nil)
+	local pin = Flux.signal(nil)
 	local l
 	local s = Flux.scope(function()
 		l = Flux.list({ direction = "x", horizontalAlign = pin, justify = "end" })
@@ -215,7 +215,7 @@ end)
 
 rtest("layout · padding follows a source that changes shape or starts empty", function()
 	local compact = Flux(true)
-	local late = Flux.Graph.signal(nil)
+	local late = Flux.signal(nil)
 	local pad, lazy
 	local s = Flux.scope(function()
 		pad = Flux.padding(function()

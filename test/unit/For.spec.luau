@@ -14,7 +14,7 @@ end
 
 local test = sert.test
 local expect = sert
-local new = Flux.Graph.new
+local new = Flux
 local For = { value = Flux.forValue, index = Flux.forIndex }
 
 test("for · mapFn reads are untracked; item nodes update", function()
@@ -172,11 +172,18 @@ test("for · eviction-scan reads stay untracked (no leaked mapper dependency)", 
 	mapped:get()
 	list:set({ "a" }) -- evicts "b"; its cleanup reads dep
 	mapped:get()
-	-- white-box: node deps live at node._[7] (SOURCES), holding source data tables
-	local key = Flux.Graph.Node.__type
-	local sources = mapped[key][7]
-	expect(sources ~= nil and table.find(sources, dep[key]) == nil, "cleanup read did not leak into deps")
-	expect(table.find(sources, list[key]) ~= nil, "list remains the mapper's only dependency")
+	-- white-box: computed sources live inline starting at slot 11 (SRC1) in steps of 2 up to slot 8 (NSRC) - 2
+	local inner = mapped[1]
+	local hasDep, hasList = false, false
+	for i = 11, inner[8] - 2, 2 do
+		if inner[i] == dep[1] then
+			hasDep = true
+		elseif inner[i] == list[1] then
+			hasList = true
+		end
+	end
+	expect(not hasDep, "cleanup read did not leak into deps")
+	expect(hasList, "list remains the mapper's only dependency")
 end)
 
 test("for · cleanup inside mapFn scopes to the row (Solid <For> per-row root)", function()
@@ -251,6 +258,45 @@ test("forIndex · reorder keeps results BY POSITION, mutating item nodes (unkeye
 	expect(r2[1].item:get() == "c", "position 1's item node now holds the new element")
 	expect(r2[2].item:get() == "b", "position 2 unchanged element")
 	expect(r2[3].item:get() == "a", "position 3's item node now holds the new element")
+end)
+
+test("for · non-table source returns empty array and Destroy tears down cached rows", function()
+	local src = new(nil :: any)
+	local cleaned = 0
+	local nodeDestroyed = 0
+	local mapped = For.value(src, function(indexNode, value)
+		indexNode:onDestroy(function()
+			nodeDestroyed += 1
+		end)
+		return function()
+			cleaned += 1
+		end
+	end)
+	expect(#mapped:get() == 0, "non-table source maps to empty table")
+	src:set({ "row1", "row2" })
+	expect(#mapped:get() == 2, "populates once source becomes a table")
+	mapped:Destroy()
+	expect(nodeDestroyed == 2 and cleaned == 2, "mapper Destroy tears down all row nodes and disposes cached results")
+end)
+
+test("for · recovers cleanly after mapFn throws without retaining scratch state", function()
+	local shouldThrow = true
+	local src = new({ "ok", "bad" })
+	local mapped = For.value(src, function(_index, val)
+		if shouldThrow and val == "bad" then
+			error("row boom")
+		end
+		return string.upper(val)
+	end)
+	sert.fails(function()
+		mapped:get()
+	end, "row boom")
+
+	shouldThrow = false
+	src:set({ "ok", "fixed" })
+	local res = mapped:get()
+	expect(#res == 2 and res[1] == "OK" and res[2] == "FIXED", "subsequent evaluation succeeds cleanly")
+	mapped:Destroy()
 end)
 
 return {}
