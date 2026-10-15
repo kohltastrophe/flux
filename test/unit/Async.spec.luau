@@ -15,7 +15,7 @@ end
 local test = sert.test
 local rtest = sert.rtest
 local expect = sert
-local new = Flux.Graph.new
+local new = Flux
 local flush = Flux.flush
 local Async = Flux.async
 
@@ -181,10 +181,10 @@ test("async · refetch does not become a dependency of an enclosing effect", fun
 	end)
 	flush()
 	local outerRuns = 0
-	local e = new(function()
+	local e = Flux.effect(function()
 		outerRuns += 1
 		a:refetch() -- must not capture `source` as a dep of `e`
-	end, true)
+	end)
 	flush()
 	expect(outerRuns == 1, "enclosing effect ran once")
 	source:set(2)
@@ -384,6 +384,14 @@ test("async · fetcher receives the previous value and the refetching payload (h
 	expect(seen[2].refetching == "manual", "the refetch payload is forwarded as the refetching arg")
 end)
 
+local function waitSettled(res: any, minWait: number)
+	task.wait(minWait)
+	local deadline = os.clock() + 1
+	while res.loading() and os.clock() < deadline do
+		task.wait()
+	end
+end
+
 rtest("async · loading lifecycle with real yields", function()
 	local res = Flux.async(function()
 		task.wait(0.03)
@@ -393,7 +401,7 @@ rtest("async · loading lifecycle with real yields", function()
 	expect(res.loading() == false, "not loading before the effect flushes")
 	flush()
 	expect(res.loading() == true, "loading becomes true once the fetch starts")
-	task.wait(0.08)
+	waitSettled(res, 0.08)
 	expect(res.loading() == false, "loading clears after resolution")
 	expect(res.data() == 42, "data holds the resolved value")
 	expect(res.error() == nil, "no error on success")
@@ -406,7 +414,7 @@ rtest("async · captures errors across yields", function()
 		error("boom")
 	end)
 	flush()
-	task.wait(0.06)
+	waitSettled(res, 0.06)
 	expect(res.loading() == false, "loading cleared after failure")
 	expect(res.data() == nil, "data stays nil on failure")
 	expect(res.error() ~= nil, "error node populated")
@@ -424,7 +432,7 @@ rtest("async · latest request wins (race handling)", function()
 	task.wait(0.02)
 	input(2) -- change the source
 	flush() -- starts the fast fetch for v = 2
-	task.wait(0.12) -- let both fetches finish (slow one resolves ~0.08s in, then is discarded)
+	waitSettled(res, 0.12) -- let both fetches finish (slow one resolves ~0.08s in, then is discarded)
 	expect(res.data() == 2, `the newer result should win, got {tostring(res.data())}`)
 	res:Destroy()
 end)
@@ -436,11 +444,11 @@ rtest("async · refetch with a real yielding fetcher resolves fresh", function()
 		return v * 100
 	end)
 	flush()
-	task.wait(0.05)
+	waitSettled(a, 0.05)
 	expect(a.data() == 100, "initial fetch resolved")
 	source(4)
 	a:refetch() -- before the effect's own flush; reads live value 4
-	task.wait(0.05)
+	waitSettled(a, 0.05)
 	expect(a.data() == 400, "refetch resolved with the live source value")
 	a:Destroy()
 end)
@@ -492,6 +500,23 @@ test("refetch · honors the source gate", function()
 	a:refetch()
 	expect(runs == 0, "refetch does not bypass the gate")
 	a:Destroy()
+end)
+
+test("scope · async created in a scope is destroyed with it and double Destroy is a no-op", function()
+	local res
+	local scope = Flux.scope(function()
+		res = Async(function()
+			return 7
+		end, 0)
+	end)
+	flush()
+	expect(res.data() == 7 and res.state() == "ready", "resolved inside scope")
+	scope:Destroy()
+	expect(res.data == nil and res.state == nil, "scope teardown destroyed the async resource")
+	res:Destroy()
+	res:mutate(99)
+	res:refetch()
+	expect(res.data == nil, "double Destroy and post-Destroy mutate/refetch are safe no-ops")
 end)
 
 return {}

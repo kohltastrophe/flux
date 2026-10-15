@@ -221,7 +221,7 @@ test("switch · changing to an unmapped key tears down prior branch and nulls ou
 	expect(node() == nil, "output nil for unmapped key")
 end)
 
-test("switch · Flux.default mounts for unmapped keys without rebuilding", function()
+test("switch · Flux.otherwise mounts for unmapped keys without rebuilding", function()
 	local key = Flux.signal("x")
 	local builds = { x = 0, fallback = 0 }
 	local node = Flux.switch(key)({
@@ -229,7 +229,7 @@ test("switch · Flux.default mounts for unmapped keys without rebuilding", funct
 			builds.x += 1
 			return { tag = "X" }
 		end,
-		[Flux.default] = function()
+		[Flux.otherwise] = function()
 			builds.fallback += 1
 			return { tag = "DEFAULT" }
 		end,
@@ -327,7 +327,7 @@ test("switch · the default branch value accessor tracks the live unmatched valu
 		home = function(value)
 			return "home:" .. value() -- keyed branch: value() == the matched key
 		end,
-		[Flux.default] = function(value)
+		[Flux.otherwise] = function(value)
 			defaultBuilds += 1
 			Flux.effect(function()
 				seen[#seen + 1] = value()
@@ -344,6 +344,108 @@ test("switch · the default branch value accessor tracks the live unmatched valu
 	flush()
 	expect(defaultBuilds == 1, "the one default mount is reused across unmatched values")
 	expect(table.concat(seen, ",") == "about,contact", "default accessor tracked each live unmatched value")
+end)
+
+test("presence · mounts truthy, holds branch with exiting=true on falsy, and unmounts on done()", function()
+	local open = Flux.signal(true)
+	local builds = 0
+	local cleaned = 0
+	local exitNode: any
+	local finishExit: (() -> ())?
+
+	local node = Flux.presence(open, function(exiting, done)
+		builds += 1
+		exitNode = exiting
+		finishExit = done
+		Flux.cleanup(function()
+			cleaned += 1
+		end)
+		return { tag = "modal" }
+	end)
+	flush()
+	expect(node() ~= nil and node().tag == "modal" and builds == 1, "mounted when truthy")
+	expect(exitNode() == false, "exiting starts false")
+
+	-- Calling done() while not exiting is a no-op
+	finishExit()
+	flush()
+	expect(node() ~= nil and cleaned == 0, "done() ignored while not exiting")
+
+	-- Falsy transition sets exiting=true and keeps the branch mounted
+	open:set(false)
+	flush()
+	expect(node() ~= nil and cleaned == 0, "branch stays mounted during exit transition")
+	expect(exitNode() == true, "exiting node flipped to true")
+
+	-- Re-truthy before done() cancels the exit without rebuilding
+	open:set(true)
+	flush()
+	expect(builds == 1 and cleaned == 0, "interrupted exit keeps the existing mount")
+	expect(exitNode() == false, "exiting reset to false")
+
+	-- Falsy again, then done() completes the unmount
+	open:set(false)
+	flush()
+	expect(exitNode() == true, "exiting again")
+	finishExit()
+	flush()
+	expect(node() == nil and cleaned == 1, "done() unmounts and tears down the branch scope")
+end)
+
+test(
+	"presence · destroying the presence node tears down the live branch and throwing factory recovers (expected warn)",
+	function()
+		local cond = Flux.signal(true)
+		local cleaned = 0
+		local node = Flux.presence(cond, function()
+			Flux.cleanup(function()
+				cleaned += 1
+			end)
+			return "panel"
+		end)
+		flush()
+		expect(node() == "panel" and cleaned == 0, "mounted")
+		node:Destroy()
+		expect(cleaned == 1, "Destroy tore down the active presence branch")
+
+		local bad = Flux.presence(Flux.signal(true), function()
+			error("presence boom (expected warn)")
+		end)
+		flush()
+		expect(bad() == nil, "throwing presence factory leaves output nil")
+	end
+)
+
+test("pick · selects between reactive branches and only subscribes to the active side", function()
+	local cond = Flux.signal(true)
+	local a = Flux.signal("A1")
+	local b = Flux.signal("B1")
+	local aReads, bReads = 0, 0
+
+	local picked = Flux.pick(cond, function()
+		aReads += 1
+		return a()
+	end, function()
+		bReads += 1
+		return b()
+	end)
+	expect(picked() == "A1" and aReads == 1 and bReads == 0, "only truthy branch read")
+
+	-- Changing the untaken branch does not re-evaluate pick
+	b:set("B2")
+	expect(picked() == "A1" and aReads == 1 and bReads == 0, "untaken branch is not a dependency")
+
+	-- Flip condition to falsy
+	cond:set(false)
+	expect(picked() == "B2" and bReads == 1, "falsy branch selected")
+	a:set("A2")
+	expect(picked() == "B2" and bReads == 1, "truthy branch no longer a dependency while falsy")
+
+	-- Omitted whenFalse defaults to nil
+	local optional = Flux.pick(cond, "present")
+	expect(optional() == nil, "omitted whenFalse yields nil when falsy")
+	cond:set(true)
+	expect(optional() == "present", "yields whenTrue when truthy")
 end)
 
 rtest("show · mounts/unmounts real instances under a parent", function()
@@ -383,6 +485,35 @@ rtest("switch · reparents the selected instance on key change", function()
 	flush()
 	expect(root:FindFirstChild("Red") == nil and root:FindFirstChild("Blue") ~= nil, "swapped to blue")
 	s:Destroy()
+end)
+
+test("presence · destroys exiting and done nodes when mount completes or output is destroyed", function()
+	local visible = Flux.signal(true)
+	local exitDestroyed = 0
+	local finishFn: (() -> ())?
+	local out = Flux.presence(visible, function(exiting, done)
+		exiting:onDestroy(function()
+			exitDestroyed += 1
+		end)
+		finishFn = done
+		return "mounted"
+	end)
+	flush()
+	expect(out() == "mounted" and exitDestroyed == 0, "mounted with live exiting node")
+
+	visible:set(false)
+	flush()
+	expect(exitDestroyed == 0, "exiting node still alive while exit animation is in progress")
+	assert(finishFn)()
+	flush()
+	expect(out() == nil and exitDestroyed == 1, "completing exit destroys the per-mount exiting node")
+
+	-- Re-mount and destroy the outer presence node directly while mounted
+	visible:set(true)
+	flush()
+	expect(out() == "mounted" and exitDestroyed == 1, "re-mounted with a fresh exiting node")
+	out:Destroy()
+	expect(exitDestroyed == 2, "destroying presence output destroys the active exiting node")
 end)
 
 return {}

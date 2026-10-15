@@ -83,28 +83,40 @@ test("responsive · breakpointOf thresholds", function()
 end)
 
 test("responsive · default node values", function()
-	expect(approx(Flux.scale:get(), 1), "default scale at reference is 1.0")
+	expect(approx(Responsive.scale:get(), 1), "default scale at reference is 1.0")
 	expect(Responsive.breakpoint:get() == "desktop", "default breakpoint is desktop")
+	local display = Responsive.displaySize:get()
+	expect(display == "Small" or display == "Medium" or display == "Large", "displaySize is a known size")
+	local mode = Responsive.input:get()
+	expect(mode == "keyboard" or mode == "touch" or mode == "gamepad", "input is a known mode")
+	expect(type(Responsive.reducedMotion:get()) == "boolean", "reducedMotion is a boolean")
+	local transparency = Responsive.preferredTransparency:get()
+	expect(
+		type(transparency) == "number" and transparency >= 0 and transparency <= 1,
+		"preferredTransparency is within [0, 1]"
+	)
+	local size = Responsive.textSize:get()
+	expect(size == "Medium" or size == "Large" or size == "Larger" or size == "Largest", "textSize is a known size")
 	if not IS_ROBLOX then
-		local insets = Flux.safeArea:get()
-		expect(
-			insets.top == 0 and insets.bottom == 0 and insets.left == 0 and insets.right == 0,
-			"default safeArea is zero (headless)"
-		)
+		expect(display == "Medium", "default displaySize is Medium")
+		expect(mode == "keyboard", "default input is keyboard")
+		expect(Responsive.reducedMotion:get() == false, "default reducedMotion is false")
+		expect(approx(transparency, 1), "default preferredTransparency is 1")
+		expect(size == "Medium", "default textSize is Medium")
 	end
 end)
 
 test("responsive · scale & breakpoint nodes react to viewport writes", function()
 	-- The viewport node is the write seam; a plain {X,Y} table drives the math.
-	Flux.viewport:set({ X = 800, Y = 600 } :: any)
-	expect(approx(Flux.scale:get(), 800 / 1920), "scale recomputes from viewport (pull-based)")
+	Responsive.viewport:set({ X = 800, Y = 600 } :: any)
+	expect(approx(Responsive.scale:get(), 800 / 1920), "scale recomputes from viewport (pull-based)")
 	expect(Responsive.breakpoint:get() == "tablet", "800 wide → tablet")
-	Flux.viewport:set({ X = 500, Y = 900 } :: any)
+	Responsive.viewport:set({ X = 500, Y = 900 } :: any)
 	expect(Responsive.breakpoint:get() == "phone", "500 wide → phone")
 end)
 
 test("responsive · scaleOf / breakpointOf escape hatches use merged config", function()
-	Flux.viewport:set({ X = 1280, Y = 720 } :: any)
+	Responsive.viewport:set({ X = 1280, Y = 720 } :: any)
 	local s = Responsive.scaleOf({ mode = "width" })
 	expect(approx(s:get(), 1280 / 1920), "scaleOf overrides mode")
 	local b = Responsive.breakpointOf({ breakpoints = { phone = 400, tablet = 800 } })
@@ -114,7 +126,7 @@ test("responsive · scaleOf / breakpointOf escape hatches use merged config", fu
 end)
 
 test("responsive · scaleOf/breakpointOf accept a custom viewport source (container queries)", function()
-	-- e.g. a plugin dock: Flux(dock, "AbsoluteSize"); here a plain node stands in for the surface size.
+	-- e.g. a plugin dock: Flux.property(dock, "AbsoluteSize"); here a plain node stands in for the surface size.
 	local container = Flux({ X = 400, Y = 300 } :: any)
 	local s = Responsive.scaleOf({ viewport = container, reference = { X = 800, Y = 600 } :: any })
 	local b = Responsive.breakpointOf({ viewport = container, breakpoints = { phone = 500, tablet = 700 } })
@@ -139,7 +151,7 @@ test("responsive · scaleOf/breakpointOf accept a custom viewport source (contai
 end)
 
 test("responsive · platform resolves to a device class", function()
-	local platform = Responsive.platform
+	local platform = Responsive.platform:get()
 	expect(
 		platform == "pc" or platform == "mobile" or platform == "console" or platform == "vr",
 		"platform is a known device class"
@@ -152,26 +164,25 @@ end)
 rtest("responsive · scale node drives a real UIScale from viewport", function()
 	local uiScale
 	local s = Flux.scope(function()
-		Flux.viewport:set(Vector2.new(960, 540))
-		uiScale = Flux.new("UIScale")({ Scale = Flux.scale })
+		Responsive.viewport:set(Vector2.new(960, 540))
+		uiScale = Flux.new("UIScale")({ Scale = Responsive.scale })
 	end)
 	flush()
 	expect(approx(uiScale.Scale, 0.5), "UIScale tracks scale node (960x540 → 0.5)")
-	Flux.viewport:set(Vector2.new(1920, 1080))
+	Responsive.viewport:set(Vector2.new(1920, 1080))
 	flush()
 	expect(approx(uiScale.Scale, 1), "UIScale updates on viewport change")
 	s:Destroy()
 end)
 
-rtest("responsive · safeArea exposes numeric inset struct", function()
-	local insets = Flux.safeArea:get()
-	expect(
-		type(insets.top) == "number"
-			and type(insets.bottom) == "number"
-			and type(insets.left) == "number"
-			and type(insets.right) == "number",
-		"safeArea has numeric insets from GuiService"
-	)
+test("responsive · scaleOf clamps zero reference dimensions to 1 to avoid NaN/inf", function()
+	local s = Responsive.scaleOf({
+		viewport = Flux({ X = 0, Y = 0 } :: any),
+		reference = { X = 0, Y = 0 } :: any,
+	})
+	local val = s:get()
+	expect(val == val and val ~= math.huge and approx(val, 0), "0/max(0,1) produces finite 0 instead of NaN")
+	s:Destroy()
 end)
 
 return {}

@@ -14,7 +14,7 @@ end
 
 local test = sert.test
 local expect = sert
-local new = Flux.Graph.new
+local new = Flux
 local flush = Flux.flush
 
 test("selector · O(1) flip touches only the two affected keys", function()
@@ -23,10 +23,13 @@ test("selector · O(1) flip touches only the two affected keys", function()
 	local evals = { [1] = 0, [2] = 0, [3] = 0 }
 	local memos = {}
 	for k = 1, 3 do
-		memos[k] = new(function()
+		memos[k] = Flux.computed(function()
 			evals[k] += 1
 			return sel(k)
-		end, true)
+		end)
+		Flux.effect(function()
+			memos[k]()
+		end)
 	end
 	flush()
 	expect(memos[1]() == true and memos[2]() == false and memos[3]() == false, "initial selection")
@@ -49,13 +52,12 @@ test("selector · lazy per-key nodes; unread keys allocate nothing", function()
 	expect(next(sel._nodes) == nil, "non-reactive reads allocate nothing")
 
 	-- A tracked read allocates exactly one node per key actually read.
-	local ra = new(function()
+	local ra = Flux.computed(function()
 		return sel("a")
-	end, true)
-	local rb = new(function()
+	end)
+	local rb = Flux.computed(function()
 		return sel("b")
-	end, true)
-	flush()
+	end)
 	expect(ra() == true and rb() == false, "tracked reads return the right selection")
 	local count = 0
 	for _ in sel._nodes do
@@ -113,25 +115,22 @@ test("selector · function source is the only tracked dependency", function()
 	expect(runs == base + 1, "watcher re-runs on source change")
 end)
 
-test("selector · destroy tears down watcher and per-key nodes", function()
+test("selector · Destroy tears down watcher and per-key nodes", function()
 	local active = new(1)
 	local sel = Flux.selector(active)
-	new(function()
+	Flux.effect(function()
 		return sel(1)
-	end, true)
+	end)
 	flush()
 	local n1 = sel._nodes[1]
-	expect(next(n1[Flux.Graph.Node.__type]) ~= nil, "per-key node live")
-	sel:destroy()
-	expect(
-		Flux.isNode(n1) and next(n1[Flux.Graph.Node.__type]) == nil,
-		"per-key node destroyed (metatable kept, inner table stripped)"
-	)
+	expect(next(n1[1]) ~= nil, "per-key node live")
+	sel:Destroy()
+	expect(Flux.isNode(n1) and next(n1[1]) == nil, "per-key node destroyed (metatable kept, inner table stripped)")
 	expect((pcall(function()
 		sel(1)
 	end)) == false, "post-destroy read errors")
 	expect((pcall(function()
-		sel:destroy()
+		sel:Destroy()
 	end)) == true, "double destroy is a safe no-op")
 end)
 
@@ -140,18 +139,35 @@ test("scope · a selector created in a scope is cleaned up on destroy", function
 	local sel
 	local s = Flux.scope(function()
 		sel = Flux.selector(active)
-		new(function()
+		Flux.effect(function()
 			return sel(1)
-		end, true)
+		end)
 	end)
 	flush()
 	local node = sel._nodes[1]
-	expect(next(node[Flux.Graph.Node.__type]) ~= nil, "selector per-key node live under scope")
+	expect(next(node[1]) ~= nil, "selector per-key node live under scope")
 	s:Destroy()
-	expect(
-		Flux.isNode(node) and next(node[Flux.Graph.Node.__type]) == nil,
-		"scope:Destroy() stripped the selector's per-key nodes"
-	)
+	expect(Flux.isNode(node) and next(node[1]) == nil, "scope:Destroy() stripped the selector's per-key nodes")
+end)
+
+test("selector · sweeps unobserved per-key nodes once count reaches SWEEP_MIN", function()
+	local active = new(1)
+	local sel = Flux.selector(active)
+	-- Observe and immediately drop 33 keys, keeping only key 1 observed by a live effect
+	local keep = Flux.effect(function()
+		sel(1)
+	end)
+	for k = 2, 34 do
+		local temp = Flux.computed(function()
+			return sel(k)
+		end)
+		temp()
+		temp:Destroy()
+	end
+	flush()
+	expect(sel._count == 1, `sweeper reclaimed unobserved keys and kept the 1 live key, got {sel._count}`)
+	keep:Destroy()
+	sel:Destroy()
 end)
 
 return {}

@@ -15,115 +15,47 @@ end
 local test = sert.test
 local expect = sert
 
-test("wrap · replaces primitives with nodes", function()
-	local t = { hp = 100, mp = 50, alive = true }
-	Flux.wrap(t)
-	expect(Flux.isNode(t.hp), "hp became a node")
-	expect(Flux.isNode(t.mp), "mp became a node")
-	expect(Flux.isNode(t.alive), "alive became a node")
-	expect(t.hp() == 100, "node holds the original value")
-	t.hp(90)
-	expect(t.hp() == 90, "wrapped node is writable")
+test("split · partitions keys into group tables and a rest table", function()
+	local input = { label = "Click", count = 3, Size = "big", [1] = "child" }
+	local own, rest = Flux.split(input, { "label", "count" })
+	expect(own.label == "Click" and own.count == 3, "picked keys placed into own")
+	expect(own.Size == nil and own[1] == nil, "unpicked keys excluded from own")
+	expect(rest.Size == "big" and rest[1] == "child", "remaining keys and numeric children placed into rest")
+	expect(rest.label == nil and rest.count == nil, "picked keys excluded from rest")
+	expect(input.label == "Click" and input.Size == "big", "input table left untouched")
 end)
 
-test("wrap · recurses and preserves existing nodes", function()
-	local existing = Flux(7)
-	local t = {
-		name = "x",
-		keep = existing,
-		stats = { atk = 5 },
-	}
-	Flux.wrap(t)
-	expect(Flux.isNode(t.name), "top-level primitive wrapped")
-	expect(t.keep == existing, "pre-existing node left untouched")
-	expect(type(t.stats) == "table" and not Flux.isNode(t.stats), "nested table traversed, not replaced")
-	expect(Flux.isNode(t.stats.atk), "nested primitive wrapped")
+test("split · accepts a schema table and multiple groups; first group wins on overlap", function()
+	local SCHEMA = { a = 1, b = 2 }
+	local g1, g2, rest = Flux.split({ a = 10, b = 20, c = 30, d = 40 }, SCHEMA, { "b", "c" })
+	expect(g1.a == 10 and g1.b == 20 and g1.c == nil, "first group claims a and b")
+	expect(g2.b == nil and g2.c == 30, "overlapping key b goes only to the first group")
+	expect(rest.d == 40 and rest.a == nil and rest.b == nil and rest.c == nil, "rest receives unclaimed keys")
 end)
 
-test("props · merges declared overrides over defaults, ignores unknown keys", function()
-	local DEFAULTS = { label = "hi", count = 0, active = true }
-	local p = Flux.props(DEFAULTS, { count = 5, active = false, Size = "for hydration" })
-	expect(p.label() == "hi", "default used when override absent")
-	expect(p.count() == 5, "override replaces default")
-	expect(p.active() == false, "a false override still applies")
-	expect(p.Size == nil, "unknown override keys are not taken")
-	expect(DEFAULTS.count == 0, "defaults table left untouched")
+test("split · nil props returns empty tables", function()
+	local own, rest = Flux.split(nil, { "a", "b" })
+	expect(next(own) == nil and next(rest) == nil, "nil props produces empty tables")
 end)
 
-test("props · converts functions to computeds and passes nodes through", function()
-	local src = Flux(2)
-	local shared = Flux("theme")
-	local p = Flux.props({
-		double = function()
-			return src() * 2
-		end,
-		theme = shared,
-	})
-	expect(Flux.isNode(p.double), "function default became a node")
-	expect(p.double() == 4, "computed derives from its source")
-	src(3)
-	expect(p.double() == 6, "computed recomputes")
-	expect(p.theme == shared, "node default passes through by reference")
+test("fallback · returns static value when present, or default when nil", function()
+	expect(Flux.fallback("custom", "default")() == "custom", "present static value kept")
+	expect(Flux.fallback(false, true)() == false, "false is preserved, not replaced by default")
+	expect(Flux.fallback(nil, "default")() == "default", "nil falls back to default")
 end)
 
-test("props · deep-copies plain table defaults so instances never share state", function()
-	local DEFAULTS = { nested = { value = 1 } }
-	local a = Flux.props(DEFAULTS)
-	local b = Flux.props(DEFAULTS)
-	expect(DEFAULTS.nested.value == 1, "schema leaf still a plain value")
-	expect(Flux.isNode(a.nested.value), "nested leaf wrapped per instance")
-	a.nested.value(5)
-	expect(b.nested.value() == 1, "sibling instance unaffected")
-	expect(a.nested ~= b.nested, "nested tables are per-instance copies")
-end)
-
-test("props · a table override replaces the default table wholesale", function()
-	local p = Flux.props({ opts = { a = 1 } }, { opts = { a = 2, b = 3 } })
-	expect(p.opts.a() == 2, "override table wins")
-	expect(p.opts.b() == 3, "override-only nested keys survive (schema filters top level only)")
-end)
-
-test("props · never mutates or shares a caller's override table", function()
-	local DEFAULTS = { opts = { a = 1 } }
-	local SHARED = { a = 2 }
-	local p1 = Flux.props(DEFAULTS, { opts = SHARED })
-	local p2 = Flux.props(DEFAULTS, { opts = SHARED })
-	expect(SHARED.a == 2 and not Flux.isNode(SHARED.a), "override table left plain")
-	expect(p1.opts ~= SHARED and p1.opts ~= p2.opts, "each instance gets its own copy")
-	p1.opts.a(9)
-	expect(p2.opts.a() == 2, "instances never share state through a reused override")
-	local frozen = Flux.props(DEFAULTS, { opts = table.freeze({ a = 3 }) })
-	expect(frozen.opts.a() == 3, "a frozen override table is accepted")
-end)
-
-test("props · metatabled tables pass through by reference, untouched", function()
-	local theme = setmetatable({ color = "red" }, {})
-	local DEFAULTS = { theme = theme }
-	local a = Flux.props(DEFAULTS)
-	local b = Flux.props(DEFAULTS, { theme = theme })
-	expect(a.theme == theme and b.theme == theme, "shared by reference as a default and as an override")
-	expect(theme.color == "red", "a metatabled table is never wrapped in place")
-end)
-
-test("wrap · leaves nested metatabled tables untouched", function()
-	local proxy = setmetatable({ value = 1 }, {})
-	local t = Flux.wrap({ plain = { value = 1 }, proxy = proxy })
-	expect(Flux.isNode(t.plain.value), "plain nested table wrapped")
-	expect(t.proxy == proxy and proxy.value == 1, "metatabled nested table skipped, as in Wrapped<T>")
-end)
-
-test("wrap · wrapped signals survive scope teardown (GC-managed)", function()
-	-- Flux.wrap replaces primitives with plain signals, which the enclosing scope does not own:
-	-- they outlive its Destroy and the GC reclaims them once unreferenced.
-	local t = { a = 1, b = 2 }
-	local s = Flux.scope(function()
-		Flux.wrap(t)
-	end)
-	expect(Flux.isNode(t.a), "scoped wrap creates nodes")
-	s:Destroy()
-	expect(Flux.isNode(t.a) and t.a() == 1, "wrapped signal survives scope teardown")
-	t.a(7)
-	expect(t.a() == 7, "and is still usable after the scope is gone")
+test("fallback · reactive source or default returns a node that falls back on nil", function()
+	local src = Flux.signal(nil :: string?)
+	local def = Flux.signal("fallback")
+	local resolved = Flux.fallback(src, def)
+	expect(Flux.isNode(resolved), "fallback produces a reactive node")
+	expect(resolved() == "fallback", "nil reactive source yields reactive default")
+	def:set("updated-fallback")
+	expect(resolved() == "updated-fallback", "tracks changes to the default while source is nil")
+	src:set("live")
+	expect(resolved() == "live", "non-nil source value wins over default")
+	src:set(false :: any)
+	expect(resolved() == false, "false from a reactive source is kept, not treated as nil")
 end)
 
 return {}

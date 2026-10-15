@@ -15,8 +15,8 @@ end
 local test = sert.test
 local rtest = sert.rtest
 local expect = sert
-local new = Flux.Graph.new
-local Clean = Flux.clean
+local new = Flux
+local Clean = Flux.dispose
 
 test("clean · one failing cleanup doesn't abort the rest (expected warn)", function()
 	local ran = false
@@ -78,7 +78,7 @@ test("clean · Flux Node is destroyed via its Destroy method", function()
 	expect(destroyed, "Clean(node) routes through cleanTable to Node.Destroy, firing onDestroy")
 	-- metatable kept (isNode stays true), inner table stripped so the GC can reclaim it
 	expect(Flux.isNode(node), "destroyed node keeps its metatable (isNode stays true)")
-	expect(next(node[Flux.Graph.Node.__type]) == nil, "destroyed node's inner table was stripped")
+	expect(next(node[1]) == nil, "destroyed node's inner table was stripped")
 end)
 
 test("clean · nested array cleans every leaf function", function()

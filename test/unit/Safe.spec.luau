@@ -14,8 +14,7 @@ end
 
 local test = sert.test
 local expect = sert
-local expectError = sert.fails
-local new = Flux.Graph.new
+local new = Flux
 
 test("safe · returns tryFn result when it succeeds", function()
 	local dep = new(2)
@@ -138,94 +137,6 @@ test("safe · structured (table) error reaches the recovery fn intact", function
 	expect(s:get() == "recovered", "recovered value")
 	expect(seen == errObj, "recovery fn got the exact table (identity preserved, not stringified)")
 	expect(type(seen) == "table" and seen.code == 500, "table fields intact")
-end)
-
-test("catch · returns fn result on success, handler result on throw", function()
-	local okPath = Flux.catch(function()
-		return 42
-	end, function()
-		return -1
-	end)
-	expect(okPath == 42, "success path")
-	local errPath = Flux.catch(function(): number
-		error("nope")
-	end, function(err)
-		expect(string.find(tostring(err), "nope", 1, true) ~= nil, "handler got error")
-		return -1
-	end)
-	expect(errPath == -1, "handler path")
-end)
-
-test("catch · does not subscribe the surrounding computation to its reads", function()
-	local dep = new(1)
-	local outerRuns = 0
-	local outer = new(function()
-		outerRuns += 1
-		return Flux.catch(function()
-			return dep:get()
-		end, function()
-			return 0
-		end)
-	end)
-	expect(outer:get() == 1 and outerRuns == 1, "init")
-	dep:set(2)
-	expect(outer:get() == 1 and outerRuns == 1, "catch read is untracked")
-end)
-
-test("catch · reads after the guarded block stay tracked", function()
-	local a = new(1)
-	local b = new(10)
-	local outerRuns = 0
-	local outer = new(function()
-		outerRuns += 1
-		local guarded = Flux.catch(function()
-			return a:get()
-		end, function()
-			return 0
-		end)
-		return guarded + b:get()
-	end)
-	expect(outer:get() == 11 and outerRuns == 1, "init")
-	b:set(20)
-	expect(outer:get() == 21 and outerRuns == 2, "post-catch read re-tracked")
-	a:set(5)
-	expect(outer:get() == 21 and outerRuns == 2, "guarded read stays untracked")
-end)
-
-test("catch · handler that itself throws propagates", function()
-	expectError(function()
-		Flux.catch(function()
-			error("inner")
-		end, function()
-			error("handler boom")
-		end)
-	end, "handler boom")
-end)
-
-test("catch · structured (table) error reaches the handler intact", function()
-	local errObj = { code = 404 }
-	local seen: any = nil
-	local result = Flux.catch(function(): number
-		error(errObj)
-	end, function(err)
-		seen = err
-		return -1
-	end)
-	expect(result == -1, "handler path")
-	expect(seen == errObj, "handler got the exact table (identity preserved, not stringified)")
-end)
-
-test("catch · re-raises a thrown table error unchanged", function()
-	local errObj = { code = 500 }
-	local ok, caught = pcall(function()
-		Flux.catch(function()
-			error("inner")
-		end, function()
-			error(errObj)
-		end)
-	end)
-	expect(ok == false, "handler error propagated")
-	expect(caught == errObj, "re-raised the exact table via error(_, 0), not a stringified copy")
 end)
 
 test("scope · a safe node created in a scope is destroyed with it", function()
