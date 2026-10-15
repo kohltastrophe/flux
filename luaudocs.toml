@@ -36,6 +36,7 @@ linkRobloxTypes = true
 # Published site URL: enables sitemap.xml and, for project pages
 # (user.github.io/repo/), the derived base path.
 url = "https://flux.kohl.gg"
+model = true
 # Pull README.md into the landing page (moonwave hide markers honored).
 # includeReadme = true
 # llms.txt + llms-full.txt in public/ (guides, then API pages), so AI tooling

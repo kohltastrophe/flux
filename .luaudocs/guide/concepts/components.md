@@ -1,197 +1,154 @@
 ---
 title: Components
-description: Best practices for building reusable UI components in Flux.
+description: Building reusable, strictly-typed UI components in Flux.
 outline: deep
-sidebar_position: 12
+sidebar_position: 5
 ---
 
 # Components
 
-As your application grows, you will want to break down complex UI hierarchies into smaller, reusable pieces. In Flux, **Components are just regular Luau functions** that return Roblox instances.
-
-Because Flux does not rely on a Virtual DOM, its component model differs from libraries like React or Roact. If you understand how SolidJS components work, the model here will be familiar.
-
-## The "Run Once" Mental Model
-
-The most critical concept to understand is that **Flux components only run once**.
-
-A component is a factory function. When you call it, it creates Roblox instances, wires up reactive bindings ([Computeds](/guide/concepts/computeds), [Effects](/guide/concepts/effects)), and returns the generated UI. The component function itself does _not_ re-execute when state changes. Only the specific property bindings (the functions or nodes you assign to properties like [`Text`](https://create.roblox.com/docs/en-us/reference/engine/classes/TextLabel#Text) or [`BackgroundColor3`](https://create.roblox.com/docs/en-us/reference/engine/classes/GuiObject#BackgroundColor3)) will re-evaluate.
+In Flux, **components are plain Luau functions** that run **once** to construct Roblox [`Instances`](https://create.roblox.com/docs/en-us/reference/engine/datatypes/Instance) and wire up reactive bindings.
 
 ```luau
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Flux = require(ReplicatedStorage.Flux)
-local new = Flux.new
+type ButtonProps = {
+	text: Flux.Reactive<string>,
+	onClick: (() -> ())?,
+}
 
--- This function runs exactly ONCE per button instance created
-local function PrimaryButton(props)
-    print("Mounting button...") -- prints only once
-
-    return new "TextButton" {
-        Size = UDim2.fromOffset(200, 50),
-        BackgroundColor3 = Color3.fromRGB(0, 120, 255),
-
-        -- Only this re-evaluates when props.text changes
-        Text = props.text,
-
-        Activated = props.onClick,
-    }
+local function PrimaryButton(props: ButtonProps): TextButton
+	return Flux.new "TextButton" {
+		Size = UDim2.fromOffset(200, 50),
+		BackgroundColor3 = Color3.fromRGB(0, 120, 255),
+		Text = props.text,
+		Activated = props.onClick,
+	}
 end
 ```
+
+When state changes, `PrimaryButton` itself never re-executes—only the bound `Text` property updates.
 
 ## Consuming Components
 
-Because components are just functions, you consume them by calling them within your declarative hierarchy.
+Call component functions directly inside a `Flux.new` hierarchy:
 
 ```luau
-local count = Flux(0)
+local count = Flux.signal(0)
 
-local ui = new "Frame" {
-    Size = UDim2.fromScale(1, 1),
+local screen = Flux.new "Frame" {
+	Size = UDim2.fromScale(1, 1),
 
-    -- Mount the component by calling it
-    PrimaryButton({
-        text  = Flux(function() return `Count: {count}` end),
-        onClick = function() count(count + 1) end,
-    }),
+	PrimaryButton({
+		text = function()
+			return `Count: {count()}`
+		end,
+		onClick = function()
+			count(count() + 1)
+		end,
+	}),
 }
 ```
 
-Interpolating `{count}`{luau} (or writing `count + 1`{luau}) reads the node's current value automatically; see [Signals](/guide/concepts/signals).
-
 ## Handling Props (Static vs. Reactive)
 
-When designing a reusable component, you often don't know if the caller will pass a static value (like `"Submit"`{luau}) or a reactive node (like a `Flux` [Signal](/guide/concepts/signals)). There are a few clean ways to handle this.
+Callers may pass a static value (`"Submit"`), a reactive [Node](/guide/concepts/signals), or a getter function (`() -> string`). Annotate flexible component props with `Flux.Reactive<T>` (which accepts `T | Node<T> | () -> T`).
 
-### 1. Pass nodes directly to property bindings
+### 1. Passing Props Directly to Instance Properties
 
-The simplest approach: accept both static values and nodes as props, and pass them directly to the instance's property. Flux's declarative builder handles both; a static value is assigned once, a node is bound reactively.
-
-```luau
-local function StatusLabel(props)
-    return new "TextLabel" {
-        -- If props.status is a node, it binds reactively.
-        -- If it's a static string, it's assigned once.
-        Text = props.status,
-    }
-end
-
--- Works with a static string:
-StatusLabel({ status = "Ready" })
-
--- Works with a reactive node:
-StatusLabel({ status = someFluxNode })
-```
-
-### 2. Normalising props with `Flux.wrap`{lua}
-
-For components with many props where you want to guarantee all values are nodes (so you can always call them as functions), use `Flux.wrap`{lua} at the top of the component. It converts any primitive values to Nodes in-place and leaves existing Nodes untouched. It also recurses into nested tables, so a prop like `props.theme = { color = ... }`{luau} gets its inner values wrapped too.
+`Flux.new` and `Flux.edit` accept static values, nodes, and getters natively, so you can pass a `Flux.Reactive<T>` prop straight to an Instance property:
 
 ```luau
-local function Card(props)
-    -- Normalise all props: primitives become Nodes, existing Nodes are unchanged
-    Flux.wrap(props)
-
-    return new "Frame" {
-        BackgroundColor3 = function()
-            return props.color()  -- always safe to call
-        end,
-
-        new "TextLabel" {
-            Text = function()
-                return props.title()  -- always safe to call
-            end,
-        },
-    }
+local function StatusLabel(props: { status: Flux.Reactive<string> })
+	return Flux.new "TextLabel" {
+		Text = props.status, -- static string assigned once; node or getter bound reactively
+	}
 end
 ```
 
-When your component also has **defaults** to merge beneath the caller's values, reach for [`Flux.props`](/guide/concepts/wrapping#props) instead: `Flux.props(DEFAULT, props)`{luau} takes only the keys `DEFAULT` declares, lays the caller's overrides on top, and returns a new fully-wrapped table, mutating neither input and leaving unknown keys (say, raw instance properties passed in the same table) for you to hand on to hydration.
+### 2. Reading Node-or-Value Props with `Flux.read`{lua}
 
-### 3. Reading node-or-value props with `Flux.read`{lua}
-
-When you need a prop's value inside a larger expression, `Flux.read`{lua} evaluates a node (registering it as a dependency) or passes a plain value through unchanged:
+When you need to transform a `Flux.Reactive<T>` prop inside a computation, call [`Flux.read(value)`](/guide/concepts/tracking#flux-read). It reads a node or getter with tracking, or returns a plain value as-is:
 
 ```luau
-local function StatusLabel(props)
-    return new "TextLabel" {
-        Text = function()
-            return "Status: " .. Flux.read(props.status)
-        end,
-    }
+local function StatusLabel(props: { status: Flux.Reactive<string> })
+	return Flux.new "TextLabel" {
+		Text = function()
+			return `Status: {string.upper(Flux.read(props.status))}`
+		end,
+	}
 end
 ```
 
-For an explicit check, `Flux.isNode(props.status)`{luau} tells you whether a prop is reactive. See [Tracking](/guide/concepts/tracking) for the full set of read utilities.
+Use `Flux.isNode(value)` when you explicitly need to check whether a value is a Flux node.
+
+## Splitting Props with `Flux.split`{lua}
+
+Reusable components often accept both **component-specific props** (like `label` or `variant`) and **pass-through Instance properties** (like `Size`, `Position`, `LayoutOrder`, or children) in a single table.
+
+Combine `Flux.Props<ClassName, Extra>` with `Flux.split(props, keys)` to separate your component's own keys from the rest and forward the remaining table to `Flux.new`:
+
+```luau
+type BadgeProps = Flux.Props<"TextLabel", {
+	label: Flux.Reactive<string>,
+	accent: Flux.Reactive<Color3>?,
+}>
+
+local OWN: { "label" | "accent" } = { "label", "accent" }
+
+local function Badge(props: BadgeProps): TextLabel
+	local own, rest = Flux.split(props, OWN)
+
+	return Flux.edit(Flux.new "TextLabel" {
+		Text = function()
+			return `[ {Flux.read(own.label)} ]`
+		end,
+		TextColor3 = Flux.fallback(own.accent, Color3.fromRGB(120, 170, 255)),
+	})(rest)
+end
+```
+
+- **Typed `Pick` and `Omit`:** With a single typed key group (either an annotated literal array like `local OWN: { "label" | "accent" }` or a schema table), `own` is typed as `Flux.Pick<Props, Keys>` and `rest` as `Flux.Omit<Props, Keys>`, keeping required props required.
+- **Multiple groups:** You can pass multiple key groups (`local a, b, rest = Flux.split(props, KEYS_A, KEYS_B)`); each group receives its matching keys and the final return holds everything else (including numeric children and `__ATTR`/`__EVENT`/`__TAG`/`__CLEAN` directives).
+- **Non-mutating:** `props` itself is never mutated.
 
 ## Accepting Children
 
-A reusable container often needs to wrap whatever content the caller passes in. Accept those children as a prop (an array of instances), and place that array at a numeric position in your hierarchy. Flux **flattens arrays into children in place**, so there is no `table.unpack`{luau} and no manual parenting (see [Creating Hierarchies](/guide/roblox/creation#creating-hierarchies-children)).
+Arrays placed at a numeric index inside `Flux.new` or `Flux.edit` are flattened into children automatically, preserving sequential `LayoutOrder`:
 
 ```luau
-local function Panel(props)
-    return new "Frame" {
-        Size = UDim2.fromOffset(400, 300),
-        BackgroundColor3 = Color3.fromRGB(30, 30, 35),
+local function Panel(props: { title: Flux.Reactive<string>, children: Flux.Children? })
+	return Flux.new "Frame" {
+		Size = UDim2.fromOffset(400, 300),
+		Flux.list({ gap = 8 }),
 
-        new "TextLabel" { Text = props.title }, -- a child of your own
-
-        props.children, -- the caller's array, flattened in place
-    }
+		Flux.new "TextLabel" { Text = props.title },
+		props.children, -- flattened in place
+	}
 end
-
-Panel({
-    title = "Settings",
-    children = {
-        new "TextLabel" { Text = "Row 1" },
-        new "TextLabel" { Text = "Row 2" },
-    },
-})
 ```
-
-Each element keeps the automatic [`LayoutOrder`](https://create.roblox.com/docs/en-us/reference/engine/classes/GuiObject#LayoutOrder) numbering Flux gives every child, so they render in array order. When the set of children changes over time, hand that same slot a [`Flux.forValue`](/guide/concepts/mapping) node instead of a static array; it occupies the same position and Flux manages parenting, ordering, and cleanup as the source list changes.
 
 ## Component Scopes and Lifecycles
 
-If your component creates internal reactive state, asynchronous operations, or requires cleanup logic, manage its memory with a **Scope**.
+When a component is called inside a parent [`Flux.scope`](/guide/concepts/scopes), everything it creates attaches to that parent scope automatically.
 
-### Ownership Flows Implicitly
-
-When a component is called inside a parent's [scope](/guide/concepts/scopes), everything it creates (nodes, effects, instances) is automatically owned by that scope. You never thread a scope through props; destroying the parent tears the whole component tree down with it.
+When a standalone component creates internal Effects or resources whose lifetime should follow its own root `Instance`, wrap its body in `Flux.scope` and bind the scope to `__CLEAN`:
 
 ```luau
-Flux.scope(function()
-    -- Everything AvatarCard builds is owned by this scope
-    local card = AvatarCard({ name = "Player1" })
-    card.Parent = playerGui
-end)
-```
+local function TimerLabel(): TextLabel
+	local _, label = Flux.scope(function(scope)
+		local elapsed = Flux.signal(0)
 
-### A Self-Contained Component Scope
+		Flux.cleanup(Flux.Clock.connect("Heartbeat", function(dt)
+			elapsed(elapsed() + dt)
+		end))
 
-When a component owns resources whose lifetime should follow its own root instance rather than an outer scope, give it its own scope and tie that scope to the instance with `_CLEAN`. When Flux destroys the instance, it destroys the scope and everything inside it.
+		return Flux.new "TextLabel" {
+			Text = function()
+				return string.format("%.1fs", elapsed())
+			end,
+			__CLEAN = { scope },
+		}
+	end)
 
-```luau
-local function TimerComponent(props)
-    local _, label = Flux.scope(function(scope)
-        -- Internal state and effect (the effect is owned by this scope)
-        local timeElapsed = Flux(0)
-
-        Flux(function()
-            print("Timer is at: " .. timeElapsed)
-        end, true) -- the `true` makes this an Effect (see [Effects](/guide/concepts/effects))
-
-        return new "TextLabel" {
-            Text = function() return timeElapsed .. "s" end,
-
-            -- Destroy the scope when this TextLabel is destroyed
-            _CLEAN = { scope },
-        }
-    end)
-
-    return label
+	return label
 end
 ```
-
-Because the `TextLabel` is built inside the scope, the scope owns it, and `_CLEAN = { scope }`{luau} closes the loop the other way: destroying the `TextLabel` (or any outer scope) tears down the timer's effect too; its `timeElapsed` signal is then left for the GC.
-
-By following the "Run Once" mental model and letting scopes own what your components create, you can build large UI trees out of small, predictable components.

@@ -3,6 +3,7 @@
 /.vitepress/
 /api/
 /changelog.md
+/public/docmodel.json
 /public/llms.txt
 /public/llms-full.txt
 /package.json

@@ -1,73 +1,111 @@
 ---
 title: Interact
-description: Exclusive state groups and pointer hit-testing for menus, tooltips, and hover. One open menu, one hovered control, no bookkeeping.
+description: Reactive interaction state (hover, press, selected, focused) and pointer occlusion hit-testing for GuiObjects.
 outline: deep
 sidebar_position: 3
 ---
 
 # Interact
 
-Interactive UI keeps transient state the rest of the tree must agree on: only one dropdown open, one control hovered, one dialog modal. Writing that coordination by hand means every menu knows how to close every other menu. Flux's interact helpers replace the bookkeeping with an **exclusive group** (a container guaranteeing at most one active boolean [node](/guide/concepts/signals)) plus two pointer predicates, `pointIn`{lua} and `sunk`{lua}, for hit-testing against real [`GuiObject`](https://create.roblox.com/docs/en-us/reference/engine/classes/GuiObject)s. (They are also available under the `Flux.Interact`{lua} namespace.)
-
-## Exclusive groups
-
-`Flux.exclusive()`{lua} creates a group. Members are ordinary boolean nodes (a menu's `Visible`{luau} state, a control's `hovering`{luau} state), and the group guarantees activating one deactivates whichever was active before:
+`Flux.Interact`{luau} provides read-only boolean [nodes](/guide/concepts/signals) for common UI interaction states (`hover`{luau}, `press`{luau}, `selected`{luau}, `focused`{luau}) along with pointer hit-test predicates (`pointIn`{luau}, `sunk`{luau}, `covered`{luau}).
 
 ```luau
-local floating = Flux.exclusive() -- one group per concern, made once
+local button = Flux.new "TextButton" {
+    Size = UDim2.fromOffset(180, 44),
+    Text = "Play",
+}
 
-floating:toggle(dropdown.Visible)    -- flip on click; opening closes any open menu
-floating:activate(contextMenu.Visible) -- open explicitly (closes the dropdown)
-floating:deactivate(contextMenu.Visible) -- close explicitly
-floating:clear()                     -- close the active one, whichever it is
+local hovered = Flux.Interact.hover(button)
+local pressed = Flux.Interact.press(button)
+
+Flux.edit(button) {
+    BackgroundColor3 = function()
+        if pressed() then
+            return Color3.fromRGB(40, 90, 200)
+        elseif hovered() then
+            return Color3.fromRGB(70, 130, 255)
+        end
+        return Color3.fromRGB(55, 110, 230)
+    end,
+}
 ```
 
-The semantics, precisely:
+Every state node starts listening immediately and cleans up automatically when the node, its owning [Scope](/guide/concepts/scopes), or `object`{luau} is destroyed, settling to `false`{luau}.
 
-- **`activate(state)`{luau}** sets `state` to `true`{luau} and sets the previously active member to `false`{luau} (if different). Both writes land before the next flush, so effects only ever observe the settled result.
-- **`deactivate(state)`{luau}** sets `state` to `false`{luau}, releasing the active slot when `state` holds it. Deactivating a member that is not active still sets it `false`{luau}, so handlers can call it unconditionally.
-- **`toggle(state)`{luau}** activates when inactive, deactivates when active. The read is untracked, so toggling inside an [effect](/guide/concepts/effects) never subscribes it.
-- **`clear()`{luau}** deactivates the active member, if any: the outside-click dismiss that doesn't need to know which menu is open.
+## `hover` {#hover}
 
-Groups hold plain state, not subscriptions: members need no cleanup, and a node can freely belong to several groups.
+`Flux.Interact.hover(object, options?)`{luau} returns a `Node<boolean>`{luau} that is `true`{luau} while a mouse pointer or touch contact is inside `object`{luau} with no input-claiming GUI drawn above it (checked via [`sunk`](#sunk)).
 
-> [!TIP]
-> One group per *concern*, not per menu. A `floating`{luau} group shared by every dropdown, context menu, and select gives the "opening one closes the rest" behavior across your whole UI for free.
-
-## `pointIn`
-
-Whether a point lies within a `GuiObject`'s absolute bounds (inclusive). Coordinates are inset-relative, so [`InputObject.Position`](https://create.roblox.com/docs/en-us/reference/engine/classes/InputObject#Position) and `AbsolutePosition`{luau} line up:
+Because `hover`{luau} re-checks occlusion every frame while the pointer is inside `object`{luau}:
+- A floating menu or modal opening on top of `object`{luau} immediately drops the hover state.
+- Scrolling `object`{luau} out from under a stationary pointer drops the hover state.
+- Closing an obstructing overlay over a stationary pointer restores the hover state.
 
 ```luau
--- Dismiss an open menu when a press lands outside it and its anchor:
-if
-    not Flux.pointIn(input.Position.X, input.Position.Y, menu)
-    and not Flux.pointIn(input.Position.X, input.Position.Y, anchor)
-then
-    floating:clear()
+local hovered = Flux.Interact.hover(button)
+
+-- Container hover: stay hovered even when the pointer is over a child button inside `row`
+local rowHovered = Flux.Interact.hover(row, { within = true })
+```
+
+Pass `{ within = true }`{luau} when tracking a container (such as a card, list row, or panel) so child buttons inside `object`{luau} do not count as covering it (see [`covered`](#covered)).
+
+## `press` {#press}
+
+`Flux.Interact.press(object)`{luau} returns a `Node<boolean>`{luau} that is `true`{luau} while `object`{luau} is actively held down:
+
+- **Pointer / Touch:** Starts on `MouseButton1`{luau} or `Touch`{luau} inside `object`{luau} (unless covered by an input-sinking GUI above it) and remains `true`{luau} until that specific input ends *anywhere* on screen—so dragging slightly off a button never leaves it stuck.
+- **Gamepad / Keyboard:** Starts when `ButtonA`{luau}, `Return`{luau}, or `KeypadEnter`{luau} is pressed while `object`{luau} is [`GuiService.SelectedObject`](https://create.roblox.com/docs/en-us/reference/engine/classes/GuiService#SelectedObject) (and no `TextBox`{luau} has focus).
+- Opening the Roblox escape menu (`GuiService.MenuIsOpen`{luau}) releases any active press immediately.
+
+```luau
+local pressed = Flux.Interact.press(button)
+```
+
+## `selected` {#selected}
+
+`Flux.Interact.selected(object)`{luau} returns a `Node<boolean>`{luau} tracking whether `object`{luau} is currently highlighted by gamepad or keyboard UI navigation ([`GuiService.SelectedObject`](https://create.roblox.com/docs/en-us/reference/engine/classes/GuiService#SelectedObject)):
+
+```luau
+local isSelected = Flux.Interact.selected(button)
+```
+
+## `focused` {#focused}
+
+`Flux.Interact.focused(textBox)`{luau} returns a `Node<boolean>`{luau} tracking whether `textBox`{luau} currently has keyboard focus (`TextBox:IsFocused()`{luau}, `Focused`{luau}, and `FocusLost`{luau}):
+
+```luau
+local isFocused = Flux.Interact.focused(searchInput)
+```
+
+## Hit-Testing Predicates
+
+### `pointIn` {#pointin}
+
+`Flux.Interact.pointIn(x, y, object)`{luau} returns `true`{luau} if the inset-relative coordinate `(x, y)`{luau} lies within `object`{luau}'s `AbsolutePosition`{luau} and `AbsoluteSize`{luau} bounds (inclusive, ignoring rotation):
+
+```luau
+if not Flux.Interact.pointIn(input.Position.X, input.Position.Y, dropdownMenu) then
+    isOpen(false)
 end
 ```
 
-`pointIn`{lua} reads only `AbsolutePosition`{luau}/`AbsoluteSize`{luau}: it ignores rotation and does not consider occlusion. For "is something else on top", use [`sunk`](#sunk).
+### `sunk` {#sunk}
 
-## `sunk`
-
-Whether input at a point would be claimed by an `Active`{luau} gui (or [`GuiButton`](https://create.roblox.com/docs/en-us/reference/engine/classes/GuiButton)) rendered **above** `object`. Hover states built from `InputChanged`{luau} alone stay lit when a floating menu covers the control; `sunk`{lua} is the missing test:
+`Flux.Interact.sunk(x, y, object, token?)`{luau} returns `true`{luau} if input at `(x, y)`{luau} would be claimed by an `Active`{luau} or input-sinking `GuiObject`{luau} rendered **above** `object`{luau} (or if the Roblox escape menu is open). Pass `input`{luau} as `token`{luau} to memoize the underlying `GetGuiObjectsAtPosition`{luau} query across multiple controls on the same input event:
 
 ```luau
-local hover = Flux.exclusive()
-local hovering = Flux(false)
-
--- in the control's InputChanged handler (MouseMovement / Touch):
-if Flux.sunk(input.Position.X, input.Position.Y, control) then
-    hover:deactivate(hovering)
-else
-    hover:activate(hovering)
+if not Flux.Interact.sunk(input.Position.X, input.Position.Y, control, input) then
+    -- Topmost interactive control at this point
 end
-
--- in InputEnded:
-hover:deactivate(hovering)
 ```
 
-> [!NOTE]
-> `sunk`{lua} walks [`GetGuiObjectsAtPosition`](https://create.roblox.com/docs/en-us/reference/engine/classes/BasePlayerGui#GetGuiObjectsAtPosition) on the object's ancestor `BasePlayerGui`{luau}. Outside one (a plugin dock, a `SurfaceGui`{luau} in workspace) nothing can claim the point, so it yields `false`{luau}. `pointIn`{lua} and exclusive groups run anywhere, including headless Luau; `sunk`{lua} needs the engine.
+### `covered` {#covered}
+
+`Flux.Interact.covered(x, y, object, token?)`{luau} is identical to [`sunk`](#sunk), except descendants of `object`{luau} do not count as covering it. Use `covered`{luau} on containers (rows, cards, draggable panels) that contain their own buttons:
+
+```luau
+if not Flux.Interact.covered(input.Position.X, input.Position.Y, cardFrame, input) then
+    -- Nothing outside `cardFrame` is covering this point
+end
+```
