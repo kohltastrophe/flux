@@ -7,218 +7,114 @@ sidebar_position: 1
 
 # Creation
 
-Standard Roblox development requires you to create instances, assign properties, and connect events sequentially across many lines. Flux lets you build complex hierarchies in a single, readable, declarative block using `Flux.new`{lua}.
+`Flux.new` builds Roblox [`Instance`](https://create.roblox.com/docs/en-us/reference/engine/datatypes/Instance) hierarchies in a single declarative block, applying per-class [defaults](/guide/roblox/defaults) and wiring reactive bindings, events, children, and directives.
 
-This declarative syntax is how you build reactive UI components in Flux, the Luau equivalent of JSX.
+```luau
+local count = Flux.signal(0)
+
+local button = Flux.new "TextButton" {
+	Name = "CounterButton",
+	Size = UDim2.fromOffset(200, 50),
+	BackgroundColor3 = Color3.fromRGB(0, 120, 255),
+	Text = function()
+		return `Clicks: {count()}`
+	end,
+	Activated = function()
+		count(count() + 1)
+	end,
+}
+```
 
 ## The `Flux.new`{lua} Function
 
-Call `Flux.new "ClassName"`{luau} to obtain a constructor function, then pass it a properties table:
+`Flux.new "ClassName"` returns a typed constructor function that accepts a properties table:
 
-```luau
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Flux = require(ReplicatedStorage.Flux)
-local new = Flux.new
+- **Static values** are assigned once at construction.
+- **Reactive [Nodes](/guide/concepts/signals)** (`Flux.signal`, `Flux.computed`, `Flux.spring`, etc.) bind directly to the property and update on the frame flush whenever the node changes.
+- **Getter functions (`() -> T`)** wrap the property in a tracked reaction that re-evaluates whenever any node read inside it changes.
+- **Events** (like `Activated`, `Touched`, or `FocusLost`) connect the assigned function via `:Connect(fn)`.
 
--- Create a static TextButton
-local staticButton = new "TextButton" {
-    Name = "MyButton",
-    Size = UDim2.fromOffset(200, 50),
-    Text = "Click Me!",
-    BackgroundColor3 = Color3.fromRGB(0, 120, 255),
-}
-```
-
-> Luau's syntax sugar allows you to omit parentheses when calling with a string or table literal, so `new "TextButton" { }`{luau} is idiomatic Flux style.
-
-> [!NOTE]
-> `Flux.new`{lua} applies a small set of modern default property overrides before your properties are assigned: Parts are anchored, GUI objects have no borders, layouts sort by `LayoutOrder`. See [Defaults](/guide/roblox/defaults) for the full list and how to disable or customize it.
-
-## Reactive Properties
-
-What makes `Flux.new`{lua} useful is its handling of Flux reactive **nodes** (the umbrella term for a [Signal](/guide/concepts/signals), a [Computed](/guide/concepts/computeds), or an [Effect](/guide/concepts/effects)). You can pass:
-
-- **A node directly** - Flux binds it to the property; the property updates whenever the node changes.
-- **A function** - Flux wraps it in a computation that re-runs (and updates the property) whenever any node it reads changes.
-- **A static value** - assigned once at creation time.
-
-```luau
-local count = Flux(0)
-
--- A Computed: derives a new value once and shares it across multiple bindings
-local countText = Flux(function()
-    return "Count: " .. count
-end)
-
-local reactiveButton = new "TextButton" {
-    Size = UDim2.fromOffset(200, 50),
-
-    -- Pass a node directly (preferred when the same derived value is used elsewhere)
-    Text = countText,
-
-    -- Or use an inline function for a one-off binding
-    BackgroundColor3 = function()
-        return count() > 10 and Color3.new(1, 0, 0) or Color3.new(0, 1, 0)
-    end,
-}
-```
-
-> Arithmetic and concatenation operators (`+`, `-`, `..`, …) read a node operand's current value automatically, so `"Count: " .. count`{luau} works without calling the node. Comparison operators are the exception: `count > 10`{luau} would compare a number against the node table and error, so you must read the value first with `count() > 10`{luau} (comparisons only work transparently between two nodes). See [Signals](/guide/concepts/signals) for how this works.
-
-> [!IMPORTANT] Bare values are read once; reactive text needs a function
-> `Text = count`{luau} binds the node directly, so the property tracks it. But the moment you combine a node with a **literal** outside a reactive context (`Text = "Clicks: " .. count`{luau} or the interpolation `Text = `Clicks: {count}``{luau}), Luau evaluates the expression **once** at construction time and hands Flux a plain, frozen string. There is no node left to bind. Wrap it in a `function`{luau} so the read happens inside a tracked computation:
->
+> [!IMPORTANT] Wrap Interpolated Expressions in a Function
+> Passing `Text = count` binds the node directly, whereas `Text = `Clicks: {count}`` evaluates the string **once** at construction time. Wrap string interpolations and comparisons in a getter function so reads happen inside a tracked context:
 > ```luau
-> -- ✗ evaluated once: "Clicks: 0" forever
+> -- Evaluated once at construction:
 > Text = `Clicks: {count}`,
 >
-> -- ✓ re-runs whenever `count` changes
-> Text = function() return `Clicks: {count}` end,
+> -- Re-runs whenever `count` changes:
+> Text = function() return `Clicks: {count()}` end,
 > ```
 
 ## Creating Hierarchies (Children)
 
-Nest `Flux.new`{lua} calls to build complex UI trees. Any `Flux.new`{lua} instance placed at a **numeric index** in the properties table is automatically parented to the enclosing instance.
+Place child instances (or nested arrays / [`Flux.show`](/guide/concepts/conditionals) / [`Flux.forValue`](/guide/concepts/mapping) nodes) at **numeric indices** inside the properties table:
 
 ```luau
-local inventoryFrame = new "Frame" {
-    Name = "Inventory",
-    Size = UDim2.fromScale(0.5, 0.5),
-    BackgroundColor3 = Color3.new(0.2, 0.2, 0.2),
+local actionButtons = { SaveButton, LoadButton, QuitButton }
 
-    -- Array elements are treated as children; LayoutOrder is assigned automatically
-    new "UIListLayout" {
-        Padding = UDim.new(0, 5),
-    },
+local panel = Flux.new "Frame" {
+	Name = "Menu",
+	Size = UDim2.fromScale(0.5, 0.5),
 
-    new "TextLabel" {
-        Text = "Item 1",
-        Size = UDim2.new(1, 0, 0, 30),
-    },
-
-    new "TextLabel" {
-        Text = "Item 2",
-        Size = UDim2.new(1, 0, 0, 30),
-    },
+	Flux.list({ gap = 6 }),
+	Flux.new "TextLabel" { Text = "Main Menu" },
+	actionButtons, -- arrays are flattened into children in place
 }
 ```
 
-> **Performance tip:** If a [`GuiObject`](https://create.roblox.com/docs/en-us/reference/engine/classes/GuiObject) child has [`LayoutOrder`](https://create.roblox.com/docs/en-us/reference/engine/classes/GuiObject#LayoutOrder) at its default of `0`, Flux automatically assigns it to match its numeric array index. This keeps ordered lists easy to build without manually numbering every item.
+- **Automatic `LayoutOrder`:** Any [`GuiObject`](https://create.roblox.com/docs/en-us/reference/engine/classes/GuiObject) child whose `LayoutOrder` is still at its default `0` is automatically numbered sequentially (`1, 2, 3, ...`) in array order. Explicit non-zero `LayoutOrder` values are left untouched.
+- **`Parent` is assigned last:** If you include `Parent = container` in the table, Flux assigns `Parent` only after all properties, events, and children are configured.
 
-A plain **array** placed at a numeric index is flattened into children, so you can splice in a pre-built list without unpacking it. Each element is parented in order (reactive [`Flux.show`](/guide/concepts/conditionals) / [`Flux.forValue`](/guide/concepts/mapping) nodes included) with the same automatic `LayoutOrder`:
+## Prefix Keys and Directives
+
+Both `Flux.new` and [`Flux.edit`](/guide/roblox/hydration) accept bare `_`-prefixed identifier keys right on the properties table (with editor autocomplete for `_attr_`, `_tag_`, `__attr_`, `__tag_`, and every `_Property` on the class), as well as grouped `__` directive tables (double-prefixed so they sort at the top of autocomplete above single-`_` property change listeners):
+
+| Prefix / Key | Purpose | Example |
+| :--- | :--- | :--- |
+| **`_attr_Name`** / **`__ATTR`** | Sets static, reactive, or [`Flux.model`](#flux-model-two-way-binding-in-one-key) Instance attributes | `_attr_Health = healthNode` |
+| **`_tag_Name`** / **`__TAG`** | Adds/removes [`CollectionService`](https://create.roblox.com/docs/en-us/reference/engine/classes/CollectionService) tags (`_tag_Name` toggles a named tag by truthiness; `__TAG` accepts dynamic tag names or arrays) | `_tag_Enemy = isAlive` |
+| **`_Prop`** / **`__EVENT`** | Connects a typed `GetPropertyChangedSignal("Prop")` listener receiving the new value | `_Text = function(text) ... end` |
+| **`__attr_Name`** / **`__EVENT.__ATTR`** | Connects a `GetAttributeChangedSignal("Name")` listener receiving the new value | `__attr_Health = function(hp) ... end` |
+| **`__tag_Name`** / **`__EVENT.__TAG`** | Connects a [`CollectionService`](https://create.roblox.com/docs/en-us/reference/engine/classes/CollectionService) tag-changed listener receiving `hasTag: boolean` | `__tag_Enemy = function(has) ... end` |
+| **`__REF`** | Stores the created instance in a Node or passes it to a setup callback | `__REF = frameNode` |
+| **`__CLEAN`** | Attaches extra cleanup items to the instance's `Destroying` lifetime | `__CLEAN = { conn }` |
+
+See [Hydration: Prefix Keys & Special Directives](/guide/roblox/hydration#prefix-keys-special-directives) for full examples of each form.
+
+### `Flux.model`{lua}: Two-Way Binding in One Key
+
+When an input property (such as `TextBox.Text`), an attribute (`_attr_Level`), or a tag (`_tag_Selected`) should both **read from** and **write back to** the same signal node, wrap the node in `Flux.model(node)`:
 
 ```luau
-local buttons = { SaveButton, LoadButton, QuitButton } -- an array of Instances
+local username = Flux.signal("")
 
-local menu = new "Frame" {
-    new "UIListLayout" {},
-
-    Header,           -- a single child
-    buttons,          -- the whole array, flattened in place (no table.unpack needed)
+local input = Flux.new "TextBox" {
+	Size = UDim2.fromOffset(200, 40),
+	Text = Flux.model(username),
 }
 ```
 
-> [!NOTE]
-> The `Parent` property mounts the instance into the tree, and Flux assigns it **last** (after every child and property), so the instance only enters the tree once it is fully built (Roblox's performance best practice, handled for you). Like any property, `Parent` also accepts a node, so you can reparent an instance reactively.
+`Flux.model` sets the property, attribute, or tag from `node` on mount, then listens to `GetPropertyChangedSignal`, `GetAttributeChangedSignal`, or `CollectionService` tag signals to update `node` whenever the instance changes.
 
-## Events and Directives
-
-`Flux.new`{lua} supports the same special directives as `Flux.edit`{lua}.
-
-| Key                           | Behaviour                                                                                                                                                         |
-| :---------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Event name (e.g. `Activated`) | Calls [`:Connect(fn)`{luau}](https://create.roblox.com/docs/en-us/reference/engine/datatypes/RBXScriptSignal#Connect) automatically                               |
-| `_EVENT`                      | Two-way bindings and [`:GetPropertyChangedSignal`{luau}](https://create.roblox.com/docs/en-us/reference/engine/classes/Object#GetPropertyChangedSignal) listeners |
-| `_ATTR`                       | Static or reactive custom Instance Attributes                                                                                                                     |
-| `_TAG`                        | Static or reactive [CollectionService](https://create.roblox.com/docs/en-us/reference/engine/classes/CollectionService) tags                                      |
-| `_CLEAN`                      | Additional cleanup items tied to the instance's lifetime                                                                                                          |
-| `_REF`                        | Capture a reference to the created instance                                                                                                                       |
-
-Each directive is described in detail in [Hydration: Special Directives](/guide/roblox/hydration#special-directives); they behave identically for created and hydrated instances. Every directive also has a [one-off function form](/guide/roblox/hydration#one-off-directives) (`Flux.attr("Name", value)`{luau}, `Flux.tag("Tag")`{luau}, `Flux.event("Name", handler)`{luau}, `Flux.ref(node)`{luau}, `Flux.onDestroy(fn)`{luau}) placed in the array portion of the table, so a single attribute, tag, or listener can live inline next to related children.
+When writing a custom [component](/guide/concepts/components) that accepts a two-way bound prop, use `Flux.isModel(value)` to check for a `Flux.model` wrapper and `Flux.modelNode(value)` to extract the underlying `Node<T>` so your component can write back to it:
 
 ```luau
-local inputState = Flux("")
-local boxRef = Flux(nil)
-
-local myTextBox = new "TextBox" {
-    Size = UDim2.fromOffset(200, 50),
-
-    -- Two-way binding: assign the node to the property AND list it under _EVENT.
-    -- Top-level drives Text from the node; _EVENT writes the node back when the
-    -- user types, so the two stay in sync in both directions.
-    Text = inputState,
-    _EVENT = {
-        Text = inputState,
-    },
-
-    -- Capture a reference to this TextBox via a reactive node
-    _REF = boxRef,
-
-    -- Connect a plain event with a bare top-level key
-    FocusLost = function(enterPressed)
-        if enterPressed then
-            print("User submitted: " .. inputState())
-        end
-    end,
-}
-
--- boxRef() now holds the TextBox instance
-```
-
-### `Flux.model`{lua}: two-way binding in one key
-
-When a property both drives and is driven by the same node, `Flux.model`{lua} collapses the assign-plus-`_EVENT` pair into a single entry. It binds the node to the property **and** writes the node back whenever the instance changes:
-
-```luau
-local inputState = Flux("")
-
-local myTextBox = new "TextBox" {
-    Size = UDim2.fromOffset(200, 50),
-
-    -- Equivalent to `Text = inputState` plus `_EVENT = { Text = inputState }`
-    Text = Flux.model(inputState),
-}
-```
-
-The node's authored value wins on mount (the instance is set from the node first, then the binding-back is wired up). `Flux.model`{lua} works on any property that fires a changed signal, and inside `_ATTR`{luau} for two-way attribute binding (`_ATTR = { Score = Flux.model(scoreNode) }`{luau}).
-
-## Reactive Children (`Flux.forValue`{lua} / `Flux.forIndex`{lua})
-
-To render a dynamic list of children, use `Flux.forValue`{luau} or `Flux.forIndex`{luau}. When placed at a numeric index, the resulting computed node is treated as a **children binder**; Flux manages parenting, ordering, and cleanup automatically as the source list changes.
-
-```luau
-local items = Flux({ "Sword", "Shield", "Potion" })
-
-local itemList = new "Frame" {
-    Size = UDim2.fromScale(1, 1),
-
-    new "UIListLayout" {},
-
-    -- Efficiently renders one TextLabel per item; updates on changes
-    Flux.forIndex(items, function(index, itemNode)
-        return new "TextLabel" {
-            Text = itemNode,  -- reactive node, updates in place
-            Size = UDim2.new(1, 0, 0, 30),
-        }
-    end),
-}
+local function CustomSlider(props: { value: any })
+	local node = if Flux.isModel(props.value) then Flux.modelNode(props.value) else props.value
+	-- Read with `Flux.read(node)` and write back with `node(newValue)`
+end
 ```
 
 ## Scoped Creation
 
-For UI that mounts and unmounts frequently (notifications, inventory slots, player name tags), build instances inside a **Scope** to prevent memory leaks. Anything `Flux.new`{lua} creates while a scope is active is owned by it and destroyed together.
+When `Flux.new` runs inside a [`Flux.scope`](/guide/concepts/scopes), the created instance and all of its bindings belong to that scope and are destroyed when `scope:Destroy()` is called:
 
 ```luau
-local scope, transientLabel = Flux.scope(function()
-    -- Created inside the scope, so the scope owns it
-    return new "TextLabel" {
-        Text = "I will be cleaned up safely.",
-        Parent = playerGui,
-    }
+local scope, banner = Flux.scope(function()
+	return Flux.new "TextLabel" {
+		Text = "Round starting...",
+		Parent = playerGui,
+	}
 end)
 
--- Destroying the scope destroys the label and all of its reactive bindings
-scope:Destroy()
+scope:Destroy() -- destroys `banner` and all bindings
 ```
-
-See [Scopes](/guide/concepts/scopes) for the full lifecycle management guide.

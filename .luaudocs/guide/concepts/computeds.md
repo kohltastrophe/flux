@@ -1,149 +1,123 @@
 ---
 title: Computeds
-description: Caching and lazily evaluating derived state in Flux.
+description: Caching and deriving reactive state in Flux.
 outline: deep
 sidebar_position: 2
 ---
 
 # Computeds
 
-While you can derive state with plain functions, recalculating expensive operations on every read is slow. **Computeds** solve this by caching (memoizing) their results and only recomputing when their dependencies actually change.
+A **Computed** derives a cached reactive value from other reactive nodes, recomputing only when its dependencies change.
 
-A Computed is a reactive node that automatically tracks its dependencies. It is **lazily evaluated**; it won't execute its logic until it is actually read, and it returns a cached result as long as its dependencies remain clean.
+```luau
+local price = Flux.signal(25)
+local quantity = Flux.signal(3)
+
+local total = Flux.computed(function()
+	return price() * quantity()
+end)
+
+print(total()) --> 75
+```
 
 ## Creating a Computed
 
-You create an implicit Computed by calling the main `Flux` function, and passing a pure function that returns the derived value, or explicitly by using `Flux.computed`{luau}.
+Use `Flux.computed(fn, equals?)` for a typed `Node<T>`, or pass a function to `Flux(fn)` for the terse untyped shorthand:
 
 ```luau
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Flux = require(ReplicatedStorage.Flux)
+local count = Flux.signal(5)
 
-local count = Flux(5)
+-- Explicitly typed Node<number>
+local doubled = Flux.computed(function()
+	return count() * 2
+end)
 
--- Create a computed value implicitly
-local doubledCount = Flux(function()
-    return count * 2 -- the operator reads count's current value automatically
+-- Terse shorthand (Node<any>)
+local tripled = Flux(function()
+	return count * 3
 end)
 ```
 
-Writing `count * 2`{luau} works because Computeds, like [Signals](/guide/concepts/signals#operator-overloading), overload Luau's arithmetic and concatenation operators; each reads the node's current value for you, so `count * 2`{luau} and `"Count: " .. count`{luau} work without a call. Comparison operators are the exception: they only work between two nodes, so to compare against a plain value, read it first: `count() < 5`{luau}.
+Pass an optional `equals(old, new)` comparator as the second argument to stop downstream propagation when a recomputed result is logically unchanged (see [Custom Equality](/guide/concepts/signals#custom-equality)).
 
-`Flux.computed`{luau} also accepts an optional `equals` function as its second argument; when the recomputed result is considered equal to the previous one, downstream nodes are not notified. See [Custom Equality](/guide/concepts/signals#custom-equality).
+> [!TIP] Zero-Wrapper Fast Path (`Flux.createMemo`)
+> When you only need a tracked getter function `() -> T` without node methods or operators, `Flux.createMemo(fn, equals?)` skips the node table wrapper. See [Optimization](/guide/tips/optimization#zero-wrapper-primitives).
 
-## Lazy Evaluation & Caching
+## How Computeds Evaluate
 
-A Computed avoids unnecessary work through three mechanisms:
+A Computed adapts its evaluation strategy depending on whether an [Effect](/guide/concepts/effects) or UI binding is actively watching it:
 
-1. **Lazy Execution** - The function does not run immediately. It only runs the first time the Computed is read.
-2. **Memoization** - Once evaluated, the result is cached. Subsequent reads return the cached value instantly without re-running the function.
-3. **Smart Invalidation** - Flux tracks the Computed's dependencies. The cache is only invalidated when a dependency actually changes; even then, the Computed won't recalculate until the next read.
+1. **Dormant when unobserved:** While no Effect or UI binding depends on a Computed, it holds zero upstream subscriptions and does not run until you read `computed()`. Once read, it caches the result and only recalculates on a future read if an upstream source changed.
+2. **Stabilized in order when observed:** While watched by an Effect or UI property, the Computed subscribes to its sources. When a signal changes, Flux stabilizes dirty observed Computeds in **dependency height order** (shallowest to deepest) during the frame flush—before any Effect runs—so no node ever evaluates twice or sees a half-updated "diamond" state.
+3. **Early cutoff:** If a Computed re-evaluates to the same value (`==` or `equals`), propagation stops immediately and downstream Computeds and UI bindings do not wake up.
 
 ```luau
-local Flux = require(ReplicatedStorage.Flux)
+local count = Flux.signal(1)
 
-local count = Flux(1)
-
-local expensiveMath = Flux(function()
-    print("Executing expensive calculation...")
-    return count * 100
+local isEven = Flux.computed(function()
+	return count() % 2 == 0
 end)
 
--- The function hasn't run yet.
+-- Dormant until first read:
+print(isEven()) --> false
+print(isEven()) --> false (cached, body does not re-run)
 
-print(expensiveMath())
--- > "Executing expensive calculation..."
--- > 100
-
-print(expensiveMath())
--- No print! Returns the cached value.
--- > 100
-
-count(2) -- Invalidates the cache by updating the dependency
-
-print(expensiveMath())
--- > "Executing expensive calculation..."
--- > 200
+count(3)
+-- 3 is still odd: when `isEven` re-evaluates, its value stays `false`,
+-- so any UI binding watching `isEven` is skipped entirely.
 ```
-
-> [!NOTE]
-> The body here is impure (it calls `print`{luau}), so under [strict mode](/guide/tips/strict) it runs twice per evaluation and you will see the line doubled. The memoization itself is unchanged: the cached read still never re-runs.
 
 ## Reading the Previous Value
 
-A Computed (or [Effect](/guide/concepts/effects)) receives its **own previous value** as the first argument to its function. On the first run that argument is `nil`{luau}; on every subsequent run it is whatever the body returned last time. This is the same convention as SolidJS's `createMemo((prev) => …)`{ts}, and it makes accumulators and delta calculations straightforward.
+A Computed (or [Effect](/guide/concepts/effects)) receives its own **previous return value** as its first argument (`nil` on the first run), making folds and running maximums straightforward:
 
 ```luau
-local Flux = require(ReplicatedStorage.Flux)
+local score = Flux.signal(0)
 
-local score = Flux(0)
-
--- A running maximum: fold each new score into the previous result
-local highScore = Flux(function(previous)
-    return math.max(previous or 0, score())
+local highScore = Flux.computed(function(previous: number?)
+	return math.max(previous or 0, score())
 end)
 
 score(40)
-print(highScore()) -- > 40
+print(highScore()) --> 40
 score(15)
-print(highScore()) -- > 40 (the previous high is retained)
+print(highScore()) --> 40
 score(90)
-print(highScore()) -- > 90
+print(highScore()) --> 90
 ```
-
-The previous value is just an argument, so existing zero-argument bodies are unaffected: Luau ignores extra arguments. Reach for it whenever the new result depends on the old one: smoothed values, counters, "did this increase?" flags, and similar folds.
-
-> [!NOTE]
-> [Strict mode](/guide/tips/strict) double-runs a body and feeds the second run the result of the first run (not the original previous value). An **idempotent** fold like this running maximum re-runs to the same value and is unaffected; an additive accumulator (`prev + n`{luau}) advances twice while strict mode is on. See [Accumulators read their own previous value](/guide/tips/strict#accumulators-read-their-own-previous-value).
 
 ## Binding to the UI
 
-Computeds can be passed **directly** to Roblox instance properties. Flux detects that the value is a reactive node and binds to it automatically; no wrapping function is needed.
+Pass a Computed directly to any property in [`Flux.new`](/guide/roblox/creation) or [`Flux.edit`](/guide/roblox/hydration):
 
 ```luau
-local Flux = require(ReplicatedStorage.Flux)
-local new = Flux.new
+local items = Flux.signal({ "Sword", "Shield", "Potion" })
 
-local items = Flux({ "Sword", "Shield", "Potion" })
-
--- Only recalculate this string when 'items' actually changes
-local inventoryDisplay = Flux(function()
-    return "Inventory: " .. table.concat(items(), ", ")
+local summary = Flux.computed(function()
+	return `Inventory ({#items()}): {table.concat(items(), ", ")}`
 end)
 
-local label = new "TextLabel" {
-    Name = "InventoryLabel",
-    Size = UDim2.fromOffset(300, 50),
-
-    -- Pass the Computed directly, no function wrapper required
-    Text = inventoryDisplay,
+local label = Flux.new "TextLabel" {
+	Size = UDim2.fromOffset(300, 50),
+	Text = summary,
 }
 ```
-
-Because `inventoryDisplay` is lazily evaluated, it only processes the `table.concat`{luau} when the UI actually needs it. If `items` updates multiple times in a single frame before the UI reads it, the Computed still calculates the string exactly once.
 
 ## Implicit vs. Explicit Computeds
 
-Because `Flux.new`{luau} and `Flux.edit`{luau} accept standard functions for property bindings, a common misconception is that using an inline function avoids the overhead of creating a reactive graph node.
+Passing an inline function (`Text = function() ... end`) to `Flux.new` or `Flux.edit` binds that property reactively with the same tracking as an explicit Computed. Choose between them based on **reuse**:
 
-In reality, any standard function passed directly to a property binding is automatically wrapped in an **implicit Computed Binding** by the library.
+- **Inline function (`Property = function() ... end`):** Best when a derived value is used by a **single** property.
+- **Explicit Computed (`Flux.computed`):** Best when the **same** derived value feeds **multiple** properties or downstream computations, so the logic runs once and cuts off early when unchanged.
 
 ```luau
--- These two approaches have the EXACT same execution and memory overhead:
+local health = Flux.signal(50)
 
--- 1. Implicit Computed Binding
-local label = new "TextLabel" {
-    Text = function() return "Count: " .. count end
-}
+-- Shared across two properties: computed once per change
+local lowHealthColor = Flux.computed(function()
+	return if health() < 20 then Color3.fromRGB(255, 60, 60) else Color3.fromRGB(255, 255, 255)
+end)
 
--- 2. Explicit Computed Binding
-local textNode = Flux(function() return "Count: " .. count end)
-local label = new "TextLabel" {
-    Text = textNode
-}
+local bar = Flux.new "Frame" { BackgroundColor3 = lowHealthColor }
+local label = Flux.new "TextLabel" { TextColor3 = lowHealthColor }
 ```
-
-Because inline functions carry the exact same overhead as explicit Computeds, you should structure your code based on **reusability**:
-
-- **Use inline functions (Implicit Computeds):** When a derived value is unique and only ever consumed by a **single** property on a single UI element.
-- **Use explicit Computeds (`Flux(function()`{luau})**: When the exact same derived result is needed by **multiple** properties or UI elements simultaneously. By passing the same explicit Computed reference around, you avoid duplicating the implicit computed overhead, ensuring the graph evaluates the logic only once.

@@ -7,123 +7,103 @@ sidebar_position: 1
 
 # Spring
 
-Tweens run for a fixed duration. **Springs** are driven by physics, which makes them a good fit for interactive motion.
-
-If the user interrupts a spring animation halfway through (for example, by moving their mouse off a button before it finishes enlarging), the spring redirects its velocity toward the new target instead of snapping.
-
-Flux springs are reactive and understand Roblox data types directly.
-
-## Basic Usage
-
-You can create a Spring by calling `Flux.spring()`{luau}.
-
-The function takes three arguments:
-
-1. **Target**: The value the spring should move toward.
-2. **Frequency** _(Optional, default 1)_: How fast the spring moves.
-3. **Damping** _(Optional, default 1)_: How the spring settles. `1` = no bounce (critically damped); lower = bouncier.
-
-The resulting Spring acts exactly like a standard Flux [**Signal**](/guide/concepts/signals). You can bind it directly to UI properties.
+`Flux.spring(target, frequency?, damping?, initialVelocity?)`{luau} returns a reactive node driven by damped harmonic motion. When its target changes mid-flight, a spring preserves its momentum and smoothly redirects toward the new goal instead of snapping.
 
 ```luau
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Flux = require(ReplicatedStorage.Flux)
-local new = Flux.new
-
--- Create a spring that starts at X: 0
 local xPosition = Flux.spring(0, 2, 0.8)
 
-local ui = new "Frame" {
+local ui = Flux.new "Frame" {
     Size = UDim2.fromOffset(100, 100),
-
-    -- Bind the spring to the property
     Position = function()
         return UDim2.fromOffset(xPosition(), 0)
-    end
+    end,
 }
 
--- Later: Update the spring's target to 200. It will smoothly animate there.
+-- Smoothly animate toward 200
 xPosition(200)
 ```
 
+## Basic Usage
+
+`Flux.spring`{luau} takes up to four arguments:
+
+1. **`target`{luau}**: The initial value (or reactive source) the spring moves toward.
+2. **`frequency`{luau}** _(optional, default `1`{luau})_: Speed in cycles per second. Higher values move faster.
+3. **`damping`{luau}** _(optional, default `1`{luau})_: How the spring settles:
+   - **`1`{luau} (Critically Damped):** Quickly approaches the target and stops without overshoot.
+   - **`< 1`{luau} (Underdamped):** Overshoots the target and bounces before settling.
+   - **`> 1`{luau} (Overdamped):** Eases sluggishly into the target without bouncing.
+4. **`initialVelocity`{luau}** _(optional)_: Starting velocity in the target's type (for example, a `Vector2`{luau} for a `Vector2`{luau} spring); omit to start at rest.
+
+A spring acts like a standard [Signal](/guide/concepts/signals): read it with `spring()`{luau} or `:get()`{luau}, retarget it with `spring(newGoal)`{luau} or `:set(newGoal)`{luau}, and bind it directly to Instance properties.
+
 ## Reactive Targets
 
-Flux springs are part of the reactive graph.
-
-Instead of passing a static initial value, you can pass an existing Flux [`Signal`](/guide/concepts/signals) (or a [`Computed`](/guide/concepts/computeds)) directly into the `Flux.spring`{lua} constructor. The spring then tracks that state, and retargets itself whenever the underlying state changes.
+Pass a [Signal](/guide/concepts/signals), [Computed](/guide/concepts/computeds), or plain function `() -> T`{luau} as `target`{luau} to retarget the spring automatically whenever its dependencies change:
 
 ```luau
-local isHovering = Flux(false)
+local isHovering = Flux.signal(false)
 
--- The spring's target is driven by a computed value based on `isHovering`
-local buttonScale = Flux.spring(
-    Flux(function()
-        return isHovering() and UDim2.fromScale(1.1, 1.1) or UDim2.fromScale(1, 1)
-    end),
-    3,    -- Frequency (Speed)
-    0.75  -- Damping (Slight bounce)
-)
+local buttonSize = Flux.spring(function()
+    return if isHovering() then UDim2.fromScale(1.1, 1.1) else UDim2.fromScale(1, 1)
+end, 3, 0.75)
 
-local myButton = new "TextButton" {
-    Size = buttonScale, -- Bind the spring directly
+local myButton = Flux.new "TextButton" {
+    Size = buttonSize,
     Text = "Hover Me",
-
     MouseEnter = function() isHovering(true) end,
     MouseLeave = function() isHovering(false) end,
 }
 ```
 
 > [!NOTE]
-> You can also pass [nodes](/guide/concepts/signals) for `frequency`{luau} and `damping`{luau}, retuning the spring's physics at runtime; it re-reads them whenever they change.
+> `frequency`{luau} and `damping`{luau} also accept reactive nodes or functions, retuning the spring's physics on the fly.
 
 ## Velocity Control: Impulse & Set Velocity
 
-A spring carries **velocity**, not just a position, which is what lets it redirect mid-flight. Usually that velocity is managed for you, but sometimes you want to inject it directly: a knockback on hit, a flick gesture, a card that gets "thrown". Springs expose two methods for this:
+Springs expose two methods to manipulate velocity directly without changing the target:
 
-- **`spring:impulse(delta)`{luau}**: _adds_ `delta` to the current velocity, in value-units per second. For a spring driving an offset in pixels, `-800` means 800 pixels per second upward. Impulses accumulate.
-- **`spring:setVelocity(v)`{luau}**: _replaces_ the current velocity outright.
+- **`spring:impulse(delta)`{luau}**: Adds `delta`{luau} (in units per second) to the current velocity. Multiple impulses accumulate.
+- **`spring:setVelocity(velocity)`{luau}**: Replaces the current velocity outright.
 
-Both take a value of the spring's own datatype, and both re-wake a spring that had already settled, so it animates again from wherever it is.
+Both take a value of the spring's datatype and wake a settled spring immediately:
 
 ```luau
 local y = Flux.spring(0, 4, 0.6)
 
-local ui = new "Frame" {
-    Position = function()
-        return UDim2.fromOffset(0, y())
-    end,
-}
-
--- Kick it upward; it springs back to its target (0) on its own
+-- Kick upward at 800 px/s; the spring settles back to 0 on its own
 local function onHit()
     y:impulse(-800)
 end
 
--- Cancel any in-flight momentum; the spring eases back to its target from a standstill
+-- Cancel in-flight momentum
 local function onGrab()
     y:setVelocity(0)
 end
 ```
 
-Because impulse and set-velocity touch only the velocity, they compose naturally with a [reactive target](#reactive-targets): a later target change still retargets the spring, and the injected velocity carries through the physics.
+## Snap & Instant Placement {#snap}
+
+When you need to reposition a spring immediately without a transition (for example, on initial open or while dragging), use `:snap()`{luau} or `:setCurrent()`{luau}:
+
+- **`spring:snap(value)`{luau}**: Sets both the target and current animated value to `value`{luau} and zeroes velocity, putting the spring at rest immediately.
+- **`spring:setCurrent(value)`{luau}**: Sets the current animated value to `value`{luau} while preserving the existing target and velocity, waking the spring so it animates from `value`{luau} back toward its target.
+
+```luau
+local offset = Flux.spring(0, 3, 0.85)
+
+-- Jump directly to 100 at rest (no animation)
+offset:snap(100)
+
+-- Displace the current position to 140; it springs back toward 100
+offset:setCurrent(140)
+```
 
 > [!NOTE]
-> These methods are spring-only. Calling them on a [Tween](/guide/motion/tween) (which has no physical velocity) warns and does nothing.
-
-## Tuning the Physics
-
-Springs are controlled by two physical properties:
-
-- **Frequency:** Determines how fast the spring moves. Higher values mean faster motion. A frequency of `1` means the spring completes roughly one full cycle of its motion in one second.
-- **Damping:** Determines how the spring settles at its target.
-  - **`1` (Critically Damped):** The default. The spring will quickly approach the target and smoothly stop exactly on it without any overshoot or bounce.
-  - **`< 1` (Underdamped):** The spring will overshoot the target and bounce back and forth before settling. Lower values create more violent, longer-lasting bounces.
-  - **`> 1` (Overdamped):** The spring will move sluggishly and take a longer time to ease into the target.
+> `:impulse()`{luau}, `:setVelocity()`{luau}, `:setCurrent()`{luau}, and `:snap()`{luau} are spring-only. Calling them on a [Tween](/guide/motion/tween) warns and does nothing.
 
 ## Lifecycle
 
-A spring's [node](/guide/concepts/signals) is a plain signal, so the [scope](/guide/concepts/scopes) it was created in (usually the [component](/guide/concepts/components) that built it) does not own it; the GC reclaims it once unreferenced. The spring's per-frame **engine registration** _is_ tied to that scope, though: when the scope is destroyed the spring stops animating and unregisters from the engine automatically, so springs built into your UI need no manual cleanup.
-
-To tear one down early, call `spring:Destroy()`{luau}: it stops the animation, removes it from the engine's stepped set, and disposes the underlying node.
+When created inside a [Scope](/guide/concepts/scopes) (such as a component), a spring's per-frame step registration is cleaned up automatically when the scope is destroyed. To stop and dispose a spring early, call `spring:Destroy()`{luau}.
 
 <!--@include: ./_snippets/data-types.md-->

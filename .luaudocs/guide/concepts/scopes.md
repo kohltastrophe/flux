@@ -7,162 +7,118 @@ sidebar_position: 4
 
 # Scopes
 
-In dynamic reactive systems, disposing of unused state, effects, and UI instances (disconnecting connections, destroying instances) prevents memory leaks. **Scopes** manage the lifecycles of groups of reactive objects without boilerplate.
+A **Scope** owns every reactive computation, UI instance, and cleanup created inside it so you can tear them all down with a single `scope:Destroy()`.
 
-If you are coming from other libraries, a Scope is a reactive root (like SolidJS's [`createRoot`](https://docs.solidjs.com/reference/reactive-utilities/create-root)) combined with a cleanup tracker (similar to the Maid and Trove patterns common in Roblox development).
+```luau
+local scope, label = Flux.scope(function()
+	local name = Flux.signal("Guest")
+
+	Flux.effect(function()
+		print(`Hello, {name()}`)
+	end)
+
+	return Flux.new "TextLabel" {
+		Text = function()
+			return `Welcome, {name()}`
+		end,
+		Parent = playerGui,
+	}
+end)
+
+-- Tears down the Effect and destroys `label`:
+scope:Destroy()
+```
 
 ## Creating a Scope
 
-`Flux.scope(fn)`{luau} runs `fn` in a fresh **owner** and returns two values: the scope node and whatever `fn` returned. The reactions, instances, and cleanups created inside `fn` are owned by that scope, so a single `scope:Destroy()`{luau} tears them all down. (Plain signals are the exception; see [What a Scope Owns](#what-a-scope-owns).)
+`Flux.scope(fn)` runs `fn(scope)` inside a new owner scope and returns `(scope, result)`. You use the exact same `Flux.signal`, `Flux.computed`, `Flux.effect`, and `Flux.new` calls inside a scope as outside—ownership is tracked automatically.
 
-```luau
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Flux = require(ReplicatedStorage.Flux)
-
-local scope, label = Flux.scope(function()
-    local name = Flux("Guest")
-
-    -- This Effect is owned by the scope
-    Flux(function()
-        print("Hello, " .. name)
-    end, true)
-
-    -- This instance is owned by the scope
-    return Flux.new "TextLabel" {
-        Text = function() return "Welcome, " .. name() end,
-        Parent = playerGui,
-    }
-end)
-
--- When this system is no longer needed:
-scope:Destroy()
--- The Effect and `label` are disconnected and destroyed; `name`, a plain signal, is left for the GC.
-```
-
-There is no separate "scoped" constructor. Inside a scope you build state and UI with the **same** `Flux(...)`{luau}, `Flux.new`{lua}, and helpers you use everywhere else; ownership is tracked implicitly.
-
-> [!NOTE]
-> `fn` also receives the scope node as its argument: `Flux.scope(function(scope) ... end)`{luau}. Capture it when a nested callback needs to destroy the scope or re-enter it (see [Capturing the Active Scope](#capturing-the-active-scope)).
+> [!TIP] Coming from SolidJS or Maid/Trove?
+> `Flux.scope` combines a reactive root (like SolidJS's `createRoot`) with a resource cleanup container (like Roblox's Maid or Trove patterns).
 
 ## What a Scope Owns
 
-Anything created while a scope is active that holds a subscription, a resource, or needs deterministic teardown attaches to it automatically:
+Everything created while a scope is active that holds a subscription or resource attaches to that scope automatically:
 
-- Computeds and Effects (`Flux.computed`{lua}, `Flux.effect`{lua}, `Flux(fn)`{luau})
-- Instances from `Flux.new`{lua} and bindings applied with `Flux.edit`{lua}
-- [Stores](/guide/concepts/stores), [Async](/guide/concepts/async) tasks, [Selectors](/guide/concepts/selectors), and [mapping](/guide/concepts/mapping) helpers
-- [Conditional](/guide/concepts/conditionals) branches from `Flux.show`{lua} and `Flux.switch`{lua}
+- **Computeds and Effects** (`Flux.computed`, `Flux.effect`, `Flux.createMemo`, `Flux.createEffect`, `Flux(fn)`)
+- **Instances and bindings** from [`Flux.new`](/guide/roblox/creation), [`Flux.edit`](/guide/roblox/hydration), and [`Flux.property`](/guide/concepts/signals#binding-from-an-instance-property)
+- **State helpers:** [Stores](/guide/concepts/stores), [Async](/guide/concepts/async) tasks, [Selectors](/guide/concepts/selectors), [Mapping](/guide/concepts/mapping) (`forValue`, `forIndex`), and [Conditionals](/guide/concepts/conditionals) (`show`, `switch`, `presence`)
+- **Interaction & motion nodes:** [`Flux.Interact`](/guide/utilities/interact) state nodes (`hover`, `press`, `selected`, `focused`), [`Flux.spring`](/guide/motion/spring), and [`Flux.tween`](/guide/motion/tween)
+- **Custom teardown items** registered with [`Flux.cleanup`](/guide/concepts/effects#cleanup-with-flux-cleanup)
 
-Destroying the scope tears all of them down. Nothing has to be registered by hand.
-
-> [!NOTE]
-> Plain **signals** (`Flux(value)`{luau}, `Flux.signal`{lua}) are the one exception: they hold no subscriptions or resources, so a scope does not own them. A signal is reclaimed by the [garbage collector](/guide/concepts/signals#destroying-a-signal) once you stop referencing it (not torn down on `scope:Destroy()`), which also means its [`onDestroy`](/guide/concepts/signals#destroying-a-signal) fires only on an explicit `:Destroy()`{luau}.
+> [!NOTE] Plain Signals Are Garbage-Collected
+> Plain signals (`Flux.signal(v)`, `Flux(v)`) hold no upstream subscriptions or external resources, so scopes do not own them; Luau's garbage collector reclaims them once unreferenced.
 
 ## Nesting Scopes
 
-Scopes nest. Call `Flux.scope`{lua} inside another scope and the inner one becomes a child: destroying the parent destroys the child (and everything in it), while the child stays independently `:Destroy()`{luau}-able. Destroying a child first unlinks it from the parent, so a later parent destroy never double-frees it.
+Calling `Flux.scope` inside another scope creates a **child scope**. Destroying the parent destroys all remaining children, while destroying a child early unlinks it cleanly from the parent:
 
 ```luau
 local session = Flux.scope(function()
-    -- A child scope for one screen within the session
-    local screen = Flux.scope(function()
-        return Flux.new "TextLabel" { Text = "Hello", Parent = playerGui }
-    end)
+	local modal = Flux.scope(function()
+		return Flux.new "Frame" { Name = "Modal", Parent = playerGui }
+	end)
 
-    -- Tear down just this screen...
-    screen:Destroy() -- the label is gone; `session` is untouched
+	-- Close just the modal while keeping `session` alive:
+	modal:Destroy()
 end)
 
--- ...or tear down everything at once
-session:Destroy() -- destroys any remaining child scopes too
+-- Later, tear down the entire session and any remaining child scopes:
+session:Destroy()
 ```
-
-Child scopes are the building block behind [conditional rendering](/guide/concepts/conditionals): each mounted branch lives in its own child scope so it can be swapped out.
-
-> [!TIP]
-> Reach for a child scope when a long-lived scope owns sub-regions that come and go independently: tabs, list rows, modals within a session. It keeps cleanup precise without juggling separate top-level scopes.
-
-## Registering Cleanup
-
-For resources Flux does not create itself (manual connections, threads, third-party objects), `Flux.cleanup`{lua} attaches teardown to the current scope. It accepts anything cleanable: a function, an Instance, a connection, a thread, a node, or any object with a `:Destroy()`{luau}/`:destroy()`{luau} method.
-
-```luau
-Flux.scope(function()
-    Flux.cleanup(workspace.Marker) -- destroyed with the scope
-    Flux.cleanup(someSignal:Connect(handler)) -- disconnected with the scope
-    Flux.cleanup(function() print("bye") end) -- run on teardown
-end)
-```
-
-Inside a [Computed](/guide/concepts/computeds) or [Effect](/guide/concepts/effects), `Flux.cleanup`{lua} runs **before each re-run** as well as on destroy, which is how an effect tears down whatever it set up on its previous pass. See [Effects](/guide/concepts/effects#cleanup-with-flux-cleanup).
 
 ## Capturing the Active Scope
 
-Inside any reactive body, Flux knows which scope owns the reactions and cleanups you create; that is how `Flux.cleanup`{lua} and implicit ownership find their target. Two low-level escape hatches let you read and re-establish that owner by hand, which matters when ownership would otherwise be lost across a boundary (a deferred callback, a coroutine, a manual helper):
-
-- `Flux.getOwner()`{luau} returns the scope node currently evaluating, or `nil`{luau} at the root. Capture it while you still have it.
-- `Flux.withOwner(node, fn)`{luau} runs `fn` with `node` reinstalled as the active scope, so anything it creates (computeds, effects, `Flux.cleanup`{lua} callbacks, instances) attaches to that scope's lifetime. It re-establishes **only the owner**, not dependency tracking; so reads inside `fn` still subscribe the computation that is currently running. Combine it with [`Flux.untrack`](/guide/concepts/tracking) when those reads should not become dependencies (the built-in helpers pair the two).
+When creating reactions or cleanups inside an asynchronous callback (`task.delay`, a promise, or a remote callback), capture the active owner with `Flux.getOwner()` and restore it with `Flux.withOwner(owner, fn)`:
 
 ```luau
-local owner = Flux.getOwner() -- grab the active scope before we defer
+local owner = Flux.getOwner()
 
-task.defer(function()
-    -- Re-enter `owner` so the cleanup below attaches to it, tearing `late` down on teardown
-    Flux.withOwner(owner, function()
-        local late = Flux(buildExpensiveThing())
-        Flux.cleanup(function() late:Destroy() end)
-    end)
+task.delay(1, function()
+	Flux.withOwner(owner, function()
+		local toast = Flux.new "TextLabel" { Text = "Saved!", Parent = playerGui }
+		Flux.cleanup(toast)
+	end)
 end)
 ```
 
-These are the primitives the built-in helpers (mapping, conditionals, instance binding) use internally to keep ownership correct; most application code only needs `Flux.scope`{lua}.
+- `Flux.withOwner(owner, fn)` restores both ownership and any [Context](/guide/concepts/context) values active where `owner` was created, without enabling dependency tracking.
+- Pass `nil` as `owner` to create unowned root reactions from inside an existing scope.
+- If `owner` was **already destroyed** before `withOwner` runs (for example, a late timer callback firing after a modal closed), `withOwner` immediately disposes everything created inside `fn` as soon as `fn` returns.
 
-## Manual Cleanup with `Flux.clean`{lua}
+## Disposing by Hand with `Flux.dispose`{lua}
 
-`Flux.clean`{lua} is the cleanup engine behind Scopes and the `_CLEAN` directive, exposed for manual use. It accepts a function, Instance, connection, thread, node, any object with a `:Destroy()`{luau}/`:destroy()`{luau} method, or an array of any of these (recursively), and disposes of it immediately. Individual failures are isolated, so one bad cleanup never aborts the rest:
+`Flux.dispose(obj)` runs the same teardown engine immediately on any `Cleanable` (a function, `Instance`, `RBXScriptConnection`, suspended `thread`, object with a `Destroy`/`destroy`/`Disconnect`/`disconnect` method, or an array of them):
 
 ```luau
-Flux.clean({
-    connection,
-    someInstance,
-    function() print("bye") end,
-})
+local connections = {
+	part.Touched:Connect(onTouched),
+	part.Destroying:Connect(onGone),
+}
+
+Flux.dispose(connections) -- disconnects both immediately
 ```
 
-`Flux.clean`{lua} disposes **now**; `Flux.cleanup`{lua} _defers_ disposal to the current scope's teardown.
-
-## When to Use Scopes
-
-- **UI components** - Wrap each component in a scope. Destroy it when the component unmounts.
-- **Minigames or rounds** - Create one scope per round. When the round ends, call `:Destroy()`{luau} to wipe all round-specific UI, state, and effects instantly.
-- **Player sessions** - Tie a scope to `Players.PlayerAdded`{lua}. Destroy it in `Players.PlayerRemoving`{lua}.
-- **Modal windows** - Create a scope when the window opens; destroy it when it closes.
+`Flux.dispose` runs [untracked](/guide/concepts/tracking) and isolates errors via `warn` so one failing cleanup never aborts the rest. Use `Flux.dispose` to tear something down **now**; use `Flux.cleanup` to attach teardown to the active owner.
 
 ## Connecting a Scope to an Instance Lifetime
 
-A common pattern ties a scope's lifetime to a Roblox instance with the `_CLEAN` directive, so destroying the instance destroys the scope:
+When a component returns a root `Instance` that callers may `:Destroy()` directly, pass the scope to the `__CLEAN` directive so destroying either the `Instance` or the `scope` tears down the whole unit once:
 
 ```luau
-local function Toast(message)
-    local scope, frame = Flux.scope(function(scope)
-        local alpha = Flux(1)
+local function Toast(message: string): Frame
+	local _, frame = Flux.scope(function(scope)
+		local opacity = Flux.tween(0, TweenInfo.new(0.25))
 
-        return Flux.new "Frame" {
-            BackgroundTransparency = function() return 1 - alpha() end,
-            Size = UDim2.fromOffset(300, 60),
+		return Flux.new "Frame" {
+			BackgroundTransparency = opacity,
+			Size = UDim2.fromOffset(300, 60),
+			__CLEAN = { scope },
 
-            -- Destroy the scope when the frame is destroyed
-            _CLEAN = { scope },
-        }
-    end)
+			Flux.new "TextLabel" { Text = message },
+		}
+	end)
 
-    -- Animate out and destroy after 3 seconds
-    task.delay(3, function()
-        frame:Destroy() -- triggers _CLEAN, which destroys the scope
-    end)
-
-    return frame
+	return frame
 end
 ```
-
-The `Frame` is owned by the scope, and `_CLEAN = { scope }`{luau} closes the loop the other way: if anything destroys the `Frame` (its parent `ScreenGui` going away, for example), the scope and all the state inside it go with it. Destroying either side tears the whole unit down exactly once.

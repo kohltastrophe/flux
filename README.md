@@ -13,9 +13,9 @@
 
 # Be lazy. Do more. Go fast.
 
-_Flux is a declarative Luau library for creating user interfaces. It runs on fine-grained lazy reactions, is strictly typed for accurate IntelliSense, and keeps the syntax terse enough that interfaces read almost like plain Luau._
+_Flux is a declarative Luau library for creating user interfaces. It runs on fine-grained, glitch-free reactions, is strictly typed for accurate IntelliSense, and keeps the syntax terse enough that interfaces read almost like plain Luau._
 
-[![CI](https://img.shields.io/github/actions/workflow/status/kohltastrophe/flux/ci.yml?style=for-the-badge)](https://github.com/kohltastrophe/flux/actions/workflows/ci.yml) [![Coverage](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/kohltastrophe/a15338bf8bb30072e690acf47a8e0266/raw/flux-coverage.json&style=for-the-badge)](https://github.com/kohltastrophe/flux/actions/workflows/ci.yml) [![License](https://img.shields.io/github/license/kohltastrophe/flux?style=for-the-badge)](LICENSE.md) [![GitHub Release](https://img.shields.io/github/v/release/kohltastrophe/flux?style=for-the-badge)](https://github.com/kohltastrophe/flux/releases)
+[![CI](https://img.shields.io/github/actions/workflow/status/kohltastrophe/flux/ci.yml?style=for-the-badge)](https://github.com/kohltastrophe/flux/actions/workflows/ci.yml) [![Coverage](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/kohltastrophe/a15338bf8bb30072e690acf47a8e0266/raw/flux-coverage.json&style=for-the-badge)](https://github.com/kohltastrophe/flux/actions/workflows/ci.yml) [![License](https://img.shields.io/github/license/kohltastrophe/flux?style=for-the-badge)](LICENSE.md) [![GitHub Release](https://img.shields.io/github/v/release/kohltastrophe/flux/releases)
 
 ---
 
@@ -25,7 +25,7 @@ _Flux is a declarative Luau library for creating user interfaces. It runs on fin
 
 </div>
 
-Flux exploits Luau's type checker to its absolute limit, if you're going to be lazy, your editor should do the heavy lifting. The moment you declare an instance like a `TextLabel` or a `Frame`, you get zero-guesswork autocomplete for every valid property, event, and expected type.
+Flux exploits Luau's type checker to its absolute limit—if you're going to be lazy, your editor should do the heavy lifting. The moment you declare an instance like a `TextLabel` or a `Frame`, you get zero-guesswork autocomplete for every valid property, event, and expected type.
 
 ---
 
@@ -53,33 +53,33 @@ new "ScreenGui" {
 }
 ```
 
-Flux cuts boilerplate with `__call` metamethods and full <b>operator overloading</b> on every reactive node, so your keystrokes can be just as lazy as the engine under the hood. This means you can forget `:get()` and `:set(1)`, just use `count()` to read and `count(1)` to write. Arithmetic, comparison, and concatenation operators automatically subscribe, so reactive expressions read like the plain Luau around them.
+Flux cuts boilerplate with `__call` metamethods and full <b>operator overloading</b> on every reactive node, so reading and writing state takes zero ceremony. Forget `:get()` and `:set(1)`—just use `count()` to read and `count(1)` to write. Arithmetic, comparison, and concatenation operators automatically subscribe, so reactive expressions read like the plain Luau around them.
 
 </div>
 
 ---
 
-<picture><source media="(prefers-color-scheme: dark)" srcset=".github/img/h3-fast-dark.svg"><img alt="Go fast stay lazy" src=".github/img/h3-fast.svg"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset=".github/img/h3-fast-dark.svg"><img alt="Go fast waste nothing" src=".github/img/h3-fast.svg"></picture>
 
 <a href="https://github.com/kohltastrophe/luau-reactivity-benchmark"><img src="https://raw.githubusercontent.com/kohltastrophe/luau-reactivity-benchmark/assets/chart-small.svg" width="100%" alt="Luau reactivity benchmark"></a>
 
 </div>
 
-Most reactive libraries lean on topological sorting, dirty-checking, or a virtual DOM, all of which carry real overhead on the Luau VM. Flux avoids that overhead by being uncompromisingly lazy. It evaluates absolutely nothing until a value is explicitly observed, ensuring that only the exact work a change strictly requires is ever calculated. No over-fetching, no premature rendering, and no wasted CPU cycles; just maximum performance through pure, optimal laziness.
+Virtual DOM libraries rebuild and diff component trees; naive reactive graphs re-run downstream bindings on every intermediate write. Flux does neither: dormant computations sleep with zero subscriptions until something observes them, and active bindings batch updates to the frame, settling in dependency order and stopping early the moment a derived value is unchanged. No virtual DOM diffing, no intermediate glitches, and no wasted CPU cycles.
 
 ---
 
 ## Batteries Included
 
-Lazy reactivity is the engine. On top of it, Flux ships the rest of what you need to build interfaces, all strictly typed:
+Fine-grained reactivity is the engine. On top of it, Flux ships the rest of what you need to build interfaces, all strictly typed:
 
-- **Reactive primitives** - [`signal`](https://flux.kohl.gg/guide/concepts/signals), [`computed`](https://flux.kohl.gg/guide/concepts/computeds), and [`effect`](https://flux.kohl.gg/guide/concepts/effects), plus [stores](https://flux.kohl.gg/guide/concepts/stores) and [context](https://flux.kohl.gg/guide/concepts/context) for shared state, and [`wrap`](https://flux.kohl.gg/guide/concepts/wrapping) to turn plain tables into reactive ones.
-- **Declarative instances:** [`new`](https://flux.kohl.gg/guide/roblox/creation) to build and [`edit`](https://flux.kohl.gg/guide/roblox/hydration) to hydrate existing Instances, with scoped lifecycles and cleanup.
+- **Reactive primitives** - [`signal`](https://flux.kohl.gg/guide/concepts/signals), [`computed`](https://flux.kohl.gg/guide/concepts/computeds), and [`effect`](https://flux.kohl.gg/guide/concepts/effects), plus [stores](https://flux.kohl.gg/guide/concepts/stores) and [context](https://flux.kohl.gg/guide/concepts/context) for shared state, and [`split`](https://flux.kohl.gg/guide/concepts/components#splitting-props-with-flux-split) for typed component props.
+- **Declarative instances** - [`new`](https://flux.kohl.gg/guide/roblox/creation) to build and [`edit`](https://flux.kohl.gg/guide/roblox/hydration) to hydrate existing Instances, with two-way [`model`](https://flux.kohl.gg/guide/roblox/creation#flux-model-two-way-binding-in-one-key) bindings and [`Find`](https://flux.kohl.gg/guide/roblox/hydration#instance-selectors-flux-find) selectors.
 - **Lifecycle & cleanup** - [`scope`](https://flux.kohl.gg/guide/concepts/scopes) tracks every node, instance, and effect it creates and tears them all down with a single `Destroy`, including nested child scopes.
-- **Control flow** - [`show`](https://flux.kohl.gg/guide/concepts/conditionals) and [`switch`](https://flux.kohl.gg/guide/concepts/conditionals) for conditional rendering, [`forValue` / `forIndex`](https://flux.kohl.gg/guide/concepts/mapping) for keyed mapping, and [`selector`](https://flux.kohl.gg/guide/concepts/selectors) for O(1) selection in large lists.
-- **Motion:** physics [springs](https://flux.kohl.gg/guide/motion/spring), [tweens](https://flux.kohl.gg/guide/motion/tween), and perceptual [color](https://flux.kohl.gg/guide/motion/color) interpolation, all stepped once per frame.
-- **Responsive & layout:** [`viewport`, `scale`, and `breakpoint`](https://flux.kohl.gg/guide/utilities/responsive) helpers alongside [`padding`, `list`, `grid`, and `flex`](https://flux.kohl.gg/guide/utilities/layout).
-- **Async & safety:** [`async`](https://flux.kohl.gg/guide/concepts/async) tasks, [error boundaries](https://flux.kohl.gg/guide/tips/errors), and a [`strict` mode](https://flux.kohl.gg/guide/tips/strict) that catches impure computations in development.
+- **Control flow** - [`show`](https://flux.kohl.gg/guide/concepts/conditionals), [`switch`](https://flux.kohl.gg/guide/concepts/conditionals#switching-between-many-branches), and exit-animated [`presence`](https://flux.kohl.gg/guide/concepts/conditionals#animating-exits-with-presence) for conditional subtrees, [`forValue` / `forIndex`](https://flux.kohl.gg/guide/concepts/mapping) for keyed mapping, and [`selector`](https://flux.kohl.gg/guide/concepts/selectors) for O(1) selection in large lists.
+- **Motion** - physics [springs](https://flux.kohl.gg/guide/motion/spring), [tweens](https://flux.kohl.gg/guide/motion/tween), and perceptual [color](https://flux.kohl.gg/guide/motion/color) interpolation in Oklab, all stepped once per frame.
+- **Responsive, layout & input** - [`viewport`, `scale`, `breakpoint`, and accessibility](https://flux.kohl.gg/guide/utilities/responsive) nodes, [`Interact`](https://flux.kohl.gg/guide/utilities/interact) state (`hover`, `press`, `focused`), and [`padding`, `list`, `grid`, and `flex`](https://flux.kohl.gg/guide/utilities/layout) helpers.
+- **Async, safety & testing** - [`async`](https://flux.kohl.gg/guide/concepts/async) tasks, [`safe`](https://flux.kohl.gg/guide/tips/errors) error boundaries, and a virtual [`Clock`](https://flux.kohl.gg/guide/tips/testing) for deterministic frame and timer stepping in tests.
 
 ## Installation
 

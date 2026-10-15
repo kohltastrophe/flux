@@ -6,4 +6,4 @@ if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
 	git fetch --quiet --unshallow
 fi
 
-npx --yes luaudocs@0.2.0 build
+npx --yes luaudocs@latest build

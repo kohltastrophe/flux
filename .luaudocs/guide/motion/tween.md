@@ -7,104 +7,70 @@ sidebar_position: 2
 
 # Tween
 
-**[Springs](/guide/motion/spring)** suit physics-driven interactions, but sometimes you need an animation to take a specific amount of time, or follow a specific easing curve.
-
-Roblox handles this with [`TweenService`](https://create.roblox.com/docs/en-us/reference/engine/classes/TweenService), but imperative `Tween:Play()`{luau} and `Tween:Cancel()`{luau} calls don't mix well with a declarative UI library. Flux provides a reactive tweening primitive that reuses Roblox's easing curves, so you can bind it directly to your UI properties like a standard Signal.
-
-## Basic Usage
-
-You create a reactive tween using `Flux.tween()`{luau}.
-
-The function takes two arguments:
-
-1. **Target**: The value the tween should animate toward.
-2. **TweenInfo** _(Optional)_: A standard Roblox [`TweenInfo`](https://create.roblox.com/docs/en-us/reference/engine/datatypes/TweenInfo) object that dictates the duration, easing style, and easing direction. If omitted, it defaults to `0.3` seconds with [`Cubic`](https://create.roblox.com/docs/en-us/reference/engine/enums/EasingStyle) [`InOut`](https://create.roblox.com/docs/en-us/reference/engine/enums/EasingDirection) easing.
-
-The resulting object acts like a standard Flux **Signal**, so it can be bound directly to UI properties.
+`Flux.tween(target, tweenInfo?)`{luau} returns a reactive node that animates toward its target over a fixed duration and easing curve, reusing Roblox's [`TweenInfo`](https://create.roblox.com/docs/en-us/reference/engine/datatypes/TweenInfo) without imperative `Tween:Play()`{luau} / `Tween:Cancel()`{luau} boilerplate.
 
 ```luau
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Flux = require(ReplicatedStorage.Flux)
-local new = Flux.new
+local loadingProgress = Flux.tween(0, TweenInfo.new(1, Enum.EasingStyle.Linear))
 
--- Create a tween starting at 0, using a 1-second Linear tween
-local loadingProgress = Flux.tween(
-    0,
-    TweenInfo.new(1, Enum.EasingStyle.Linear)
-)
-
-local progressBar = new "Frame" {
+local progressBar = Flux.new "Frame" {
     BackgroundColor3 = Color3.fromRGB(0, 255, 100),
-
-    -- Bind the tweened value directly to the size
     Size = function()
         return UDim2.fromScale(loadingProgress(), 1)
-    end
+    end,
 }
 
--- Later: Update the target to 1 (100%). It will tween there over 1 second.
+-- Smoothly tween toward 1 (100%) over 1 second
 loadingProgress(1)
 ```
 
+## Basic Usage
+
+`Flux.tween`{luau} takes two arguments:
+
+1. **`target`{luau}**: The value (or reactive source) the tween animates toward.
+2. **`tweenInfo`{luau}** _(optional)_: A Roblox [`TweenInfo`](https://create.roblox.com/docs/en-us/reference/engine/datatypes/TweenInfo) controlling duration, easing style, direction, repeat count, reverses, and delay. Defaults to `0.3`{luau} seconds with `Cubic`{luau} `InOut`{luau} easing.
+
+The returned node works just like a [Signal](/guide/concepts/signals): read it with `tween()`{luau}, retarget it with `tween(newGoal)`{luau} or `:set(newGoal)`{luau}, and bind it directly to properties.
+
 ## Reactive Targets
 
-Like Springs, Flux Tweens are part of the reactive graph. If you pass an existing Flux [`Signal`](/guide/concepts/signals) or [`Computed`](/guide/concepts/computeds) into the `Flux.tween`{lua} constructor, the tween tracks it.
-
-Whenever that underlying state changes, the tween begins animating toward the new target from its current position.
+Pass a [Signal](/guide/concepts/signals), [Computed](/guide/concepts/computeds), or plain function `() -> T`{luau} as `target`{luau}. Whenever the source updates, the tween smoothly redirects from its current in-flight value toward the new goal:
 
 ```luau
-local isHovering = Flux(false)
+local isHovering = Flux.signal(false)
 
--- The target is a Computed based on hover state
 local buttonColor = Flux.tween(
-    Flux(function()
-        return isHovering() and Color3.fromRGB(80, 80, 80) or Color3.fromRGB(45, 45, 45)
-    end),
+    function()
+        return if isHovering() then Color3.fromRGB(80, 80, 80) else Color3.fromRGB(45, 45, 45)
+    end,
     TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 )
 
-local myButton = new "TextButton" {
+local myButton = Flux.new "TextButton" {
     Size = UDim2.fromOffset(200, 50),
-
-    -- Bind the reactive tween
     BackgroundColor3 = buttonColor,
-
-    -- Mutate the underlying state
     MouseEnter = function() isHovering(true) end,
-    MouseLeave = function() isHovering(false) end
+    MouseLeave = function() isHovering(false) end,
 }
 ```
 
 ## Reactive TweenInfo
 
-In highly dynamic systems, you might want the animation duration or easing style to change based on the state of the game. Flux supports passing a reactive node for the [`TweenInfo`](https://create.roblox.com/docs/en-us/reference/engine/datatypes/TweenInfo) argument as well.
-
-When the underlying [`TweenInfo`](https://create.roblox.com/docs/en-us/reference/engine/datatypes/TweenInfo) node updates, the change takes effect immediately: the in-flight animation continues from its current position using the new duration and easing parameters.
+`tweenInfo`{luau} can also be a reactive node or function. When it updates, the in-flight animation continues from its current position using the new duration and easing parameters:
 
 ```luau
-local isFastMode = Flux(false)
-local targetPosition = Flux(UDim2.fromScale(0, 0))
+local isFastMode = Flux.signal(false)
+local targetPosition = Flux.signal(UDim2.fromScale(0, 0))
 
-local dynamicTweenInfo = Flux(function()
-    if isFastMode() then
-        return TweenInfo.new(0.1, Enum.EasingStyle.Linear)
-    else
-        return TweenInfo.new(0.5, Enum.EasingStyle.Exponential)
-    end
+local slidingPosition = Flux.tween(targetPosition, function()
+    return if isFastMode()
+        then TweenInfo.new(0.1, Enum.EasingStyle.Linear)
+        else TweenInfo.new(0.5, Enum.EasingStyle.Exponential)
 end)
-
--- The tween tracks `targetPosition` and adapts its speed based on `isFastMode`
-local slidingPosition = Flux.tween(targetPosition, dynamicTweenInfo)
-
--- Updating either node animates `slidingPosition` toward the new goal
-isFastMode(true)
-targetPosition(UDim2.fromScale(1, 0))
 ```
 
 ## Lifecycle
 
-A tween's [node](/guide/concepts/signals) is a plain signal, so the [scope](/guide/concepts/scopes) it was created in (usually the [component](/guide/concepts/components) that built it) does not own it; the GC reclaims it once unreferenced. The tween's per-frame **engine registration** _is_ tied to that scope: when the scope is destroyed the tween stops animating and unregisters from the engine automatically, so tweens built into your UI need no manual cleanup.
-
-To tear one down early, call `tween:Destroy()`{luau}: it stops the animation, removes it from the engine's stepped set, and disposes the underlying node.
+When created inside a [Scope](/guide/concepts/scopes), a tween's per-frame step registration is cleaned up automatically when the scope is destroyed. To stop and dispose a tween early, call `tween:Destroy()`{luau}.
 
 <!--@include: ./_snippets/data-types.md-->
