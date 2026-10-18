@@ -32,7 +32,7 @@ end
 
 ### 1. Work-Minimal & Glitch-Free
 
-Dormant computations sleep with zero subscriptions until something observes them. Once bound to the UI or an [Effect](/guide/concepts/effects), updates batch to the frame (`RunService.PreRender` on the client, `Heartbeat` on the server) and settle in dependency order before effects run. If a derived value recomputes to the same result, propagation stops right there—no downstream bindings wake up, and no observer ever sees a half-updated graph.
+Dormant computations sleep with zero subscriptions until something observes them. Once bound to the UI or an [Effect](/guide/concepts/effects), updates batch to the frame (`RunService.PreRender` on the client, `Heartbeat` on the server) and settle in dependency order before effects run. If a derived value recomputes to the same result, propagation stops right there: no downstream bindings wake up, and no observer ever sees a half-updated graph.
 
 ### 2. Fine-Grained Reactivity (No Virtual DOM)
 

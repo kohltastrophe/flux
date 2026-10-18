@@ -46,7 +46,7 @@ local screen = Flux.new "Frame" {
 
 ### Remounting on Identity Change {#keyed-show}
 
-Use `Flux.showKeyed(source, component, fallback?)` when you want the branch to **tear down and rebuild** on every change of `source` (not just truthy/falsy transitions)—useful for resetting per-item local state like an input draft:
+Use `Flux.showKeyed(source, component, fallback?)` when you want the branch to **tear down and rebuild** on every change of `source` (not just truthy/falsy transitions), which is useful for resetting per-item local state like an input draft:
 
 ```luau
 local selectedUser = Flux.signal(firstUser)

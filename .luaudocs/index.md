@@ -28,7 +28,7 @@ hero:
 
 <h1 align="center">Be lazy <text style="opacity: 0.26">yet effective</text></h1>
 
-Flux exploits Luau's type checker to its absolute limit—if you're going to be lazy, your editor should do the heavy lifting. The moment you declare an instance like a `TextLabel` or a `Frame`, you get zero-guesswork autocomplete for every valid property, event, and expected type.
+Flux exploits Luau's type checker to its absolute limit, if you're going to be lazy, your editor should do the heavy lifting. The moment you declare an instance like a `TextLabel` or a `Frame`, you get zero-guesswork autocomplete for every valid property, event, and expected type.
 
 <img src="/autocomplete.min.svg" alt="Editor autocomplete for Flux: choosing the Frame class, completing the inherited Name property, and a red squiggle on an invalid property." style="display:block;width:100%;max-width:560px;margin:1.5rem auto;" />
 
@@ -37,7 +37,7 @@ Flux exploits Luau's type checker to its absolute limit—if you're going to be 
 
 <h1 align="center">Do more <text style="opacity: 0.26">with less</text></h1>
 
-Flux cuts boilerplate with `__call` metamethods and full <b>operator overloading</b> on every reactive node, so reading and writing state takes zero ceremony. Forget `:get()` and `:set(1)`—just use `count()` to read and `count(1)` to write. Arithmetic, comparison, and concatenation operators automatically subscribe, so reactive expressions read like the plain Luau around them.
+Flux cuts boilerplate with `__call` metamethods and full <b>operator overloading</b> on every reactive node, so reading and writing state takes zero ceremony. Forget `:get()` and `:set(1)`, just use `count()` to read and `count(1)` to write. Arithmetic, comparison, and concatenation operators automatically subscribe, so reactive expressions read like the plain Luau around them.
 
 ```luau
 local ReplicatedStorage = game:GetService("ReplicatedStorage")

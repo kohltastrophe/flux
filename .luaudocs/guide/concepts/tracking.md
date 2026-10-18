@@ -16,7 +16,7 @@ Whenever a [Computed](/guide/concepts/computeds), [Effect](/guide/concepts/effec
 | **`Flux.untrack(fn)`** | No | `() -> ...T` | Running a block of code without tracking reads |
 | **`Flux.untrack()` / `Flux.retrack()`** | No | None | Allocation-free untracked fence in hot paths or around `task.spawn` |
 | **`Flux.on(deps, fn, defer?)`** | Declared `deps` only | Node/getter or array of them | Running `fn` untracked whenever `deps` change |
-| **`Flux.isReactive()`** | — | None | Checking whether code is currently running inside a tracked reaction |
+| **`Flux.isReactive()`** | - | None | Checking whether code is currently running inside a tracked reaction |
 
 > [!CAUTION] Reactive Bodies Must Be Synchronous
 > Never yield (`task.wait`, `:GetAsync()`, `:WaitForChild()`) inside a Computed or Effect body. Use [`Flux.async`](/guide/concepts/async) for yielding work, or spawn a thread fenced by `Flux.untrack()` / `Flux.retrack()`.
@@ -86,7 +86,7 @@ end)
 
 ## `Flux.on`{lua}
 
-`Flux.on(deps, fn, defer?)` wraps `fn` so only `deps` (a single Node/getter or an array of them) are tracked, while `fn` itself runs untracked. `fn` receives `(input, previousInput, previousResult)`—for an array of `deps`, `input` and `previousInput` are arrays of their values:
+`Flux.on(deps, fn, defer?)` wraps `fn` so only `deps` (a single Node/getter or an array of them) are tracked, while `fn` itself runs untracked. `fn` receives `(input, previousInput, previousResult)`; for an array of `deps`, `input` and `previousInput` are arrays of their values:
 
 ```luau
 local trigger = Flux.signal(1)

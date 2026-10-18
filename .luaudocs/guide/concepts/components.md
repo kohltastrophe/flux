@@ -25,7 +25,7 @@ local function PrimaryButton(props: ButtonProps): TextButton
 end
 ```
 
-When state changes, `PrimaryButton` itself never re-executes—only the bound `Text` property updates.
+When state changes, `PrimaryButton` itself never re-executes; only the bound `Text` property updates.
 
 ## Consuming Components
 

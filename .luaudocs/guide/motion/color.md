@@ -42,7 +42,7 @@ local accent = Color.rotateHue(brand, 180) -- complementary hue
 
 ## Blending
 
-`Color.mix(a, b, t)`{luau} interpolates between `a`{luau} (`t = 0`{luau}) and `b`{luau} (`t = 1`{luau}) in Oklab—the exact path traveled by [`Flux.spring`](/guide/motion/spring) and [`Flux.tween`](/guide/motion/tween). `t`{luau} is unclamped, so values outside `[0, 1]` extrapolate while staying gamut-mapped:
+`Color.mix(a, b, t)`{luau} interpolates between `a`{luau} (`t = 0`{luau}) and `b`{luau} (`t = 1`{luau}) in Oklab, the exact path traveled by [`Flux.spring`](/guide/motion/spring) and [`Flux.tween`](/guide/motion/tween). `t`{luau} is unclamped, so values outside `[0, 1]` extrapolate while staying gamut-mapped:
 
 ```luau
 local midpoint = Color.mix(Color3.new(1, 0, 0), Color3.new(0, 0, 1), 0.5)

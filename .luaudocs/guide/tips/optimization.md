@@ -63,7 +63,7 @@ setCount(10)
 ```
 
 > [!NOTE]
-> `createSignal`{luau} and `createMemo`{luau} closures are valid `Flux.Reactive<T>`{luau} sources—you can pass `getCount`{luau} or `getDoubled`{luau} directly to property bindings, `Flux.spring`{luau}, or `Flux.show`{luau}.
+> `createSignal`{luau} and `createMemo`{luau} closures are valid `Flux.Reactive<T>`{luau} sources; you can pass `getCount`{luau} or `getDoubled`{luau} directly to property bindings, `Flux.spring`{luau}, or `Flux.show`{luau}.
 
 ## 5. How the Reactive Graph Minimizes Work
 
@@ -72,7 +72,7 @@ setCount(10)
 When a [Computed](/guide/concepts/computeds) has active downstream observers (such as an Effect or UI binding), Flux maintains its topological height in the dependency graph:
 
 1. **Glitch-free ordering:** Upstream Computeds always settle before deeper Computeds or Effects that read them, so diamond dependency graphs never evaluate a node twice or expose transient half-updated values.
-2. **Early cutoff:** If an upstream Computed re-evaluates and produces an equal value (`==`{luau} or custom `equals`{luau}), propagation stops immediately—downstream Computeds and Effects are never woken.
+2. **Early cutoff:** If an upstream Computed re-evaluates and produces an equal value (`==`{luau} or custom `equals`{luau}), propagation stops immediately; downstream Computeds and Effects are never woken.
 3. **Zero cost when unobserved:** A Computed with no downstream observers unsubscribes from its sources and stays completely dormant until read.
 
 ### Custom Equality Short-Circuiting {#equality-short-circuiting}
@@ -89,7 +89,7 @@ end)
 
 ### Effect Batching {#effect-batching}
 
-Effects and property bindings batch their updates to the end of the frame—flushing on `RunService.PreRender`{luau} on the client (right before rendering) and `RunService.Heartbeat`{luau} on the server. Updating a Signal hundreds of times in a single frame still runs each dependent Effect at most **once** with the final settled value.
+Effects and property bindings batch their updates to the end of the frame, flushing on `RunService.PreRender`{luau} on the client (right before rendering) and `RunService.Heartbeat`{luau} on the server. Updating a Signal hundreds of times in a single frame still runs each dependent Effect at most **once** with the final settled value.
 
 ### Implicit LayoutOrder
 

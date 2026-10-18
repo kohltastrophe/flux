@@ -113,9 +113,9 @@ If you are upgrading an existing project from `0.2.0` to `0.3.0`, update these r
 
 ## Next Steps
 
-- **[Signals](/guide/concepts/signals)** — Hold and update reactive state.
-- **[Computeds](/guide/concepts/computeds)** — Derive and cache values from other state.
-- **[Effects](/guide/concepts/effects)** — Run side effects on frame flushes.
-- **[Scopes](/guide/concepts/scopes)** — Group instances and reactions under a single `:Destroy()`.
-- **[Components](/guide/concepts/components)** — Build reusable UI functions and split props with `Flux.split`.
-- **[Creation](/guide/roblox/creation)** — Explore `Flux.new`, two-way `Flux.model` bindings, and directives.
+- **[Signals](/guide/concepts/signals):** Hold and update reactive state.
+- **[Computeds](/guide/concepts/computeds):** Derive and cache values from other state.
+- **[Effects](/guide/concepts/effects):** Run side effects on frame flushes.
+- **[Scopes](/guide/concepts/scopes):** Group instances and reactions under a single `:Destroy()`.
+- **[Components](/guide/concepts/components):** Build reusable UI functions and split props with `Flux.split`.
+- **[Creation](/guide/roblox/creation):** Explore `Flux.new`, two-way `Flux.model` bindings, and directives.

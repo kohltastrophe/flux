@@ -26,7 +26,7 @@ Flux.edit(existingButton) {
 
 ## The `Flux.edit`{lua} Function
 
-`Flux.edit(instance)` returns a function that applies a properties table to `instance` and returns `instance`. Unlike `Flux.new`, `Flux.edit` never applies class [defaults](/guide/roblox/defaults)—it only touches the properties, events, and children you specify.
+`Flux.edit(instance)` returns a function that applies a properties table to `instance` and returns `instance`. Unlike `Flux.new`, `Flux.edit` never applies class [defaults](/guide/roblox/defaults); it only touches the properties, events, and children you specify.
 
 - All bindings and event connections are automatically cleaned up when `instance.Destroying` fires.
 - If `Flux.edit` is called inside a [`Flux.scope`](/guide/concepts/scopes), the bindings are also owned by that scope and disconnect when `scope:Destroy()` is called (without destroying `instance` itself).

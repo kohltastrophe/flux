@@ -31,7 +31,7 @@ scope:Destroy()
 
 ## Creating a Scope
 
-`Flux.scope(fn)` runs `fn(scope)` inside a new owner scope and returns `(scope, result)`. You use the exact same `Flux.signal`, `Flux.computed`, `Flux.effect`, and `Flux.new` calls inside a scope as outside—ownership is tracked automatically.
+`Flux.scope(fn)` runs `fn(scope)` inside a new owner scope and returns `(scope, result)`. You use the exact same `Flux.signal`, `Flux.computed`, `Flux.effect`, and `Flux.new` calls inside a scope as outside; ownership is tracked automatically.
 
 > [!TIP] Coming from SolidJS or Maid/Trove?
 > `Flux.scope` combines a reactive root (like SolidJS's `createRoot`) with a resource cleanup container (like Roblox's Maid or Trove patterns).
