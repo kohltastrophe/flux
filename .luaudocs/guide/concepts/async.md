@@ -7,7 +7,7 @@ sidebar_position: 10
 
 # Async
 
-`Flux.async` runs yielding work (`DataStore` requests, HTTP fetches, `Players:GetNameFromUserIdAsync`) off the reactive graph and exposes its progress as four reactive nodes—discarding stale responses automatically when inputs change rapidly.
+`Flux.async` runs yielding work (`DataStore` requests, HTTP fetches, `Players:GetNameFromUserIdAsync`) off the reactive graph and exposes its progress as four reactive nodes, discarding stale responses automatically when inputs change rapidly.
 
 ```luau
 local currentUserId = Flux.signal(1)
@@ -32,9 +32,9 @@ local label = Flux.new "TextLabel" {
 
 Call `Flux.async(source, fetcher, initialValue?)` (or `Flux.async(fetcher, initialValue?)` for a one-shot fetch with no reactive source):
 
-1. **`source`** *(optional)* — A reactive Node or `() -> S` getter. Whenever `source` changes to a truthy value, `fetcher` runs on a spawned thread. When `source` is `nil` or `false`, the fetch is gated off until `source` becomes truthy.
-2. **`fetcher(value, previous, refetching)`** — The yielding callback. It receives `source`'s current `value`, the `previous` resolved `.data`, and `refetching` (`false` on automatic runs, or the argument passed to `:refetch(info)`). The fetcher runs [untracked](/guide/concepts/tracking); declare all reactive inputs via `source`.
-3. **`initialValue`** *(optional)* — Starting value for `.data` before the first fetch resolves.
+1. **`source`** *(optional)*: A reactive Node or `() -> S` getter. Whenever `source` changes to a truthy value, `fetcher` runs on a spawned thread. When `source` is `nil` or `false`, the fetch is gated off until `source` becomes truthy.
+2. **`fetcher(value, previous, refetching)`**: The yielding callback. It receives `source`'s current `value`, the `previous` resolved `.data`, and `refetching` (`false` on automatic runs, or the argument passed to `:refetch(info)`). The fetcher runs [untracked](/guide/concepts/tracking); declare all reactive inputs via `source`.
+3. **`initialValue`** *(optional)*: Starting value for `.data` before the first fetch resolves.
 
 ```luau
 -- Multiple inputs: combine them in a getter source
@@ -64,7 +64,7 @@ An `Async<T>` resource exposes four reactive [Nodes](/guide/concepts/signals):
 
 ## Automatic Race Condition Handling
 
-Each fetch increments an internal request ID. If `source` changes while an older request is still yielding, only the most recent request's result is written to `.data` or `.error` when it finishes—outdated responses are silently ignored.
+Each fetch increments an internal request ID. If `source` changes while an older request is still yielding, only the most recent request's result is written to `.data` or `.error` when it finishes; outdated responses are silently ignored.
 
 ## Refetching and Mutating
 

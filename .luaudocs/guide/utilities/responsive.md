@@ -7,7 +7,7 @@ sidebar_position: 1
 
 # Responsive
 
-`Flux.Responsive`{luau} exposes the screen, input device, and player accessibility settings as shared reactive [nodes](/guide/concepts/signals)—ready to read or bind directly with zero setup:
+`Flux.Responsive`{luau} exposes the screen, input device, and player accessibility settings as shared reactive [nodes](/guide/concepts/signals), ready to read or bind directly with zero setup:
 
 ```luau
 Flux.new "ScreenGui" {
@@ -90,7 +90,7 @@ end)
 
 ### Text Size {#text-size}
 
-`Flux.Responsive.textSize`{luau} (`Node<"Medium" | "Large" | "Larger" | "Largest">`{luau}) tracks [`GuiService.PreferredTextSize`](https://create.roblox.com/docs/en-us/reference/engine/classes/GuiService#PreferredTextSize). Roblox automatically scales text rendering for this setting—use `textSize`{luau} to give surrounding containers extra breathing room, not to multiply `TextSize`{luau} a second time.
+`Flux.Responsive.textSize`{luau} (`Node<"Medium" | "Large" | "Larger" | "Largest">`{luau}) tracks [`GuiService.PreferredTextSize`](https://create.roblox.com/docs/en-us/reference/engine/classes/GuiService#PreferredTextSize). Roblox automatically scales text rendering for this setting; use `textSize`{luau} to give surrounding containers extra breathing room, not to multiply `TextSize`{luau} a second time.
 
 ### Reduced Motion {#reduced-motion}
 

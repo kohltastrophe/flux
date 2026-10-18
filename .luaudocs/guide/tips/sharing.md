@@ -7,7 +7,7 @@ sidebar_position: 3
 
 # Sharing State
 
-In Flux, **reactivity is independent of the UI tree**. A [Signal](/guide/concepts/signals) or [Store](/guide/concepts/stores) is a standalone value—it does not care where it was created or which component reads it.
+In Flux, **reactivity is independent of the UI tree**. A [Signal](/guide/concepts/signals) or [Store](/guide/concepts/stores) is a standalone value; it does not care where it was created or which component reads it.
 
 ## 1. Lifting State Up (Props)
 

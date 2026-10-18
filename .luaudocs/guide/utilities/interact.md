@@ -54,7 +54,7 @@ Pass `{ within = true }`{luau} when tracking a container (such as a card, list r
 
 `Flux.Interact.press(object)`{luau} returns a `Node<boolean>`{luau} that is `true`{luau} while `object`{luau} is actively held down:
 
-- **Pointer / Touch:** Starts on `MouseButton1`{luau} or `Touch`{luau} inside `object`{luau} (unless covered by an input-sinking GUI above it) and remains `true`{luau} until that specific input ends *anywhere* on screen—so dragging slightly off a button never leaves it stuck.
+- **Pointer / Touch:** Starts on `MouseButton1`{luau} or `Touch`{luau} inside `object`{luau} (unless covered by an input-sinking GUI above it) and remains `true`{luau} until that specific input ends *anywhere* on screen, so dragging slightly off a button never leaves it stuck.
 - **Gamepad / Keyboard:** Starts when `ButtonA`{luau}, `Return`{luau}, or `KeypadEnter`{luau} is pressed while `object`{luau} is [`GuiService.SelectedObject`](https://create.roblox.com/docs/en-us/reference/engine/classes/GuiService#SelectedObject) (and no `TextBox`{luau} has focus).
 - Opening the Roblox escape menu (`GuiService.MenuIsOpen`{luau}) releases any active press immediately.
 

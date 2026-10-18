@@ -65,7 +65,7 @@ count(count + 1) -- read via operator overloading, then write 6
 | **Write value** | `node(value)` | `node:set(value)` | Notifies if `value ~= old` |
 | **Write `nil`** | `node(nil, true)` | `node:set(nil)` | Notifies if old value was non-`nil` |
 | **Force write** | `node(value, true)` | `node:set(value, true)` | Always notifies dependents |
-| **In-place update** | — | `node:update()` | Re-fires dependents without writing |
+| **In-place update** | - | `node:update()` | Re-fires dependents without writing |
 
 > [!NOTE] Writing `nil`
 > Calling `node(nil)` is indistinguishable from `node()` and performs a **read**. To clear a signal to `nil`, call `node:set(nil)` or pass the `force` flag: `node(nil, true)`.
@@ -190,4 +190,4 @@ end)
 count:Destroy()
 ```
 
-A plain signal is **not** owned by an enclosing [Scope](/guide/concepts/scopes)—once nothing references it, Luau's garbage collector reclaims it automatically. `onDestroy` on a signal fires only when you call `:Destroy()` explicitly (whereas Computeds and Effects also fire `onDestroy` when their owning Scope is destroyed).
+A plain signal is **not** owned by an enclosing [Scope](/guide/concepts/scopes); once nothing references it, Luau's garbage collector reclaims it automatically. `onDestroy` on a signal fires only when you call `:Destroy()` explicitly (whereas Computeds and Effects also fire `onDestroy` when their owning Scope is destroyed).

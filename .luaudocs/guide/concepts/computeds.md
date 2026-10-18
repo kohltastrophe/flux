@@ -48,7 +48,7 @@ Pass an optional `equals(old, new)` comparator as the second argument to stop do
 A Computed adapts its evaluation strategy depending on whether an [Effect](/guide/concepts/effects) or UI binding is actively watching it:
 
 1. **Dormant when unobserved:** While no Effect or UI binding depends on a Computed, it holds zero upstream subscriptions and does not run until you read `computed()`. Once read, it caches the result and only recalculates on a future read if an upstream source changed.
-2. **Stabilized in order when observed:** While watched by an Effect or UI property, the Computed subscribes to its sources. When a signal changes, Flux stabilizes dirty observed Computeds in **dependency height order** (shallowest to deepest) during the frame flush—before any Effect runs—so no node ever evaluates twice or sees a half-updated "diamond" state.
+2. **Stabilized in order when observed:** While watched by an Effect or UI property, the Computed subscribes to its sources. When a signal changes, Flux stabilizes dirty observed Computeds in **dependency height order** (shallowest to deepest) during the frame flush (before any Effect runs), so no node ever evaluates twice or sees a half-updated "diamond" state.
 3. **Early cutoff:** If a Computed re-evaluates to the same value (`==` or `equals`), propagation stops immediately and downstream Computeds and UI bindings do not wake up.
 
 ```luau

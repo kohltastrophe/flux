@@ -36,7 +36,7 @@ end)
 
 ## Creating a Context
 
-Call `Flux.context(default)` with a fallback value returned whenever no `provide` is active. The context value is opaque—it can be a plain table, a primitive, a [Signal](/guide/concepts/signals), or a [Store](/guide/concepts/stores).
+Call `Flux.context(default)` with a fallback value returned whenever no `provide` is active. The context value is opaque; it can be a plain table, a primitive, a [Signal](/guide/concepts/signals), or a [Store](/guide/concepts/stores).
 
 ## Providing and Reading
 
@@ -61,7 +61,7 @@ end)
 
 ## Reactive State in Context
 
-A context slot itself is not a reactive node—`provide` sets which value a subtree receives at construction time. When the provided value needs to change dynamically over time, provide a [Signal](/guide/concepts/signals) or [Store](/guide/concepts/stores) as the context value:
+A context slot itself is not a reactive node; `provide` sets which value a subtree receives at construction time. When the provided value needs to change dynamically over time, provide a [Signal](/guide/concepts/signals) or [Store](/guide/concepts/stores) as the context value:
 
 ```luau
 local AccentContext = Flux.context(Flux.signal(Color3.fromRGB(120, 170, 255)))
@@ -79,7 +79,7 @@ end
 
 Computeds, Effects, Scopes, and event handlers declared inside `Flux.new` / `Flux.edit` capture the active context automatically.
 
-When you register a callback **outside** Flux—such as a manual `RBXScriptSignal:Connect`, a `task.delay` timer, or a callback handed to a third-party module—wrap it with `Flux.bindContext(fn)` (or [`Flux.withOwner`](/guide/concepts/scopes#capturing-the-active-scope)) so it runs with the context active where it was wrapped:
+When you register a callback **outside** Flux (such as a manual `RBXScriptSignal:Connect`, a `task.delay` timer, or a callback handed to a third-party module), wrap it with `Flux.bindContext(fn)` (or [`Flux.withOwner`](/guide/concepts/scopes#capturing-the-active-scope)) so it runs with the context active where it was wrapped:
 
 ```luau
 local onDelayedOpen = Flux.bindContext(function()
