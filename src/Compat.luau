@@ -40,14 +40,14 @@ local builtinTypeof = typeof
 local rawWarn: (...any) -> () = if IS_ROBLOX then warn else print
 local warnHook: ((message: string) -> ())? = nil
 
-local function compatWarn(...: any)
+local function warn(...: any)
 	local hook = warnHook
 	if hook then
-		local parts = table.pack(...)
+		local parts: any = table.pack(...)
 		for i = 1, parts.n do
 			parts[i] = tostring(parts[i])
 		end
-		hook(table.concat(parts :: any, " ", 1, parts.n))
+		hook(table.concat(parts, " ", 1, parts.n))
 		return
 	end
 	rawWarn(...)
@@ -61,29 +61,36 @@ local function traceback(err: any, level: number?): any
 	return if type(err) == "string" then debug.traceback(err, level) else err
 end
 
-Clock._internal.setReport(compatWarn)
+Clock._internal.setReport(warn)
 
-local compatTask: Task = table.freeze({
+local compatTask: any = table.freeze({
 	spawn = if IS_ROBLOX then task.spawn else Clock._internal.spawn,
 	defer = Clock.defer,
 	delay = Clock.delay,
 	wait = Clock.wait,
 	cancel = Clock.cancel,
-}) :: any
+})
 
 if IS_ROBLOX then
-	return table.freeze({
+	local gameGetService: any = game.GetService
+	local robloxServices: { [string]: any } = {}
+	local robloxCompat: any = table.freeze({
 		isRoblox = true,
 		traceback = traceback,
-		warn = compatWarn,
+		warn = warn,
 		setWarnHook = setWarnHook,
 		task = compatTask,
 		clock = Clock.now,
 		typeof = typeof,
 		getService = function(name: string): any
-			return game:GetService(name :: any)
+			local service = robloxServices[name]
+			if service == nil then
+				service = gameGetService(game, name)
+				robloxServices[name] = service
+			end
+			return service
 		end,
-		services = {},
+		services = robloxServices,
 		Instance = Instance,
 		Color3 = Color3,
 		UDim = UDim,
@@ -97,7 +104,8 @@ if IS_ROBLOX then
 		ColorSequenceKeypoint = ColorSequenceKeypoint,
 		NumberSequence = NumberSequence,
 		NumberSequenceKeypoint = NumberSequenceKeypoint,
-	}) :: Compat
+	})
+	return robloxCompat :: Compat
 end
 
 local function compatTypeof(value: any): string
@@ -120,7 +128,8 @@ end
 local function datatype(
 	name: string,
 	repr: (self: any) -> string,
-	methods: { [string]: any }?
+	methods: { [string]: any }?,
+	metamethods: { [string]: any }?
 ): (any, (fields: { [string]: any }) -> any)
 	local mt: { [string]: any } = {
 		__type = name,
@@ -130,12 +139,16 @@ local function datatype(
 			return `{name}({repr(self)})`
 		end,
 	}
+	if metamethods ~= nil then
+		for key, fn in metamethods do
+			mt[key] = fn
+		end
+	end
 	return mt, function(fields: { [string]: any }): any
 		return table.freeze(setmetatable(fields, mt))
 	end
 end
 
--- Color3
 local newColor3: (fields: { [string]: any }) -> any
 local _, buildColor3 = datatype("Color3", function(s: any)
 	return `{s.R}, {s.G}, {s.B}`
@@ -182,27 +195,34 @@ local Color3Stub = {
 	end,
 }
 
--- UDim & UDim2
 local function int32(v: number): number
 	return if v >= 0 then math.floor(v) else math.ceil(v)
 end
 
-local UDimMt, newUDim = datatype("UDim", function(s: any)
-	return `{s.Scale}, {s.Offset}`
-end)
+local udim: (scale: number?, offset: number?) -> any
+local _, newUDim = datatype(
+	"UDim",
+	function(s: any)
+		return `{s.Scale}, {s.Offset}`
+	end,
+	nil,
+	{
+		__add = function(a: any, b: any): any
+			return udim(a.Scale + b.Scale, a.Offset + b.Offset)
+		end,
+		__sub = function(a: any, b: any): any
+			return udim(a.Scale - b.Scale, a.Offset - b.Offset)
+		end,
+	}
+)
+
+function udim(scale: number?, offset: number?): any
+	return newUDim({ Scale = scale or 0, Offset = int32(offset or 0) })
+end
 
 local UDimStub = {
-	new = function(scale: number?, offset: number?): any
-		return newUDim({ Scale = scale or 0, Offset = int32(offset or 0) })
-	end,
+	new = udim,
 }
-
-UDimMt.__add = function(a: any, b: any): any
-	return UDimStub.new(a.Scale + b.Scale, a.Offset + b.Offset)
-end
-UDimMt.__sub = function(a: any, b: any): any
-	return UDimStub.new(a.Scale - b.Scale, a.Offset - b.Offset)
-end
 
 local _, newUDim2 = datatype("UDim2", function(s: any)
 	return `\{{s.X.Scale}, {s.X.Offset}\}, \{{s.Y.Scale}, {s.Y.Offset}\}`
@@ -224,43 +244,43 @@ local UDim2Stub = {
 	end,
 }
 
--- Vector2 & Vector3
 local vector2: (x: number?, y: number?) -> any
-local Vector2Mt, newVector2 = datatype("Vector2", function(s: any)
+local _, newVector2 = datatype("Vector2", function(s: any)
 	return `{s.X}, {s.Y}`
 end, {
 	Lerp = function(self: any, goal: any, alpha: number): any
 		return vector2(self.X + (goal.X - self.X) * alpha, self.Y + (goal.Y - self.Y) * alpha)
 	end,
+}, {
+	__add = function(a: any, b: any): any
+		return vector2(a.X + b.X, a.Y + b.Y)
+	end,
+	__sub = function(a: any, b: any): any
+		return vector2(a.X - b.X, a.Y - b.Y)
+	end,
+	__mul = function(a: any, b: any): any
+		if type(b) == "number" then
+			return vector2(a.X * b, a.Y * b)
+		elseif type(a) == "number" then
+			return vector2(a * b.X, a * b.Y)
+		end
+		return vector2(a.X * b.X, a.Y * b.Y)
+	end,
+	__div = function(a: any, b: any): any
+		return if type(b) == "number" then vector2(a.X / b, a.Y / b) else vector2(a.X / b.X, a.Y / b.Y)
+	end,
+	__unm = function(a: any): any
+		return vector2(-a.X, -a.Y)
+	end,
 })
 function vector2(x: number?, y: number?): any
 	return newVector2({ X = x or 0, Y = y or 0 })
-end
-Vector2Mt.__add = function(a: any, b: any): any
-	return vector2(a.X + b.X, a.Y + b.Y)
-end
-Vector2Mt.__sub = function(a: any, b: any): any
-	return vector2(a.X - b.X, a.Y - b.Y)
-end
-Vector2Mt.__mul = function(a: any, b: any): any
-	if type(b) == "number" then
-		return vector2(a.X * b, a.Y * b)
-	elseif type(a) == "number" then
-		return vector2(a * b.X, a * b.Y)
-	end
-	return vector2(a.X * b.X, a.Y * b.Y)
-end
-Vector2Mt.__div = function(a: any, b: any): any
-	return if type(b) == "number" then vector2(a.X / b, a.Y / b) else vector2(a.X / b.X, a.Y / b.Y)
-end
-Vector2Mt.__unm = function(a: any): any
-	return vector2(-a.X, -a.Y)
 end
 
 local Vector2Stub = { new = vector2, zero = vector2(0, 0) }
 
 local vector3: (x: number?, y: number?, z: number?) -> any
-local Vector3Mt, newVector3 = datatype("Vector3", function(s: any)
+local _, newVector3 = datatype("Vector3", function(s: any)
 	return `{s.X}, {s.Y}, {s.Z}`
 end, {
 	Lerp = function(self: any, goal: any, alpha: number): any
@@ -270,34 +290,36 @@ end, {
 			self.Z + (goal.Z - self.Z) * alpha
 		)
 	end,
+}, {
+	__add = function(a: any, b: any): any
+		return vector3(a.X + b.X, a.Y + b.Y, a.Z + b.Z)
+	end,
+	__sub = function(a: any, b: any): any
+		return vector3(a.X - b.X, a.Y - b.Y, a.Z - b.Z)
+	end,
+	__mul = function(a: any, b: any): any
+		if type(b) == "number" then
+			return vector3(a.X * b, a.Y * b, a.Z * b)
+		elseif type(a) == "number" then
+			return vector3(a * b.X, a * b.Y, a * b.Z)
+		end
+		return vector3(a.X * b.X, a.Y * b.Y, a.Z * b.Z)
+	end,
+	__div = function(a: any, b: any): any
+		return if type(b) == "number"
+			then vector3(a.X / b, a.Y / b, a.Z / b)
+			else vector3(a.X / b.X, a.Y / b.Y, a.Z / b.Z)
+	end,
+	__unm = function(a: any): any
+		return vector3(-a.X, -a.Y, -a.Z)
+	end,
 })
 function vector3(x: number?, y: number?, z: number?): any
 	return newVector3({ X = x or 0, Y = y or 0, Z = z or 0 })
 end
-Vector3Mt.__add = function(a: any, b: any): any
-	return vector3(a.X + b.X, a.Y + b.Y, a.Z + b.Z)
-end
-Vector3Mt.__sub = function(a: any, b: any): any
-	return vector3(a.X - b.X, a.Y - b.Y, a.Z - b.Z)
-end
-Vector3Mt.__mul = function(a: any, b: any): any
-	if type(b) == "number" then
-		return vector3(a.X * b, a.Y * b, a.Z * b)
-	elseif type(a) == "number" then
-		return vector3(a * b.X, a * b.Y, a * b.Z)
-	end
-	return vector3(a.X * b.X, a.Y * b.Y, a.Z * b.Z)
-end
-Vector3Mt.__div = function(a: any, b: any): any
-	return if type(b) == "number" then vector3(a.X / b, a.Y / b, a.Z / b) else vector3(a.X / b.X, a.Y / b.Y, a.Z / b.Z)
-end
-Vector3Mt.__unm = function(a: any): any
-	return vector3(-a.X, -a.Y, -a.Z)
-end
 
 local Vector3Stub = { new = vector3, zero = vector3(0, 0, 0) }
 
--- Enum
 local ENUM_VALUES: { [string]: { [string]: number } } = {
 	FontWeight = {
 		Thin = 100,
@@ -362,7 +384,6 @@ local EnumStub = setmetatable({}, {
 	end,
 })
 
--- Font & TweenInfo
 local _, newFont = datatype("Font", function(s: any)
 	return `{s.Family}, {s.Weight.Name}, {s.Style.Name}`
 end)
@@ -411,7 +432,6 @@ local TweenInfoStub = {
 	end,
 }
 
--- Sequences
 local _, newColorKeypoint = datatype("ColorSequenceKeypoint", function(s: any)
 	return `{s.Time}, {s.Value}`
 end)
@@ -458,10 +478,10 @@ local function sequence(name: string, keypoint: (time: number, value: any) -> an
 	}
 end
 
-local Compat = {} :: any
+local Compat: any = {}
 Compat.isRoblox = false
 Compat.traceback = traceback
-Compat.warn = compatWarn
+Compat.warn = warn
 Compat.setWarnHook = setWarnHook
 Compat.task = compatTask
 Compat.clock = Clock.now
@@ -470,18 +490,18 @@ Compat.services = {} :: { [string]: any }
 Compat.getService = function(name: string): any
 	return Compat.services[name]
 end
-Compat.Instance = nil :: any
-Compat.Color3 = Color3Stub :: any
-Compat.UDim = UDimStub :: any
-Compat.UDim2 = UDim2Stub :: any
-Compat.Vector2 = Vector2Stub :: any
-Compat.Vector3 = Vector3Stub :: any
-Compat.Font = FontStub :: any
-Compat.TweenInfo = TweenInfoStub :: any
-Compat.Enum = EnumStub :: any
+Compat.Instance = nil
+Compat.Color3 = Color3Stub
+Compat.UDim = UDimStub
+Compat.UDim2 = UDim2Stub
+Compat.Vector2 = Vector2Stub
+Compat.Vector3 = Vector3Stub
+Compat.Font = FontStub
+Compat.TweenInfo = TweenInfoStub
+Compat.Enum = EnumStub
 Compat.ColorSequence = sequence("ColorSequence", colorKeypoint)
-Compat.ColorSequenceKeypoint = { new = colorKeypoint } :: any
+Compat.ColorSequenceKeypoint = { new = colorKeypoint }
 Compat.NumberSequence = sequence("NumberSequence", numberKeypoint)
-Compat.NumberSequenceKeypoint = { new = numberKeypoint } :: any
+Compat.NumberSequenceKeypoint = { new = numberKeypoint }
 
 return Compat :: Compat

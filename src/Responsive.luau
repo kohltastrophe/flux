@@ -47,9 +47,9 @@ export type PartialConfig = {
 local DEFAULT_SIZE = Compat.Vector2.new(1920, 1080)
 
 --[[
-	Live defaults shared by every derived node; mutate once at startup.
+Live defaults shared by every derived node; mutate once at startup.
 
-	[Open Documentation](https://flux.kohl.gg/guide/utilities/responsive#configuration)
+[Open Documentation](https://flux.kohl.gg/guide/utilities/responsive#configuration)
 ]]
 local config: Config = {
 	reference = DEFAULT_SIZE,
@@ -106,16 +106,16 @@ local function breakpointFor(width: number, partial: PartialConfig): Breakpoint
 end
 
 --[[
-	The active camera's `ViewportSize` as a node, live on the client.
+The active camera's `ViewportSize` as a node, live on the client.
 
-	[Open Documentation](https://flux.kohl.gg/guide/utilities/responsive#viewport)
+[Open Documentation](https://flux.kohl.gg/guide/utilities/responsive#viewport)
 ]]
 local viewport: Graph.Node<Vector2> = signal(DEFAULT_SIZE)
 
 --[[
-	Factory escape hatch: a `scale` node with per-surface config (merged over defaults).
+Factory escape hatch: a `scale` node with per-surface config (merged over defaults).
 
-	[Open Documentation](https://flux.kohl.gg/guide/utilities/responsive#per-surface-overrides)
+[Open Documentation](https://flux.kohl.gg/guide/utilities/responsive#per-surface-overrides)
 ]]
 local function scaleOf(partial: PartialConfig?): Graph.Node<number>
 	local cfg = partial or EMPTY
@@ -127,9 +127,9 @@ local function scaleOf(partial: PartialConfig?): Graph.Node<number>
 end
 
 --[[
-	Factory escape hatch: a `breakpoint` node with per-surface thresholds.
+Factory escape hatch: a `breakpoint` node with per-surface thresholds.
 
-	[Open Documentation](https://flux.kohl.gg/guide/utilities/responsive#per-surface-overrides)
+[Open Documentation](https://flux.kohl.gg/guide/utilities/responsive#per-surface-overrides)
 ]]
 local function breakpointOf(partial: PartialConfig?): Graph.Node<Breakpoint>
 	local cfg = partial or EMPTY
@@ -141,25 +141,27 @@ local function breakpointOf(partial: PartialConfig?): Graph.Node<Breakpoint>
 end
 
 --[[
-	UIScale factor derived from `viewport`; `1.0` at `config.reference`.
+UIScale factor derived from `viewport`; `1.0` at `config.reference`.
 
-	[Open Documentation](https://flux.kohl.gg/guide/utilities/responsive#scale)
+[Open Documentation](https://flux.kohl.gg/guide/utilities/responsive#scale)
 ]]
 local scale: Graph.Node<number> = scaleOf()
 --[[
-	Size class derived from `viewport` width.
+Size class derived from `viewport` width.
 
-	[Open Documentation](https://flux.kohl.gg/guide/utilities/responsive#breakpoint)
+[Open Documentation](https://flux.kohl.gg/guide/utilities/responsive#breakpoint)
 ]]
 local breakpoint: Graph.Node<Breakpoint> = breakpointOf()
 
 local RunService = getService("RunService")
 local isClient = RunService ~= nil and RunService:IsClient() and RunService:IsRunning()
-local tenFoot = isClient and getService("GuiService"):IsTenFootInterface()
+local GuiService = isClient and getService("GuiService")
+local UserInputService = isClient and getService("UserInputService")
+local VRService = isClient and getService("VRService")
+local tenFoot = isClient and GuiService:IsTenFootInterface()
 
 local function detectPlatform(): Platform
-	local UserInputService = getService("UserInputService")
-	return if getService("VRService").VREnabled
+	return if VRService.VREnabled
 		then "vr"
 		elseif tenFoot then "console"
 		elseif UserInputService.KeyboardEnabled and UserInputService.MouseEnabled then "pc"
@@ -167,18 +169,18 @@ local function detectPlatform(): Platform
 end
 
 --[[
-	The device class: `"vr"`, `"console"` (ten-foot interface), `"pc"` (keyboard and mouse), or `"mobile"`. Live on
-	the client, so plugging in a keyboard and mouse or putting on a headset changes it; `"pc"` elsewhere.
+The device class: `"vr"`, `"console"` (ten-foot interface), `"pc"` (keyboard and mouse), or `"mobile"`. Live on
+the client, so plugging in a keyboard and mouse or putting on a headset changes it; `"pc"` elsewhere.
 
-	[Open Documentation](https://flux.kohl.gg/guide/utilities/responsive#platform)
+[Open Documentation](https://flux.kohl.gg/guide/utilities/responsive#platform)
 ]]
 local platform: Graph.Node<Platform> = signal((if isClient then detectPlatform() else "pc") :: Platform)
 --[[
-	How large the screen is physically (`GuiService.ViewportDisplaySize`): `"Small"` (phones, tablets, handhelds),
-	`"Medium"` (laptops and monitors, the default) or `"Large"` (TVs). Live on the client; where the engine lacks the
-	property a ten-foot interface counts as `"Large"`.
+How large the screen is physically (`GuiService.ViewportDisplaySize`): `"Small"` (phones, tablets, handhelds),
+`"Medium"` (laptops and monitors, the default) or `"Large"` (TVs). Live on the client; where the engine lacks the
+property, a ten-foot interface counts as `"Large"`.
 
-	[Open Documentation](https://flux.kohl.gg/guide/utilities/responsive#display-size)
+[Open Documentation](https://flux.kohl.gg/guide/utilities/responsive#display-size)
 ]]
 local displaySize: Graph.Node<DisplaySize> = signal((if tenFoot then "Large" else "Medium") :: DisplaySize)
 
@@ -209,40 +211,38 @@ local INPUT_BY_PLATFORM: { [Platform]: Input } = {
 }
 
 --[[
-	The input the player is using right now: `"keyboard"` (keyboard and mouse), `"touch"`, or `"gamepad"`. Follows
-	`UserInputService.PreferredInput` live on the client, so picking up a controller switches it; elsewhere it holds
-	the mode matching `platform`.
+The input the player is using right now: `"keyboard"` (keyboard and mouse), `"touch"`, or `"gamepad"`. Follows
+`UserInputService.PreferredInput` live on the client, so picking up a controller switches it; elsewhere it holds
+the mode matching `platform`.
 
-	[Open Documentation](https://flux.kohl.gg/guide/utilities/responsive#input)
+[Open Documentation](https://flux.kohl.gg/guide/utilities/responsive#input)
 ]]
 local input: Graph.Node<Input> = signal(INPUT_BY_PLATFORM[platform:peek()] :: Input)
 --[[
-	The player's preferred text size (`GuiService.PreferredTextSize`): `"Medium"` (default), `"Large"`, `"Larger"`, or
-	`"Largest"`. The engine already draws text larger to match, so use it to make room around text, never to
-	multiply `TextSize` again.
+The player's preferred text size (`GuiService.PreferredTextSize`): `"Medium"` (default), `"Large"`, `"Larger"`, or
+`"Largest"`. The engine already draws text larger to match, so use it to make room around text, never to
+multiply `TextSize` again.
 
-	[Open Documentation](https://flux.kohl.gg/guide/utilities/responsive#text-size)
+[Open Documentation](https://flux.kohl.gg/guide/utilities/responsive#text-size)
 ]]
 local textSize: Graph.Node<TextSize> = signal("Medium" :: TextSize)
 --[[
-	Whether the player asked for reduced motion (`GuiService.ReducedMotionEnabled`). When `true`, swap movement and
-	scaling animations for instant changes or simple fades.
+Whether the player asked for reduced motion (`GuiService.ReducedMotionEnabled`). When `true`, swap movement and
+scaling animations for instant changes or simple fades.
 
-	[Open Documentation](https://flux.kohl.gg/guide/utilities/responsive#reduced-motion)
+[Open Documentation](https://flux.kohl.gg/guide/utilities/responsive#reduced-motion)
 ]]
 local reducedMotion: Graph.Node<boolean> = signal(false)
 --[[
-	The player's background transparency preference (`GuiService.PreferredTransparency`), from `0` (opaque
-	backgrounds) to `1` (the default). Multiply translucent `BackgroundTransparency` values by it.
+The player's background transparency preference (`GuiService.PreferredTransparency`), from `0` (opaque
+backgrounds) to `1` (the default). Multiply translucent `BackgroundTransparency` values by it.
 
-	[Open Documentation](https://flux.kohl.gg/guide/utilities/responsive#preferred-transparency)
+[Open Documentation](https://flux.kohl.gg/guide/utilities/responsive#preferred-transparency)
 ]]
 local preferredTransparency: Graph.Node<number> = signal(1)
 
 if isClient then
-	local GuiService = getService("GuiService")
 	local Workspace = getService("Workspace")
-	local UserInputService = getService("UserInputService")
 
 	local viewportConnection: RBXScriptConnection?
 	local function bindCamera(camera: Camera?)
@@ -258,11 +258,12 @@ if isClient then
 		end
 	end
 
+	local serviceConnections: { RBXScriptConnection } = {}
 	bindCamera(Workspace.CurrentCamera)
-	Workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
+	local cameraConn: RBXScriptConnection = Workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
 		bindCamera(Workspace.CurrentCamera)
 	end)
-
+	table.insert(serviceConnections, cameraConn)
 	local function mirror(
 		object: Instance,
 		property: string,
@@ -273,15 +274,17 @@ if isClient then
 		if not ok then
 			return false
 		end
+		local rawObject: any = object
 		local function sync()
-			local rawValue = (object :: any)[property]
+			local rawValue = rawObject[property]
 			local value = if map then map(rawValue) else rawValue
 			if value ~= nil then
 				node:set(value)
 			end
 		end
 		sync()
-		changed:Connect(sync)
+		local conn: RBXScriptConnection = changed:Connect(sync)
+		table.insert(serviceConnections, conn)
 		return true
 	end
 
@@ -289,7 +292,8 @@ if isClient then
 		return item.Name
 	end
 	local function inputOf(item: EnumItem): Input?
-		return inputFor(item.Name)
+		local name = item.Name
+		return inputFor(name)
 	end
 	local function syncPlatform()
 		platform:set(detectPlatform())
@@ -297,23 +301,27 @@ if isClient then
 	local function bindPlatform(object: Instance, property: string)
 		local ok, changed = pcall(object.GetPropertyChangedSignal, object, property)
 		if ok then
-			changed:Connect(syncPlatform)
+			local conn: RBXScriptConnection = changed:Connect(syncPlatform)
+			table.insert(serviceConnections, conn)
 		end
 	end
 
 	if not mirror(UserInputService, "PreferredInput", input, inputOf) then
-		UserInputService.LastInputTypeChanged:Connect(function(lastInputType: Enum.UserInputType)
-			local mode = inputFor(lastInputType.Name)
-			if mode ~= nil then
-				input:set(mode)
+		local conn: RBXScriptConnection = UserInputService.LastInputTypeChanged:Connect(
+			function(lastInputType: Enum.UserInputType)
+				local mode = inputFor(lastInputType.Name)
+				if mode ~= nil then
+					input:set(mode)
+				end
 			end
-		end)
+		)
+		table.insert(serviceConnections, conn)
 	end
 	mirror(GuiService, "PreferredTextSize", textSize, nameOf)
 	mirror(GuiService, "ViewportDisplaySize", displaySize, nameOf)
 	bindPlatform(UserInputService, "KeyboardEnabled")
 	bindPlatform(UserInputService, "MouseEnabled")
-	bindPlatform(getService("VRService"), "VREnabled")
+	bindPlatform(VRService, "VREnabled")
 	mirror(GuiService, "ReducedMotionEnabled", reducedMotion)
 	mirror(GuiService, "PreferredTransparency", preferredTransparency)
 end

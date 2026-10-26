@@ -14,7 +14,7 @@ local warn = Compat.warn
 local dispose = Graph.dispose
 local get = Graph.Node.get
 local isNode = Graph.isNode
-local newNode = Graph.new
+local newNode: (init: any, equals: any?) -> Graph.Node<any> = Graph.new
 local effect = Graph.effect
 local getOwner = Graph.getOwner
 local cleanup = Graph.cleanup
@@ -22,13 +22,15 @@ local bindContext = Graph.bindContext
 
 local bindFrom = Bind.from
 local bindTo = Bind.to
+local releaseBinding = Bind.release
+local attachToBinding = Bind.attach
 local isModel = Bind.isModel
 local onChanged = Bind.onChanged
 local onTagChanged = Bind.onTagChanged
 local setAttribute = Bind.setAttribute
 local setProperty = Bind.setProperty
 
-local kindOf = Bind.kindOf
+local kindOf = Graph.kindOf
 
 -- Flags & Defaults ----------------------------------------------------------------------------------------------------
 
@@ -65,16 +67,10 @@ local function guiBase(extra: { [string]: unknown }?): { [string]: unknown }
 end
 
 local function textBase(extra: { [string]: unknown }?): { [string]: unknown }
-	local t = guiBase({
-		Font = Enum.Font.SourceSans,
-		Text = "",
-		TextColor3 = BLACK,
-	})
-	if extra then
-		for k, v in extra do
-			t[k] = v
-		end
-	end
+	local t = guiBase(extra)
+	t.Font = Enum.Font.SourceSans
+	t.Text = ""
+	t.TextColor3 = BLACK
 	return t
 end
 
@@ -115,14 +111,11 @@ local Defaults: { [string]: { [string]: unknown } } = {
 
 -- Find ----------------------------------------------------------------------------------------------------------------
 
-local FIND_SYMBOL = table.freeze({ type = "Symbol" }) :: Type.Symbol
+local FIND_SYMBOL: any = table.freeze({ type = "Symbol" })
+local rawGame: any = game
 
 local function indexParent(instance: Instance): Instance?
 	return instance.Parent
-end
-
-local function firstDescendant(instance: Instance, name: string): Instance?
-	return instance:FindFirstChild(name, true)
 end
 
 local function queryFirst(instance: Instance, query: string): Instance?
@@ -147,7 +140,7 @@ end
 local function makeSelector(find: any): any
 	local fn = if type(find) ~= "string"
 		then find
-		elseif IS_ROBLOX then (game :: any)[find]
+		elseif IS_ROBLOX then rawGame[find]
 		else function(instance: any, query: string): any
 			return instance[find](instance, query)
 		end
@@ -172,7 +165,7 @@ local function warnFind(query: string?, value: any)
 	warn(`[Flux] Instance expected for {desc}, got {compatTypeof(value)}`)
 end
 
-local function resolveFind(applied: { any }, instance: Instance, apply: (Instance, Type.Map<any>) -> ())
+local function resolveFind(applied: { any }, instance: Instance, apply: (Instance, Type.Map<any>, ...any) -> ...any)
 	local query = applied[4]
 	local result = applied[2](instance, query)
 	local properties = applied[3]
@@ -194,8 +187,6 @@ local function resolveFind(applied: { any }, instance: Instance, apply: (Instanc
 end
 
 local Find = table.freeze({
-	--- @ignore
-	Symbol = FIND_SYMBOL,
 	--[[
 	Selects the first ancestor named `name` via
 	[`Instance:FindFirstAncestor`](https://create.roblox.com/docs/reference/engine/classes/Instance#FindFirstAncestor),
@@ -261,7 +252,9 @@ local Find = table.freeze({
 
 	[Open Documentation](https://flux.kohl.gg/guide/roblox/hydration#instance-selectors-flux-find)
 	]]
-	Descendant = makeSelector(firstDescendant) :: QuerySelector,
+	Descendant = makeSelector(function(instance: Instance, name: string): Instance?
+		return instance:FindFirstChild(name, true)
+	end) :: QuerySelector,
 	--[[
 	Selects the hydrated element's [`Instance.Parent`](https://create.roblox.com/docs/reference/engine/classes/Instance#Parent),
 	then applies the property table to it. Use to reach one level up the tree without naming the parent. Takes no
@@ -298,8 +291,6 @@ local Find = table.freeze({
 	[Open Documentation](https://flux.kohl.gg/guide/roblox/hydration#instance-selectors-flux-find)
 	]]
 	QueryFirst = makeSelector(queryFirst) :: QuerySelector,
-	--- @ignore
-	resolve = resolveFind,
 })
 
 -- Split ---------------------------------------------------------------------------------------------------------------
@@ -392,30 +383,14 @@ end
 -- The members of `T` a `split` group named by `G` receives. Required members stay required. When the names are only known as `string` (an unannotated array), every member is optional.
 --- @ignore
 export type Pick<T, G> = pickWhere<T, G, nil, true>
--- The members of `T` that no `split` group took: what goes on to the root instance.
+-- The members of `T` that no `split` group took: properties forwarded to the root instance.
 --- @ignore
 export type Omit<T, G> = pickWhere<T, nil, G, false>
 
---[[
-Splits a props table by key into fresh tables: one per `keys` group holding just the keys that group names, then a
-final table with everything else (instance properties, numeric children, `__EVENT`-style directives), ready to forward
-to a root instance. A group is an array of key names or a table whose keys are used; a key named by several groups
-goes to the first. Values move by reference and `props` itself is left untouched.
-
-With one group, it is typed as a `Pick` of the props type and the rest as its `Omit`, keeping required members
-required. That needs the names as types: pass a schema table, or annotate a name array
-(`local OWN: { "label" | "onClick" } = ...`). An unannotated array only says `{ string }`, and several groups are more
-than the solver can pick through, so those tables are `Partial` (every member optional).
-
-```luau
-local OWN: { "label" | "onClick" } = { "label", "onClick" }
-local own, rest = Flux.split(props, OWN) -- own.label: string, own.onClick: (() -> ())?
-```
-
-[Open Documentation](https://flux.kohl.gg/guide/concepts/components#splitting-props-with-flux-split)
-]]
 local function split(props: any, keys: any, ...: any): ...any
-	if select("#", ...) == 0 then
+	if keys == nil and select("#", ...) == 0 then
+		return if type(props) == "table" then table.clone(props) else {}
+	elseif select("#", ...) == 0 then
 		local own = {}
 		local rest = {}
 		if type(props) == "table" then
@@ -426,13 +401,13 @@ local function split(props: any, keys: any, ...: any): ...any
 						own[key] = val
 					end
 				end
-				for key, value in props :: any do
+				for key, value in props do
 					if own[key] == nil then
 						rest[key] = value
 					end
 				end
 			else
-				for key, value in props :: any do
+				for key, value in props do
 					local target = if keys[key] ~= nil then own else rest
 					target[key] = value
 				end
@@ -444,7 +419,7 @@ local function split(props: any, keys: any, ...: any): ...any
 	local groups = table.pack(keys, ...)
 	local count = groups.n
 	local owners: { [any]: number } = {}
-	local results: { { [any]: any } } = {}
+	local results: any = {}
 
 	for index = 1, count do
 		results[index] = {}
@@ -467,18 +442,19 @@ local function split(props: any, keys: any, ...: any): ...any
 	local rest = {}
 	results[count + 1] = rest
 	if type(props) == "table" then
-		for key, value in props :: any do
+		for key, value in props do
 			local owner = owners[key]
 			local target = if owner ~= nil then results[owner] else rest
 			target[key] = value
 		end
 	end
 
-	return table.unpack(results :: any, 1, count + 1)
+	return table.unpack(results, 1, count + 1)
 end
 
 type Split =
-	(<T, G>(props: T?, keys: G) -> (Pick<T, G>, Omit<T, G>))
+	(<T>(props: T?) -> T)
+	& (<T, G>(props: T?, keys: G) -> (Pick<T, G>, Omit<T, G>))
 	& (<T>(props: T?, first: { [any]: any }, second: { [any]: any }, ...{ [any]: any }) -> ...Partial<T>)
 
 -- Edit & Construct ----------------------------------------------------------------------------------------------------
@@ -487,9 +463,10 @@ local function bindModel(node: any, instance: Instance, property: string, _CLEAN
 	table.insert(_CLEAN, bindTo(node, instance, property, isAttribute))
 	local _, disconnect = bindFrom(node, instance, property, isAttribute)
 	table.insert(_CLEAN, disconnect)
+	attachToBinding(instance, property, isAttribute, disconnect)
 end
 
-local tagCounts: { [Instance]: { [string]: number } } = setmetatable({}, { __mode = "k" }) :: any
+local tagCounts: { [Instance]: { [string]: number } } = setmetatable({}, { __mode = "k" })
 
 local function addTagRef(instance: Instance, tag: string)
 	local counts = tagCounts[instance]
@@ -522,7 +499,7 @@ local function bindTag(instance: Instance, tagValue: any, _CLEAN: { any })
 		addTagRef(instance, tagValue)
 		return
 	elseif type(tagValue) == "function" then
-		tagValue = newNode(tagValue :: any)
+		tagValue = newNode(tagValue)
 		table.insert(_CLEAN, tagValue)
 	end
 
@@ -573,20 +550,63 @@ local function stripUnmanagedTag(instance: Instance, tag: string)
 	end
 end
 
+local namedTagClaims: { [Instance]: { [string]: () -> () } } = setmetatable({}, { __mode = "k" })
+
+local function releaseNamedTag(instance: Instance, tag: string)
+	local claims = namedTagClaims[instance]
+	if not claims then
+		return
+	end
+	local release = claims[tag]
+	if not release then
+		return
+	end
+	claims[tag] = nil
+	if next(claims) == nil then
+		namedTagClaims[instance] = nil
+	end
+	release()
+end
+
+local function claimNamedTag(instance: Instance, tag: string, release: () -> ())
+	local claims = namedTagClaims[instance]
+	if not claims then
+		claims = {}
+		namedTagClaims[instance] = claims
+	end
+	claims[tag] = release
+end
+
 local function bindNamedTag(instance: Instance, tag: string, tagValue: any, _CLEAN: { any })
 	if isModel(tagValue) then
 		local modelNode = tagValue[2]
 		bindNamedTag(instance, tag, modelNode, _CLEAN)
 		modelNode:set(instance:HasTag(tag))
-		local disconnect = onTagChanged(instance, tag, function(hasTag)
-			modelNode:set(hasTag)
-		end)
-		modelNode:onDestroy(disconnect)
+		local disconnect = Bind.bindDestroy(
+			modelNode,
+			onTagChanged(instance, tag, function(hasTag)
+				modelNode:set(hasTag)
+			end)
+		)
 		table.insert(_CLEAN, disconnect)
+		local claims = namedTagClaims[instance]
+		local prevRelease = claims and claims[tag]
+		if prevRelease then
+			claims[tag] = function()
+				disconnect()
+				prevRelease()
+			end
+		end
 		return
-	elseif type(tagValue) == "function" then
-		tagValue = newNode(tagValue :: any)
-		table.insert(_CLEAN, tagValue)
+	end
+
+	releaseNamedTag(instance, tag)
+
+	local made: Graph.Node<any>? = nil
+	if type(tagValue) == "function" then
+		made = newNode(tagValue)
+		tagValue = made
+		table.insert(_CLEAN, made)
 	end
 
 	if isNode(tagValue) then
@@ -597,51 +617,87 @@ local function bindNamedTag(instance: Instance, tag: string, tagValue: any, _CLE
 		else
 			stripUnmanagedTag(instance, tag)
 		end
-		table.insert(
-			_CLEAN,
-			effect(function()
-				local shouldHave = not not get(node)
-				if shouldHave ~= active then
-					active = shouldHave
-					if shouldHave then
-						addTagRef(instance, tag)
-					else
-						removeTagRef(instance, tag)
-					end
+		local eff = effect(function()
+			local shouldHave = not not get(node)
+			if shouldHave ~= active then
+				active = shouldHave
+				if shouldHave then
+					addTagRef(instance, tag)
+				else
+					removeTagRef(instance, tag)
 				end
-			end)
-		)
+			elseif not shouldHave then
+				stripUnmanagedTag(instance, tag)
+			end
+		end)
+		table.insert(_CLEAN, eff)
+		claimNamedTag(instance, tag, function()
+			eff:Destroy()
+			if made then
+				made:Destroy()
+			end
+			if active then
+				active = false
+				removeTagRef(instance, tag)
+			end
+		end)
 	elseif tagValue then
 		addTagRef(instance, tag)
+		local released = false
+		claimNamedTag(instance, tag, function()
+			if not released then
+				released = true
+				removeTagRef(instance, tag)
+			end
+		end)
 	else
 		stripUnmanagedTag(instance, tag)
 	end
 end
 
-local function applyAttribute(
+local function applyBindingOrValue(
 	instance: Instance,
-	attrName: string,
-	attrVal: any,
-	seenAttrs: { [any]: boolean }?,
+	name: any,
+	value: any,
+	isAttribute: boolean,
+	seen: { [any]: boolean }?,
 	_CLEAN: { any }
 )
-	if seenAttrs then
-		if seenAttrs[attrName] then
+	if seen then
+		if seen[name] then
 			return
 		end
-		seenAttrs[attrName] = true
+		seen[name] = true
 	end
-	if isModel(attrVal) then
-		bindModel(attrVal[2], instance, attrName, _CLEAN, true)
-	else
-		if type(attrVal) == "function" then
-			attrVal = newNode(attrVal)
-			table.insert(_CLEAN, attrVal)
+
+	local made = nil
+	if type(value) == "function" then
+		value = newNode(value)
+		made = value
+		table.insert(_CLEAN, value)
+	end
+
+	if isModel(value) then
+		if not isAttribute and name == "LayoutOrder" then
+			Bind.pinOrder(instance)
 		end
-		if isNode(attrVal) then
-			table.insert(_CLEAN, bindTo(attrVal, instance, attrName, true))
-		else
-			setAttribute(instance, attrName, attrVal)
+		bindModel(value[2], instance, name, _CLEAN, isAttribute)
+	elseif isNode(value) then
+		if not isAttribute and name == "LayoutOrder" then
+			Bind.pinOrder(instance)
+		end
+		table.insert(_CLEAN, bindTo(value, instance, name, isAttribute))
+		if made then
+			attachToBinding(instance, name, isAttribute, made)
+		end
+	elseif isAttribute then
+		releaseBinding(instance, name, true)
+		setAttribute(instance, name, value)
+	else
+		releaseBinding(instance, name, false)
+		setProperty(instance, name, value)
+		if name == "LayoutOrder" and value == 0 then
+			Bind.pinOrder(instance)
 		end
 	end
 end
@@ -663,7 +719,8 @@ local function connectChanged(
 	elseif type(value) ~= "function" then
 		error(`{label} expects a function called with the new value, got {compatTypeof(value)}`, 0)
 	end
-	if not isAttribute and not isTag and kindOf((instance :: any)[name]) == "RBXScriptSignal" then
+	local rawInstance: any = instance
+	if not isAttribute and not isTag and kindOf(rawInstance[name]) == "RBXScriptSignal" then
 		error(`{label} is an event, not a property: connect \`{name}\` as a top-level key`, 0)
 	end
 	if isTag then
@@ -673,193 +730,86 @@ local function connectChanged(
 	end
 end
 
-local function edit(
+local function applyPrefixKey(
 	instance: Instance,
-	properties: Type.Map<any>,
+	property: string,
+	value: any,
 	seenAttrs: { [any]: boolean }?,
 	seenProps: { [any]: boolean }?,
-	inheritedClean: { any }?,
-	startOrder: number?
-): number
-	local actions: { any }? = nil
-	local signals: { any }? = nil
-	local childKeys: { number }? = nil
-	local hasFlatten = false
-	local order = startOrder or 1
-
-	local _ATTR = properties.__ATTR
-	local _USER_CLEAN = properties.__CLEAN
-	local _CLEAN = inheritedClean or (if _USER_CLEAN then table.clone(_USER_CLEAN) else {})
-	if inheritedClean and _USER_CLEAN then
-		for _, item in _USER_CLEAN do
-			table.insert(_CLEAN, item)
+	_CLEAN: { any }
+)
+	local second = string.byte(property, 2)
+	if second == 97 and string.sub(property, 1, 6) == "_attr_" then
+		local attrName = string.sub(property, 7)
+		if attrName == "" then
+			error('attribute name after "_attr_" cannot be empty', 0)
 		end
-	end
-	local _EVENT = properties.__EVENT
-	local _TAG = properties.__TAG
-	local _REF = properties.__REF
-	local parent = properties.Parent
-
-	if parent and seenProps then
-		if seenProps.Parent then
-			parent = nil
-		else
-			seenProps.Parent = true
+		applyBindingOrValue(instance, attrName, value, true, seenAttrs, _CLEAN)
+		return
+	elseif second == 116 and string.sub(property, 1, 5) == "_tag_" then
+		local tagName = string.sub(property, 6)
+		if tagName == "" then
+			error('tag name after "_tag_" cannot be empty', 0)
 		end
-	end
-
-	for property, value in properties do
-		if
-			property == "Parent"
-			or property == "__TAG"
-			or property == "__ATTR"
-			or property == "__CLEAN"
-			or property == "__EVENT"
-			or property == "__REF"
-		then
-			continue
-		end
-
-		if type(property) == "string" and string.byte(property) == 95 then
-			local second = string.byte(property, 2)
-			if second == 97 and string.sub(property, 1, 6) == "_attr_" then
-				local attrName = string.sub(property, 7)
-				if attrName == "" then
-					error('attribute name after "_attr_" cannot be empty', 0)
-				end
-				applyAttribute(instance, attrName, value, seenAttrs, _CLEAN)
-				continue
-			elseif second == 116 and string.sub(property, 1, 5) == "_tag_" then
-				local tagName = string.sub(property, 6)
-				if tagName == "" then
-					error('tag name after "_tag_" cannot be empty', 0)
-				end
-				if seenProps then
-					if seenProps[property] then
-						continue
-					end
-					seenProps[property] = true
-				end
-				bindNamedTag(instance, tagName, value, _CLEAN)
-				continue
-			end
-
-			local name: string
-			local isAttr = false
-			local isTag = false
-			if second == 95 then
-				if string.sub(property, 1, 7) == "__attr_" then
-					name = string.sub(property, 8)
-					if name == "" then
-						error('attribute name after "__attr_" cannot be empty', 0)
-					end
-					isAttr = true
-				elseif string.sub(property, 1, 6) == "__tag_" then
-					name = string.sub(property, 7)
-					if name == "" then
-						error('tag name after "__tag_" cannot be empty', 0)
-					end
-					isTag = true
-				else
-					name = string.sub(property, 2)
-				end
-			else
-				if second == nil then
-					error('property name after "_" cannot be empty', 0)
-				end
-				name = string.sub(property, 2)
-			end
-			if seenProps then
-				if seenProps[property] then
-					continue
-				end
-				seenProps[property] = true
-			end
-			connectChanged(instance, name, isAttr, isTag, value, `"{property}"`, _CLEAN)
-			continue
-		end
-
-		if type(property) == "number" and property == math.floor(property) then
-			if kindOf(value) == "Instance" then
-				if not childKeys then
-					childKeys = { property }
-				else
-					table.insert(childKeys, property)
-				end
-			elseif type(value) == "function" then
-				if not actions then
-					actions = { value }
-				else
-					table.insert(actions, value)
-				end
-			elseif type(value) == "table" then
-				if value[1] == FIND_SYMBOL then
-					resolveFind(value, instance, edit :: any)
-				elseif isNode(value) then
-					if not childKeys then
-						childKeys = { property }
-					else
-						table.insert(childKeys, property)
-					end
-				elseif not isModel(value) then
-					hasFlatten = true
-					if not childKeys then
-						childKeys = { property }
-					else
-						table.insert(childKeys, property)
-					end
-				end
-			end
-			continue
-		end
-
-		if type(value) == "function" then
-			local signal = (instance :: any)[property]
-			if kindOf(signal) == "RBXScriptSignal" then
-				if not signals then
-					signals = { signal, value }
-				else
-					table.insert(signals, signal)
-					table.insert(signals, value)
-				end
-				continue
-			end
-		end
-
 		if seenProps then
 			if seenProps[property] then
-				continue
+				return
 			end
 			seenProps[property] = true
 		end
-
-		if type(value) == "function" then
-			value = newNode(value)
-			table.insert(_CLEAN, value)
-		end
-
-		if isModel(value) then
-			bindModel(value[2], instance, property, _CLEAN, false)
-		elseif isNode(value) then
-			table.insert(_CLEAN, bindTo(value, instance, property, false))
-		else
-			setProperty(instance, property, value)
-			if property == "LayoutOrder" and value == 0 then
-				Bind.pinOrder(instance)
-			end
-		end
+		bindNamedTag(instance, tagName, value, _CLEAN)
+		return
 	end
 
+	if second == nil then
+		error('property name after "_" cannot be empty', 0)
+	end
+	local name = string.sub(property, 2)
+	local isAttr = false
+	local isTag = false
+	if second == 95 then
+		if string.sub(property, 1, 7) == "__attr_" then
+			name = string.sub(property, 8)
+			if name == "" then
+				error('attribute name after "__attr_" cannot be empty', 0)
+			end
+			isAttr = true
+		elseif string.sub(property, 1, 6) == "__tag_" then
+			name = string.sub(property, 7)
+			if name == "" then
+				error('tag name after "__tag_" cannot be empty', 0)
+			end
+			isTag = true
+		end
+	end
+	if seenProps then
+		if seenProps[property] then
+			return
+		end
+		seenProps[property] = true
+	end
+	connectChanged(instance, name, isAttr, isTag, value, `"{property}"`, _CLEAN)
+end
+
+local function applyDirectives(
+	instance: Instance,
+	properties: Type.Map<any>,
+	seenAttrs: { [any]: boolean }?,
+	_CLEAN: { any }
+)
+	local _ATTR = properties.__ATTR
 	if _ATTR then
 		for attrName, attrVal in _ATTR do
-			applyAttribute(instance, attrName, attrVal, seenAttrs, _CLEAN)
+			applyBindingOrValue(instance, attrName, attrVal, true, seenAttrs, _CLEAN)
 		end
 	end
 
+	local _TAG = properties.__TAG
 	if _TAG then
 		bindTag(instance, _TAG, _CLEAN)
 	end
 
+	local _EVENT = properties.__EVENT
 	if _EVENT then
 		local _EVENT_ATTR = _EVENT.__ATTR
 		local _EVENT_TAG = _EVENT.__TAG
@@ -880,36 +830,29 @@ local function edit(
 			end
 		end
 	end
+end
 
-	if _REF then
-		if type(_REF) == "function" then
-			local refClean = (_REF :: any)(instance)
-			if refClean ~= nil then
-				table.insert(_CLEAN, refClean)
-			end
-		elseif isNode(_REF) then
-			_REF:set(instance)
-		end
-	end
-
-	if hasFlatten and not seenAttrs then
-		seenAttrs = {}
-		if _ATTR then
-			for attrName in _ATTR do
-				seenAttrs[attrName] = true
-			end
-		end
-		seenProps = {}
-		for key in properties do
-			if type(key) ~= "number" then
-				seenProps[key] = true
-				if type(key) == "string" and string.sub(key, 1, 6) == "_attr_" then
-					seenAttrs[string.sub(key, 7)] = true
-				end
-			end
-		end
-	end
-
+local function finalizeEdit(
+	instance: Instance,
+	properties: Type.Map<any>,
+	childKeys: { number }?,
+	actions: { any }?,
+	signals: { any }?,
+	parent: any,
+	seenAttrs: { [any]: boolean }?,
+	seenProps: { [any]: boolean }?,
+	_CLEAN: { any },
+	inheritedClean: { any }?,
+	order: number,
+	applyEdit: (
+		Instance,
+		Type.Map<any>,
+		{ [any]: boolean }?,
+		{ [any]: boolean }?,
+		{ any }?,
+		number?
+	) -> number
+): number
 	if childKeys then
 		if #childKeys > 1 then
 			table.sort(childKeys)
@@ -920,11 +863,26 @@ local function edit(
 				order = Bind.applyLayoutOrder(child, order)
 				child.Parent = instance
 			elseif isNode(child) then
-				table.insert(_CLEAN, Bind.children(child :: any, instance, order))
+				table.insert(_CLEAN, Bind.children(child, instance, order))
 				order += 1
+			elseif child[1] == FIND_SYMBOL then
+				resolveFind(child, instance, applyEdit)
 			else
-				order = edit(instance, child :: any, seenAttrs, seenProps, _CLEAN, order)
+				order = applyEdit(instance, child, seenAttrs, seenProps, _CLEAN, order)
 			end
+		end
+	end
+
+	local _REF: any = properties.__REF
+	if _REF then
+		if type(_REF) == "function" then
+			local callRef: (Instance) -> any = _REF
+			local refClean = callRef(instance)
+			if refClean ~= nil then
+				table.insert(_CLEAN, refClean)
+			end
+		elseif isNode(_REF) then
+			_REF:set(instance)
 		end
 	end
 
@@ -936,12 +894,15 @@ local function edit(
 
 	if signals then
 		for index = 1, #signals, 2 do
-			table.insert(_CLEAN, signals[index]:Connect(bindContext(signals[index + 1])) :: any)
+			local connected: any = signals[index]:Connect(bindContext(signals[index + 1]))
+			table.insert(_CLEAN, connected)
 		end
 	end
 
+	local madeParent = nil
 	if type(parent) == "function" then
 		parent = newNode(parent)
+		madeParent = parent
 		table.insert(_CLEAN, parent)
 	end
 	local parentIsNode = isNode(parent)
@@ -960,12 +921,130 @@ local function edit(
 	if parent then
 		if parentIsNode then
 			table.insert(_CLEAN, bindTo(parent, instance, "Parent", false))
+			if madeParent then
+				attachToBinding(instance, "Parent", false, madeParent)
+			end
 		else
+			releaseBinding(instance, "Parent", false)
 			instance.Parent = parent
 		end
 	end
 
 	return order
+end
+
+local function ensureFlattenSeen(properties: Type.Map<any>): ({ [any]: boolean }, { [any]: boolean })
+	local nextAttrs: { [any]: boolean } = {}
+	local _ATTR = properties.__ATTR
+	if _ATTR then
+		for attrName in _ATTR do
+			nextAttrs[attrName] = true
+		end
+	end
+	local nextProps: { [any]: boolean } = {}
+	for key in properties do
+		if type(key) ~= "number" then
+			nextProps[key] = true
+			if type(key) == "string" and string.sub(key, 1, 6) == "_attr_" then
+				nextAttrs[string.sub(key, 7)] = true
+			end
+		end
+	end
+	return nextAttrs, nextProps
+end
+
+local function edit(
+	instance: Instance,
+	properties: Type.Map<any>,
+	seenAttrs: { [any]: boolean }?,
+	seenProps: { [any]: boolean }?,
+	inheritedClean: { any }?,
+	startOrder: number?
+): number
+	local actions: { any }? = nil
+	local signals: { any }? = nil
+	local childKeys: { number }? = nil
+	local hasFlatten = false
+	local order = startOrder or 1
+	local rawInstance: any = instance
+	local applyEdit: any = edit
+	local _USER_CLEAN = properties.__CLEAN
+	local _CLEAN = inheritedClean or {}
+	if _USER_CLEAN ~= nil then
+		table.insert(_CLEAN, _USER_CLEAN)
+	end
+	local parent = properties.Parent
+	if parent and seenProps then
+		if seenProps.Parent then
+			parent = nil
+		else
+			seenProps.Parent = true
+		end
+	end
+	for property, value in properties do
+		if
+			property == "Parent"
+			or property == "__TAG"
+			or property == "__ATTR"
+			or property == "__CLEAN"
+			or property == "__EVENT"
+			or property == "__REF"
+		then
+			continue
+		end
+		local propType = type(property)
+		if propType == "string" then
+			if string.byte(property) == 95 then
+				applyPrefixKey(instance, property, value, seenAttrs, seenProps, _CLEAN)
+				continue
+			end
+		elseif propType == "number" and property == math.floor(property) then
+			if kindOf(value) == "Instance" then
+				childKeys = childKeys or {}
+				table.insert(childKeys :: { number }, property)
+			elseif type(value) == "function" then
+				actions = actions or {}
+				table.insert(actions :: { any }, value)
+			elseif type(value) == "table" then
+				if not isModel(value) then
+					if value[1] ~= FIND_SYMBOL and not isNode(value) then
+						hasFlatten = true
+					end
+					childKeys = childKeys or {}
+					table.insert(childKeys :: { number }, property)
+				end
+			end
+			continue
+		end
+		if type(value) == "function" then
+			local signal = rawInstance[property]
+			if kindOf(signal) == "RBXScriptSignal" then
+				signals = signals or {}
+				table.insert(signals :: { any }, signal)
+				table.insert(signals :: { any }, value)
+				continue
+			end
+		end
+		applyBindingOrValue(instance, property, value, false, seenProps, _CLEAN)
+	end
+	applyDirectives(instance, properties, seenAttrs, _CLEAN)
+	if hasFlatten and not seenAttrs then
+		seenAttrs, seenProps = ensureFlattenSeen(properties)
+	end
+	return finalizeEdit(
+		instance,
+		properties,
+		childKeys,
+		actions,
+		signals,
+		parent,
+		seenAttrs,
+		seenProps,
+		_CLEAN,
+		inheritedClean,
+		order,
+		applyEdit
+	)
 end
 
 local function editInstance(instance: Instance, properties: Type.Map<any>): Instance
@@ -980,13 +1059,14 @@ local ALWAYS: { [string]: { [string]: unknown } } = {
 
 local function assign(instance: Instance, values: { [string]: unknown }?)
 	if values then
+		local rawInstance: any = instance
 		for key, value in values do
-			(instance :: any)[key] = value
+			rawInstance[key] = value
 		end
 	end
 end
 
-local function constructInstance(className: string, properties: any): Instance
+local function new(className: string, properties: any): Instance
 	local instance = Compat.Instance.new(className)
 	assign(instance, ALWAYS[className])
 	assign(instance, if Flags.defaults then Defaults[className] else nil)
@@ -998,7 +1078,7 @@ end
 
 return table.freeze({
 	edit = editInstance,
-	new = constructInstance,
+	new = new,
 	Flags = Flags,
 	Defaults = Defaults,
 	Find = Find,
@@ -1006,11 +1086,11 @@ return table.freeze({
 	Splits a props table by key into fresh tables: one per `keys` group holding just the keys that group names, then a
 	final table with everything else (instance properties, numeric children, `__EVENT`-style directives), ready to forward
 	to a root instance. A group is an array of key names or a table whose keys are used; a key named by several groups
-	goes to the first. Values move by reference and `props` itself is left untouched.
+	is assigned to the first group. Values move by reference and `props` itself is left untouched.
 
 	With one group, it is typed as a `Pick` of the props type and the rest as its `Omit`, keeping required members
 	required. That needs the names as types: pass a schema table, or annotate a name array
-	(`local OWN: { "label" | "onClick" } = ...`). An unannotated array only says `{ string }`, and several groups are more
+	(`local OWN: { "label" | "onClick" } = ...`). An unannotated array resolves to `{ string }`, and several groups are more
 	than the solver can pick through, so those tables are `Partial` (every member optional).
 
 	```luau

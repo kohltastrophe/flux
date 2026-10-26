@@ -80,13 +80,11 @@ local editInstance = Edit.edit
 local Constructors = setmetatable({}, {
 	__index = function(self: any, class: string)
 		if type(class) ~= "string" then
-			error(`String expected, got {typeof(class)}`)
+			error(`String expected, got {typeof(class)}`, 3)
 		end
-
 		self[class] = function(properties: Type.Map<any>): Instance
 			return construct(class, properties)
 		end
-
 		return self[class]
 	end,
 })
@@ -95,9 +93,9 @@ local Flux = {
 	--[[
 	<strong>Clock</strong>: the time Flux and your code run on. `now` (monotonic) and `wall` (Unix, server-synced) read
 	it; `delay`, `wait`, `defer`, `cancel` and `connect(phase, fn)` schedule on it, like `task.*` and the RunService
-	frame signals. Tests turn on a manual clock (`manual(true)`; always on headless) and move it with
-	`step(seconds, frameLength?)`, which runs due timers, frame subscribers, springs, tweens and a flush in order; `drain`
-	runs deferred work and `reset` drops what is pending.
+	frame signals. Tests turn on a manual clock (`manual(true)`; always on headless): `step(seconds, frameLength?)`
+	advances time, runs due timers and frame subscribers, steps springs and tweens, and flushes the reactive graph in
+	order; `drain` runs deferred work and `reset` cancels all pending tasks.
 
 	[Open Documentation](https://flux.kohl.gg/guide/tips/testing)
 	]]
@@ -171,9 +169,10 @@ local Flux = {
 		step = Motion.step,
 	}),
 	--[[
-	<strong>Responsive</strong>: the screen and the player as nodes: `viewport`, `scale` and `breakpoint` follow the
-	camera; `displaySize` and `platform` say what the screen and the device are; `input` follows the input
-	device; `textSize`, `reducedMotion` and `preferredTransparency` follow the accessibility settings. `scaleOf`/`breakpointOf` build per-surface variants; `config` holds the defaults.
+	<strong>Responsive</strong>: the screen and the player as nodes: `viewport`, `scale`, and `breakpoint` follow the
+	camera; `displaySize` and `platform` report the physical screen dimensions and device category; `input` follows the
+	active input device; `textSize`, `reducedMotion`, and `preferredTransparency` track accessibility settings.
+	`scaleOf`/`breakpointOf` build per-surface variants; `config` holds the defaults.
 
 	[Open Documentation](https://flux.kohl.gg/guide/utilities/responsive)
 	]]
@@ -269,32 +268,31 @@ local Flux = {
 	textSizeConstraint = Layout.textSizeConstraint,
 }
 
-local FluxMT = {}
+local FluxMT = table.freeze({
+	--[[
+	The terse constructor: `Flux(value)` is a [signal](https://flux.kohl.gg/guide/concepts/signals), `Flux(fn)` a
+	[computed](https://flux.kohl.gg/guide/concepts/computeds), and `Flux(instance, property)` a node following a Roblox
+	[`Instance`](https://create.roblox.com/docs/reference/engine/classes/Instance) property, `"$Attribute"` /
+	`"_attr_Attribute"`, or `"#Tag"` / `"_tag_Tag"`. A node is returned as is. The result is a `Node<any>`; use
+	`Flux.signal`, `Flux.computed`, `Flux.effect` and `Flux.property` for typed nodes.
 
-local bindNode = Bind.node
+	```luau
+	local size = Flux(frame, "AbsoluteSize")
+	```
 
---[[
-The terse constructor: `Flux(value)` is a [signal](https://flux.kohl.gg/guide/concepts/signals), `Flux(fn)` a
-[computed](https://flux.kohl.gg/guide/concepts/computeds), and `Flux(instance, property)` a node following a Roblox
-[`Instance`](https://create.roblox.com/docs/reference/engine/classes/Instance) property, `"$Attribute"` /
-`"_attr_Attribute"`, or `"#Tag"` / `"_tag_Tag"`. A node is returned as is. The result is a `Node<any>`; use
-`Flux.signal`, `Flux.computed`, `Flux.effect` and `Flux.property` for typed nodes.
-
-```luau
-local size = Flux(frame, "AbsoluteSize")
-```
-
-[Open Documentation](https://flux.kohl.gg/guide/concepts/signals#creating-a-signal)
-]]
-function FluxMT.__call(_: any, obj: any, propertyName: string?): Graph.Node<any>
-	return bindNode(obj, propertyName)
-end
+	[Open Documentation](https://flux.kohl.gg/guide/concepts/signals#creating-a-signal)
+	]]
+	__call = function(_: any, obj: any, propertyName: string?): Graph.Node<any>
+		local node = Bind.node(obj, propertyName)
+		return node
+	end,
+})
 
 --[[
 Hydrates an existing Roblox [`Instance`](https://create.roblox.com/docs/reference/engine/classes/Instance): applies
 reactive properties, events and directives like
 [`Flux.new`](https://flux.kohl.gg/guide/roblox/creation#the-flux-new-function), onto an instance you already have.
-Inside a [`Flux.scope`](https://flux.kohl.gg/guide/concepts/scopes) the bindings end with the scope.
+Bindings created inside a [`Flux.scope`](https://flux.kohl.gg/guide/concepts/scopes) disconnect when the scope is destroyed.
 
 ```luau
 Flux.edit(existingLabel) { Text = function() return `HP {health()}` end }
@@ -313,7 +311,7 @@ Creates a Roblox [`Instance`](https://create.roblox.com/docs/reference/engine/cl
 its per-class [defaults](https://flux.kohl.gg/guide/roblox/defaults), then takes a property table of values, nodes,
 getters, events, children, prefix keys (`_Prop`, `_attr_Name`, `__attr_Name`, `_tag_Name`, `__tag_Name`), and
 directives (`__EVENT`, `__ATTR`, `__TAG`, `__REF`, `__CLEAN`). Created inside a
-[`Flux.scope`](https://flux.kohl.gg/guide/concepts/scopes), the instance is destroyed with it.
+[`Flux.scope`](https://flux.kohl.gg/guide/concepts/scopes), the instance is destroyed when the scope is destroyed.
 
 ```luau
 Flux.new "Frame" {
@@ -334,9 +332,9 @@ end
 if game then
 	local RunService = game:GetService("RunService")
 	local frame = if RunService:IsClient() then RunService.PreRender else RunService.Heartbeat
-	frame:Connect(function()
+	local _frameConnection = frame:Connect(function(dt: number)
 		if not Clock.isManual() then
-			Motion.step()
+			Motion.step(dt)
 			Graph.flush()
 		end
 	end)
@@ -347,9 +345,4 @@ Clock._internal.setFrame(function(dt: number)
 	Graph.flush()
 end)
 
---- @ignore
-type FluxCall = {
-	__call: (self: any, obj: any, propertyName: string?) -> Graph.Node<any>,
-}
-
-return table.freeze(setmetatable(Flux, table.freeze(FluxMT) :: FluxCall))
+return table.freeze(setmetatable(Flux, FluxMT))

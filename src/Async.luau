@@ -75,16 +75,17 @@ type Data = {
 
 local function runFetcher(self: Data, input: any, currentId: number, refetching: any)
 	local ok, result = pcall(self._fetcher, input, raw(self.data), refetching)
-	if currentId == self._fetchId then
-		self.loading:set(false)
-		if ok then
-			self._resolved = true
-			self.data:set(result)
-			self.state:set("ready")
-		else
-			self.error:set(tostring(result))
-			self.state:set("errored")
-		end
+	if currentId ~= self._fetchId then
+		return
+	end
+	self.loading:set(false)
+	if ok then
+		self._resolved = true
+		self.data:set(result)
+		self.state:set("ready")
+	else
+		self.error:set(tostring(result))
+		self.state:set("errored")
 	end
 end
 
@@ -102,22 +103,7 @@ end
 local Async = {}
 Async.__index = Async
 
---[[
-Creates a non-blocking asynchronous [node](https://flux.kohl.gg/guide/concepts/signals) that runs yielding
-work off the reactive graph and exposes its progress as four nodes: `.data`, `.error`, `.loading`, and
-`.state`. A race guard discards stale results, so only the latest fetch ever writes back.
-@param source - A tracked input: a [node](https://flux.kohl.gg/guide/concepts/signals) or a computation whose value is passed to the fetcher; the fetcher re-runs whenever it changes. Omit it (pass the fetcher first) for a one-shot fetch. A `nil`/`false` source value gates the fetch off until it becomes truthy.
-@param fetcher - The untracked yielding work, called as `fetcher(value, previous, refetching)` where `previous` is the previously resolved data and `refetching` flags a manual refetch. Reactive reads inside it are <strong>not</strong> tracked as dependencies.
-@param initialValue - The starting `.data` value before the first fetch resolves.
-
-```luau
-local profile = Flux.async(userId, function(id) return Players:GetNameFromUserIdAsync(id) end)
-Flux.new "TextLabel" { Text = function() return profile.data() or "Loading" end }
-```
-
-[Open Documentation](https://flux.kohl.gg/guide/concepts/async#creating-an-async-node)
-]]
-local function create(source: any, fetcher: any, initialValue: any): Async<any>
+local function new(source: any, fetcher: any, initialValue: any): Async<any>
 	local src: any = source
 	local fetch: any = fetcher
 	local init: any = initialValue
@@ -131,7 +117,7 @@ local function create(source: any, fetcher: any, initialValue: any): Async<any>
 		loading = signal(false),
 		state = signal("unresolved" :: AsyncState),
 		_resolved = false,
-		_effect = nil :: any,
+		_effect = nil,
 		_src = src,
 		_fetcher = fetch,
 		_fetchId = 0,
@@ -171,7 +157,8 @@ function Async.Destroy(self: Data)
 	self.loading:Destroy()
 	self._effect:Destroy()
 	local nextId = self._fetchId + 1
-	table.clear(self :: any)
+	local rawSelf: any = self
+	table.clear(rawSelf)
 	self._fetchId = nextId
 end
 
@@ -212,11 +199,14 @@ end
 
 --[[
 Creates a non-blocking asynchronous [node](https://flux.kohl.gg/guide/concepts/signals) that runs yielding
-work off the reactive graph and exposes its progress as four nodes: `.data`, `.error`, `.loading`, and
-`.state`. A race guard discards stale results, so only the latest fetch ever writes back.
-@param source - A tracked input: a [node](https://flux.kohl.gg/guide/concepts/signals) or a computation whose value is passed to the fetcher; the fetcher re-runs whenever it changes. Omit it (pass the fetcher first) for a one-shot fetch. A `nil`/`false` source value gates the fetch off until it becomes truthy.
-@param fetcher - The untracked yielding work, called as `fetcher(value, previous, refetching)` where `previous` is the previously resolved data and `refetching` flags a manual refetch. Reactive reads inside it are <strong>not</strong> tracked as dependencies.
-@param initialValue - The starting `.data` value before the first fetch resolves.
+work off the reactive graph and exposes its progress as four nodes: `.data` (seeded with `initialValue` before
+the first fetch resolves), `.error`, `.loading`, and `.state`. `source` is a tracked input (a
+[node](https://flux.kohl.gg/guide/concepts/signals) or computation) whose value is passed to `fetcher` and
+re-runs it on every change; omit `source` and pass `fetcher` first for a one-shot fetch, or let `source`
+evaluate to `nil`/`false` to gate the fetch off until it turns truthy. `fetcher(value, previous, refetching)`
+runs untracked (where `previous` is the last resolved data and `refetching` flags a manual refetch, so reactive
+reads inside it are <strong>not</strong> tracked as dependencies), and a race guard discards stale results so
+only the latest fetch ever writes back.
 
 ```luau
 local profile = Flux.async(userId, function(id) return Players:GetNameFromUserIdAsync(id) end)
@@ -225,7 +215,7 @@ Flux.new "TextLabel" { Text = function() return profile.data() or "Loading" end 
 
 [Open Documentation](https://flux.kohl.gg/guide/concepts/async#creating-an-async-node)
 ]]
-Async.new = create :: (<S, T>(
+Async.new = new :: (<S, T>(
 	source: S,
 	fetcher: (value: Graph.Unwrap<S>, previous: T?, refetching: any) -> T,
 	initialValue: T?

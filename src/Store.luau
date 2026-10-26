@@ -36,8 +36,8 @@ type Meta = {
 	children: { [any]: boolean }?,
 }
 
-local proxyCache = setmetatable({}, { __mode = "v" }) :: { [{ [any]: any }]: any }
-local proxyToRaw = setmetatable({}, { __mode = "k" }) :: { [any]: { [any]: any } }
+local proxyCache: { [any]: any } = setmetatable({}, { __mode = "v" })
+local proxyToRaw: { [any]: { [any]: any } } = setmetatable({}, { __mode = "k" })
 
 local STORE_SYMBOL: any = table.freeze({})
 
@@ -82,7 +82,8 @@ local function destroyProxy(proxy: any)
 end
 
 local function createProxy<T>(target: T, parentMeta: Meta?): T
-	local cached = proxyCache[target :: any]
+	local rawTarget: any = target
+	local cached = proxyCache[rawTarget]
 	if cached then
 		return cached
 	end
@@ -93,15 +94,15 @@ local function createProxy<T>(target: T, parentMeta: Meta?): T
 		__newindex = newindex,
 		__iter = iter,
 		__len = len,
-		target = target :: any,
+		target = rawTarget,
 		nodes = nodes,
 		parent = parentMeta,
 		children = nil,
 	}
-	local proxy = setmetatable({}, meta)
+	local proxy: any = setmetatable({}, meta)
 
-	proxyCache[target :: any] = proxy
-	proxyToRaw[proxy] = target :: any
+	proxyCache[rawTarget] = proxy
+	proxyToRaw[proxy] = rawTarget
 	register(proxy, destroyProxy)
 
 	if parentMeta then
@@ -115,7 +116,7 @@ local function createProxy<T>(target: T, parentMeta: Meta?): T
 		cleanup(proxy)
 	end
 
-	return proxy :: any
+	return proxy
 end
 
 local function teardownDisplaced(target: { [any]: any }, displaced: any)
@@ -159,7 +160,7 @@ local function readTracker(meta: Meta): { [any]: any }
 		tracker = newValue(target)
 		nodes[STORE_SYMBOL] = tracker
 	end
-	get(tracker :: any)
+	get(tracker)
 
 	return target
 end
@@ -198,26 +199,26 @@ function newindex(proxy: any, key: any, newVal: any)
 	local target = meta.target
 	local rawValue = toRaw(newVal)
 	local oldValue = rawget(target, key)
-
-	if oldValue ~= rawValue or type(rawValue) == "table" then
-		rawset(target, key, rawValue)
-
-		if type(oldValue) == "table" and oldValue ~= rawValue then
-			teardownDisplaced(target, oldValue)
-		end
-
-		local nodes = meta.nodes
-		local node = nodes[key]
-		if node ~= nil then
-			setValue(node, rawValue)
-			if rawValue == nil and not isReactive() and getOwner() == nil and not isObserved(node) then
-				nodes[key] = nil
-				destroyNode(node)
-			end
-		end
-
-		fireTracker(nodes, target)
+	if oldValue == rawValue and type(rawValue) ~= "table" then
+		return
 	end
+
+	rawset(target, key, rawValue)
+	if type(oldValue) == "table" and oldValue ~= rawValue then
+		teardownDisplaced(target, oldValue)
+	end
+
+	local nodes = meta.nodes
+	local node = nodes[key]
+	if node ~= nil then
+		setValue(node, rawValue)
+		if rawValue == nil and not isReactive() and getOwner() == nil and not isObserved(node) then
+			nodes[key] = nil
+			destroyNode(node)
+		end
+	end
+
+	fireTracker(nodes, target)
 end
 
 local function nextProxy(meta: Meta, k: any): (any, any)
@@ -263,8 +264,9 @@ end
 Tears down a store and every nested proxy beneath it, destroying their per-key
 [node](https://flux.kohl.gg/guide/concepts/signals)s so dependents stop tracking them; the proxy is left an empty
 plain table and the raw table is left intact. A store created inside a
-[scope](https://flux.kohl.gg/guide/concepts/scopes) is torn down with it, `Flux.dispose(store)` does the same, and an
-unowned store nobody references is garbage collected, so call this to cut its dependents off early.
+[scope](https://flux.kohl.gg/guide/concepts/scopes) is torn down when the scope is destroyed; [Flux.dispose] performs the
+same cleanup. An unreferenced store is garbage-collected automatically; call this method only to disconnect its
+dependents early.
 
 [Open Documentation](https://flux.kohl.gg/guide/concepts/stores#destroying-a-store)
 ]]
@@ -286,11 +288,9 @@ end
 
 --[[
 Reactive counterpart of [`table.insert`](https://create.roblox.com/docs/reference/engine/libraries/table#insert):
-inserts `value` at `pos` (default: appended to the end), shifting subsequent elements up. Use this instead of
-assigning past the array's length so iteration and `#` watchers fire and the shifted indices re-sync. An
-out-of-range `pos` errors.
-@param posOrValue - With no third argument, the value to append; otherwise the 1-based position to insert at.
-@param value - The value to insert when a position was given.
+with no third argument, appends `posOrValue` to the end; with a third argument, inserts `value` at 1-based position
+`posOrValue` and shifts subsequent elements up. Use this instead of assigning past the array's length so iteration
+and `#` watchers fire and the shifted indices re-sync. An out-of-range position errors.
 
 [Open Documentation](https://flux.kohl.gg/guide/concepts/stores#arrays-and-iteration)
 ]]
@@ -361,14 +361,12 @@ function Store.remove(proxy: any, pos: number?): any
 end
 
 --[[
-Reactively reorders the array, moving the element at `from` to `to` and shifting the elements between them so
-positional readers and `#`/iteration watchers follow. Equivalent to a
+Reactively reorders the array, moving the element at 1-based index `from` to `to` and shifting the elements between
+them so positional readers and `#`/iteration watchers follow. Equivalent to a
 [`table.remove`](https://create.roblox.com/docs/reference/engine/libraries/table#remove) +
 [`table.insert`](https://create.roblox.com/docs/reference/engine/libraries/table#insert) but as a single tracked
 step: the length is unchanged, so nothing is removed and no nested proxy is torn down, ideal for drag-and-drop
 list reordering. Both indices must be in `[1, #proxy]`; an out-of-range index errors.
-@param from - The 1-based index of the element to move.
-@param to - The 1-based index it should occupy afterward.
 
 [Open Documentation](https://flux.kohl.gg/guide/concepts/stores#arrays-and-iteration)
 ]]
@@ -469,9 +467,9 @@ local function reconcileArrayKeyed(
 	local span = if oldLen > newLen then oldLen else newLen
 	local structural = false
 
-	local oldElems = table.create(oldLen)
+	local oldElems = table.create(span)
 	local oldByKey: { [any]: any } = {}
-	for i = 1, oldLen do
+	for i = 1, span do
 		local el = rawget(target, i)
 		if el == nil then
 			continue
@@ -531,7 +529,7 @@ local function reconcileArrayKeyed(
 		end
 	end
 
-	for i = 1, oldLen do
+	for i = 1, span do
 		local el = oldElems[i]
 		if type(el) == "table" and not matched[el] then
 			teardownDisplaced(target, el)
@@ -579,11 +577,11 @@ end
 --[[
 Diffs the snapshot `newData` into the live store `proxy`, firing only the
 [node](https://flux.kohl.gg/guide/concepts/signals)s whose leaves actually changed and reusing unchanged
-nested proxies instead of tearing them down. Arrays diff positionally by default; a `key` field name matches
-elements by identity instead, so reordered or inserted rows keep their proxy (and their
+nested proxies instead of tearing them down. Arrays diff positionally by default; when `key` is given, array
+elements are matched by `element[key]` instead (recursively through every nested array), so reordered or inserted
+rows keep their proxy (and their
 [`Flux.forValue`](https://flux.kohl.gg/guide/concepts/mapping#flux-forvalue-keyed-by-value) result) and only
 changed rows fire. `newData` should be a plain, acyclic snapshot. Returns `proxy`.
-@param key - Optional field name; when given, array elements are matched by `element[key]` rather than by position, recursively through every nested array.
 
 [Open Documentation](https://flux.kohl.gg/guide/concepts/stores#reconciling-snapshots)
 ]]
@@ -592,8 +590,8 @@ function Store.reconcile<T>(proxy: T, newData: T, key: string?): T
 	assert(target ~= nil, "Store.reconcile expects a store proxy")
 	assert(type(newData) == "table", "Store.reconcile newData must be a table")
 
-	local rawNew = toRaw(newData)
-	reconcileTable(proxy, target, rawNew :: any, key)
+	local rawNew: { [any]: any } = toRaw(newData)
+	reconcileTable(proxy, target, rawNew, key)
 	return proxy
 end
 

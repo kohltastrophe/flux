@@ -48,7 +48,7 @@ local ACTIVATE_KEYS: { [any]: boolean } = {
 
 local engine: HoverServices? = nil
 
-local function engineServices(): HoverServices?
+local function engineServices(): any
 	local resolved = engine
 	if resolved == nil then
 		local guiService = Compat.getService("GuiService")
@@ -169,6 +169,7 @@ type Listener = {
 	count: number,
 	connections: { RBXScriptConnection }?,
 	open: () -> { RBXScriptConnection },
+	last: any?,
 }
 
 local function retain(listener: Listener)
@@ -183,6 +184,8 @@ local function release(listener: Listener)
 	local connections = listener.connections
 	if listener.count == 0 and connections ~= nil then
 		listener.connections = nil
+		listener.last = nil
+		memoToken, memoRoot, memoList = nil, nil, {}
 		dispose(connections)
 	end
 end
@@ -216,7 +219,7 @@ type Tracker = Listener & {
 --- @ignore
 type Registry = { activate: Hub, selected: Hub, hover: Tracker }
 
-local registries: { [any]: Registry } = setmetatable({}, { __mode = "k" }) :: any
+local registries: { [any]: Registry } = setmetatable({}, { __mode = "k" })
 
 local function dispatch(hub: Hub, object: Instance?, value: any)
 	local set = if object ~= nil then hub.handlers[object] else nil
@@ -270,6 +273,9 @@ end
 
 local function leave(tracker: Tracker, entry: Entry)
 	if entry.root ~= nil then
+		if entry.root == memoRoot then
+			memoToken, memoRoot, memoList = nil, nil, {}
+		end
 		entry.root = nil
 		tracker.inside[entry] = nil
 		release(tracker)
@@ -295,11 +301,11 @@ local function step(tracker: Tracker)
 	end
 	local lastRoot: any, lastList: { GuiObject } = nil, {}
 	for entry in tracker.inside do
-		local root = entry.root :: any
+		local root: any = entry.root
 		if root ~= lastRoot then
 			local list = guisAt(root, x, y)
 			if list == nil then
-				return
+				continue
 			end
 			lastRoot, lastList = root, list
 		end
@@ -322,31 +328,30 @@ local function connectTracker(tracker: Tracker): { RBXScriptConnection }
 		end
 		memoToken, memoRoot, memoList = nil, nil, {}
 	end
-	return {
-		env.RunService.Heartbeat:Connect(function()
-			step(tracker)
-		end),
-		input.InputChanged:Connect(function(changed: InputObject)
-			if changed.UserInputType == MOUSE_MOVEMENT then
-				tracker.x, tracker.y = changed.Position.X, changed.Position.Y
-			end
-		end),
-		input.InputEnded:Connect(function(ended: InputObject)
-			if ended.UserInputType == TOUCH then
-				for entry in tracker.touched do
-					if entry.touch == ended then
-						settleTouch(tracker, entry)
-					end
+	local onHeartbeat = env.RunService.Heartbeat:Connect(function()
+		step(tracker)
+	end)
+	local onChanged = input.InputChanged:Connect(function(changed: InputObject)
+		if changed.UserInputType == MOUSE_MOVEMENT then
+			tracker.x, tracker.y = changed.Position.X, changed.Position.Y
+		end
+	end)
+	local onEnded = input.InputEnded:Connect(function(ended: InputObject)
+		if ended.UserInputType == TOUCH then
+			for entry in tracker.touched do
+				if entry.touch == ended then
+					settleTouch(tracker, entry)
 				end
 			end
-		end),
-		input.LastInputTypeChanged:Connect(function(kind: any)
-			if leavesMouse(kind) then
-				clearMouse()
-			end
-		end),
-		input.WindowFocusReleased:Connect(clearMouse),
-	}
+		end
+	end)
+	local onLastInput = input.LastInputTypeChanged:Connect(function(kind: any)
+		if leavesMouse(kind) then
+			clearMouse()
+		end
+	end)
+	local onFocusReleased = input.WindowFocusReleased:Connect(clearMouse)
+	return { onHeartbeat, onChanged, onEnded, onLastInput, onFocusReleased }
 end
 
 local function registryFor(env: any): Registry
@@ -355,38 +360,37 @@ local function registryFor(env: any): Registry
 		return registry
 	end
 
-	local activate: Hub = { handlers = {}, count = 0 } :: any
+	local activate: any = { handlers = {}, count = 0 }
 	activate.open = function(): { RBXScriptConnection }
 		local userInput = env.UserInputService
-		return {
-			userInput.InputBegan:Connect(function(input: InputObject)
-				if ACTIVATE_KEYS[input.KeyCode] and userInput:GetFocusedTextBox() == nil and not menuOpen(env) then
-					dispatch(activate, env.GuiService.SelectedObject, input)
-				end
-			end),
-		}
+		local onInputBegan = userInput.InputBegan:Connect(function(input: InputObject)
+			if ACTIVATE_KEYS[input.KeyCode] and userInput:GetFocusedTextBox() == nil and not menuOpen(env) then
+				dispatch(activate, env.GuiService.SelectedObject, input)
+			end
+		end)
+		return { onInputBegan }
 	end
 
-	local selected: Hub = { handlers = {}, count = 0 } :: any
+	local selected: any = { handlers = {}, count = 0 }
 	selected.open = function(): { RBXScriptConnection }
 		local guiService = env.GuiService
 		selected.last = guiService.SelectedObject
-		return {
-			guiService:GetPropertyChangedSignal("SelectedObject"):Connect(function()
-				local now = guiService.SelectedObject
-				local last = selected.last
-				if now ~= last then
-					selected.last = now
-					dispatch(selected, last, false)
-					dispatch(selected, now, true)
-				end
-			end),
-		}
+		local onSelectedChanged = guiService:GetPropertyChangedSignal("SelectedObject"):Connect(function()
+			local now = guiService.SelectedObject
+			local last = selected.last
+			if now ~= last then
+				selected.last = now
+				dispatch(selected, last, false)
+				dispatch(selected, now, true)
+			end
+		end)
+		return { onSelectedChanged }
 	end
 
-	local tracker: Tracker = { env = env, inside = {}, touched = {}, count = 0 } :: any
+	local tracker: any = { env = env, inside = {}, touched = {}, count = 0 }
 	tracker.open = function(): { RBXScriptConnection }
-		return connectTracker(tracker)
+		local connected = connectTracker(tracker)
+		return connected
 	end
 
 	registry = { activate = activate, selected = selected, hover = tracker }
@@ -439,7 +443,7 @@ local function enter(tracker: Tracker, entry: Entry, x: number?, y: number?)
 	end
 end
 
-local function hoverWith(object: GuiObject, env: HoverServices?, options: HoverOptions?): Graph.Node<boolean>
+local function _hoverWith(object: GuiObject, env: HoverServices?, options: HoverOptions?): Graph.Node<boolean>
 	local within = options ~= nil and options.within == true
 	local hovering = signal(false)
 	local events: any = if env ~= nil and env.events ~= nil then env.events(object) else object
@@ -449,6 +453,9 @@ local function hoverWith(object: GuiObject, env: HoverServices?, options: HoverO
 	local function track(input: InputObject)
 		local kind = input.UserInputType
 		if kind ~= MOUSE_MOVEMENT and kind ~= TOUCH then
+			return
+		end
+		if kind == TOUCH and entry.touch ~= nil and entry.touch ~= input then
 			return
 		end
 		local pos = input.Position
@@ -469,43 +476,41 @@ local function hoverWith(object: GuiObject, env: HoverServices?, options: HoverO
 		end
 	end
 
-	local connections: { RBXScriptConnection } = {
-		events.InputBegan:Connect(track),
-		events.InputChanged:Connect(track),
-		events.InputEnded:Connect(function(input: InputObject)
-			local kind = input.UserInputType
-			if kind == MOUSE_MOVEMENT then
-				if tracker ~= nil then
-					leave(tracker, entry)
-				else
-					hovering:set(false)
-				end
-			elseif kind == TOUCH then
-				if tracker ~= nil and entry.touch ~= nil then
-					settleTouch(tracker, entry)
-				end
+	local onBegan: RBXScriptConnection = events.InputBegan:Connect(track)
+	local onChanged: RBXScriptConnection = events.InputChanged:Connect(track)
+	local onEnded: RBXScriptConnection = events.InputEnded:Connect(function(input: InputObject)
+		local kind = input.UserInputType
+		if kind == MOUSE_MOVEMENT then
+			if tracker ~= nil then
+				leave(tracker, entry)
+			else
 				hovering:set(false)
 			end
-		end),
-	}
+		elseif kind == TOUCH then
+			if entry.touch ~= nil and entry.touch ~= input then
+				return
+			end
+			if tracker ~= nil and entry.touch ~= nil then
+				settleTouch(tracker, entry)
+			end
+			hovering:set(false)
+		end
+	end)
+	local connections: { RBXScriptConnection } = { onBegan, onChanged, onEnded }
 	local mouseEnter: any = events.MouseEnter
 	local mouseLeave: any = events.MouseLeave
 	if tracker ~= nil and mouseEnter ~= nil then
 		local tracking: Tracker = tracker
-		table.insert(
-			connections,
-			mouseEnter:Connect(function()
-				if not leavesMouse(tracking.env.UserInputService:GetLastInputType()) then
-					enter(tracking, entry)
-				end
-			end) :: RBXScriptConnection
-		)
-		table.insert(
-			connections,
-			mouseLeave:Connect(function()
-				leave(tracking, entry)
-			end) :: RBXScriptConnection
-		)
+		local onEnter: RBXScriptConnection = mouseEnter:Connect(function()
+			if not leavesMouse(tracking.env.UserInputService:GetLastInputType()) then
+				enter(tracking, entry)
+			end
+		end)
+		local onLeave: RBXScriptConnection = mouseLeave:Connect(function()
+			leave(tracking, entry)
+		end)
+		table.insert(connections, onEnter)
+		table.insert(connections, onLeave)
 	end
 
 	return expose(hovering, object, function()
@@ -536,7 +541,7 @@ hovered over its own buttons. Listening starts on call and stops when the node, 
 [Open Documentation](https://flux.kohl.gg/guide/utilities/interact#hover)
 ]]
 local function hover(object: GuiObject, options: HoverOptions?): Graph.Node<boolean>
-	return hoverWith(object, hoverOverride or engineServices(), options)
+	return _hoverWith(object, hoverOverride or engineServices(), options)
 end
 
 local function useHoverServices(env: HoverServices?): HoverServices?
@@ -545,7 +550,7 @@ local function useHoverServices(env: HoverServices?): HoverServices?
 	return previous
 end
 
-local function pressWith(object: GuiObject, env: Services): Graph.Node<boolean>
+local function _pressWith(object: GuiObject, env: Services?): Graph.Node<boolean>
 	local pressed = signal(false)
 	local held: InputObject? = nil
 	local releaseListener: RBXScriptConnection? = nil
@@ -582,16 +587,24 @@ local function pressWith(object: GuiObject, env: Services): Graph.Node<boolean>
 		end
 		held = input
 		pressed:set(true)
-		menuListener = env.GuiService:GetPropertyChangedSignal("MenuIsOpen"):Connect(function()
-			if menuOpen(env) then
-				releasePress()
-			end
-		end)
-		releaseListener = env.UserInputService.InputEnded:Connect(function(ended: InputObject)
-			if isHeld(ended) then
-				releasePress()
-			end
-		end)
+		if env ~= nil then
+			menuListener = env.GuiService:GetPropertyChangedSignal("MenuIsOpen"):Connect(function()
+				if menuOpen(env) then
+					releasePress()
+				end
+			end)
+			releaseListener = env.UserInputService.InputEnded:Connect(function(ended: InputObject)
+				if isHeld(ended) then
+					releasePress()
+				end
+			end)
+		else
+			releaseListener = object.InputEnded:Connect(function(ended: InputObject)
+				if isHeld(ended) then
+					releasePress()
+				end
+			end)
+		end
 	end
 
 	local pointer = object.InputBegan:Connect(function(input: InputObject)
@@ -603,12 +616,17 @@ local function pressWith(object: GuiObject, env: Services): Graph.Node<boolean>
 			end
 		end
 	end)
-	local hub = registryFor(env).activate
-	hubAdd(hub, object, hold :: any)
+	local hub = if env ~= nil then registryFor(env).activate else nil
+	local holdHandler: any = hold
+	if hub ~= nil then
+		hubAdd(hub, object, holdHandler)
+	end
 
 	return expose(pressed, object, function()
 		pointer:Disconnect()
-		hubRemove(hub, object, hold :: any)
+		if hub ~= nil then
+			hubRemove(hub, object, holdHandler)
+		end
 		releasePress()
 	end)
 end
@@ -623,10 +641,13 @@ and no text box has focus, until that same input ends <em>anywhere</em>, so drag
 [Open Documentation](https://flux.kohl.gg/guide/utilities/interact#press)
 ]]
 local function press(object: GuiObject): Graph.Node<boolean>
-	return pressWith(object, engineServices() :: any)
+	return _pressWith(object, engineServices())
 end
 
-local function selectedWith(object: GuiObject, env: Services): Graph.Node<boolean>
+local function _selectedWith(object: GuiObject, env: Services?): Graph.Node<boolean>
+	if env == nil then
+		return expose(signal(false), object, function() end)
+	end
 	local guiService = env.GuiService
 	local isSelected = signal(guiService.SelectedObject == object)
 	local hub = registryFor(env).selected
@@ -650,7 +671,7 @@ the gui that gamepad or keyboard UI navigation currently highlights, as a read-o
 [Open Documentation](https://flux.kohl.gg/guide/utilities/interact#selected)
 ]]
 local function selected(object: GuiObject): Graph.Node<boolean>
-	return selectedWith(object, engineServices() :: any)
+	return _selectedWith(object, engineServices())
 end
 
 --[[
@@ -662,14 +683,13 @@ seeded from `IsFocused()` and kept current by `Focused` and `FocusLost`. It clea
 ]]
 local function focused(textBox: TextBox): Graph.Node<boolean>
 	local isFocused = signal(textBox:IsFocused())
-	local connections = {
-		textBox.Focused:Connect(function()
-			isFocused:set(true)
-		end),
-		textBox.FocusLost:Connect(function()
-			isFocused:set(false)
-		end),
-	}
+	local onFocused = textBox.Focused:Connect(function()
+		isFocused:set(true)
+	end)
+	local onFocusLost = textBox.FocusLost:Connect(function()
+		isFocused:set(false)
+	end)
+	local connections = { onFocused, onFocusLost }
 
 	return expose(isFocused, textBox, function()
 		dispose(connections)
@@ -688,11 +708,11 @@ return table.freeze({
 	focused = focused,
 
 	--- @ignore
-	_hoverWith = hoverWith,
+	_hoverWith = _hoverWith,
 	--- @ignore
 	_useHoverServices = useHoverServices,
 	--- @ignore
-	_pressWith = pressWith,
+	_pressWith = _pressWith,
 	--- @ignore
-	_selectedWith = selectedWith,
+	_selectedWith = _selectedWith,
 })

@@ -35,8 +35,8 @@ local EPSILON = 1e-9
 local DRAIN_LIMIT = 10000
 
 local osClock = os.clock
-local engineTask = task
-local RunService: RunService = if IS_ROBLOX then game:GetService("RunService") else nil :: any
+local engineTask: any = task
+local RunService: any = if IS_ROBLOX then game:GetService("RunService") else nil
 
 local manual = not IS_ROBLOX
 local virtualNow = 0
@@ -196,7 +196,11 @@ function Clock.wall(): number
 end
 
 local function pack(...: any): { any }?
-	return if select("#", ...) > 0 then table.pack(...) :: any else nil
+	if select("#", ...) == 0 then
+		return nil
+	end
+	local packed: { any } = table.pack(...)
+	return packed
 end
 
 --[[
@@ -204,7 +208,7 @@ Runs `fn(...)` (or resumes a thread) after `seconds`, like `task.delay`. Returns
 ]]
 function Clock.delay<A...>(seconds: number?, fn: ((A...) -> ...any) | thread, ...: A...): thread
 	if not manual then
-		return engineTask.delay(seconds, fn :: any, ...)
+		return engineTask.delay(seconds, fn, ...)
 	end
 	local thread = toThread(fn)
 	scheduleTimer(seconds, thread, nil, pack(...))
@@ -233,7 +237,7 @@ Runs `fn(...)` (or resumes a thread) once the current work finishes, like `task.
 ]]
 function Clock.defer<A...>(fn: ((A...) -> ...any) | thread, ...: A...): thread
 	if not manual then
-		return engineTask.defer(fn :: any, ...)
+		return engineTask.defer(fn, ...)
 	end
 	local thread = toThread(fn)
 	local entry: Deferred = { thread = thread, args = pack(...) }
@@ -280,7 +284,7 @@ function Clock.connect(phase: Phase, fn: (dt: number) -> ()): () -> ()
 		elseif phase == "PreRender" or phase == "RenderStepped" then render
 		else error(`Clock.connect: unknown phase "{phase}" (PreRender, RenderStepped or Heartbeat)`, 2)
 	if not manual then
-		local connection = (RunService :: any)[phase]:Connect(fn)
+		local connection = RunService[phase]:Connect(fn)
 		return function()
 			connection:Disconnect()
 		end

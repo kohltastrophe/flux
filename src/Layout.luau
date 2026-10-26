@@ -12,7 +12,7 @@ local Compat = require("./Compat")
 local Edit = require("./Edit")
 local Graph = require("./Graph")
 
-local construct = Edit.new
+local construct: (className: string, props: Props) -> any = Edit.new
 
 local Color3 = Compat.Color3
 local ColorSequence = Compat.ColorSequence
@@ -30,7 +30,7 @@ local computed = Graph.computed
 local isDynamic = Graph.isDynamic
 local isNode = Graph.isNode
 local new = Graph.new
-local read = Graph.read
+local read: (source: any) -> any = Graph.read
 
 --- @ignore
 type Props = { [string]: any }
@@ -235,12 +235,8 @@ local function udimProp(value: any): any
 	return reactiveProp(value, toUDim)
 end
 
-local function udim2Prop(value: any): any
-	return reactiveProp(value, toUDim2)
-end
-
 local function cornerProp(sides: CornerSides, corner: string, vertical: string, horizontal: string): any
-	local entries = sides :: any
+	local entries: any = sides
 	local value = entries[corner] or entries[vertical] or entries[horizontal] or sides.radius
 	return udimProp(if value == nil then 8 else value)
 end
@@ -308,11 +304,11 @@ local function setSide(props: Props, prop: string, value: any)
 	end
 end
 
-local function paddingSide(source: any, field: string): () -> UDim
+local function paddingSide(source: any, field: string, axis: string): () -> UDim
 	return function()
 		local value = read(source)
 		if typeof(value) == "table" then
-			return toUDim(value[field] or 0)
+			return toUDim(value[field] or value[axis] or 0)
 		elseif value == nil then
 			return ZERO_UDIM
 		end
@@ -336,7 +332,7 @@ local function readListAlign(
 	label: string
 ): (any, string)
 	if pinned ~= nil then
-		local override = read(pinned :: any)
+		local override = read(pinned)
 		if override ~= nil then
 			return override, label
 		end
@@ -356,9 +352,18 @@ local function listAlign(cfg: ListConfig, direction: any, axis: Direction, map: 
 		return nil, nil
 	end
 
-	local reactive = if pinned ~= nil
-		then isDynamic(pinned)
-		else isDynamic(direction) or isDynamic(align) or isDynamic(justify)
+	local reactive: boolean
+	if pinned ~= nil then
+		reactive = isDynamic(pinned)
+	elseif isDynamic(direction) then
+		reactive = true
+	else
+		local active = if (axis == "x") == (direction == FILL_DIRECTION.x) then justify else align
+		if active == nil then
+			return nil, nil
+		end
+		reactive = isDynamic(active)
+	end
 	if reactive then
 		return function()
 			local v, source = readListAlign(pinned, direction, align, justify, axis, label)
@@ -393,11 +398,12 @@ function Layout.padding(value: Length | PaddingSides | Graph.Node<any> | (() -> 
 	local props: Props = {}
 
 	if isDynamic(value) then
-		local source: any = new(value :: any)
-		props.PaddingTop = paddingSide(source, "top")
-		props.PaddingBottom = paddingSide(source, "bottom")
-		props.PaddingLeft = paddingSide(source, "left")
-		props.PaddingRight = paddingSide(source, "right")
+		local rawValue: any = value
+		local source: any = new(rawValue)
+		props.PaddingTop = paddingSide(source, "top", "y")
+		props.PaddingBottom = paddingSide(source, "bottom", "y")
+		props.PaddingLeft = paddingSide(source, "left", "x")
+		props.PaddingRight = paddingSide(source, "right", "x")
 		if source ~= value then
 			props.__CLEAN = { source }
 		end
@@ -412,7 +418,7 @@ function Layout.padding(value: Length | PaddingSides | Graph.Node<any> | (() -> 
 		props.PaddingTop, props.PaddingBottom, props.PaddingLeft, props.PaddingRight = side, side, side, side
 	end
 
-	return construct("UIPadding", props) :: any
+	return construct("UIPadding", props)
 end
 
 --[[
@@ -426,16 +432,17 @@ group; a corner named nowhere keeps the engine default.
 [Open Documentation](https://flux.kohl.gg/guide/utilities/layout#corner)
 ]]
 function Layout.corner(radius: ReactiveLength | CornerSides?): UICorner
-	if type(radius) == "table" and not isNode(radius) and (radius :: any).Offset == nil then
-		local sides = radius :: CornerSides
+	local rawRadius: any = radius
+	if type(radius) == "table" and not isNode(radius) and rawRadius.Offset == nil then
+		local sides: CornerSides = rawRadius
 		return construct("UICorner", {
 			TopLeftRadius = cornerProp(sides, "topLeft", "top", "left"),
 			TopRightRadius = cornerProp(sides, "topRight", "top", "right"),
 			BottomLeftRadius = cornerProp(sides, "bottomLeft", "bottom", "left"),
 			BottomRightRadius = cornerProp(sides, "bottomRight", "bottom", "right"),
-		}) :: any
+		})
 	end
-	return construct("UICorner", { CornerRadius = udimProp(radius) }) :: any
+	return construct("UICorner", { CornerRadius = udimProp(radius) })
 end
 
 --[[
@@ -449,7 +456,7 @@ default), and `offset` moves it out (px or a `UDim`; negative moves it in).
 [Open Documentation](https://flux.kohl.gg/guide/utilities/layout#stroke)
 ]]
 function Layout.stroke(config: StrokeConfig?): UIStroke
-	local cfg: StrokeConfig = (config or EMPTY) :: any
+	local cfg: StrokeConfig = config or EMPTY
 	return construct("UIStroke", {
 		Thickness = cfg.thickness,
 		Color = cfg.color,
@@ -460,15 +467,16 @@ function Layout.stroke(config: StrokeConfig?): UIStroke
 			then enumProp(STROKE_POSITION, cfg.position, "strokePosition", STROKE_POSITION.outer)
 			else nil,
 		BorderOffset = if cfg.offset ~= nil then udimProp(cfg.offset) else nil,
-	}) :: any
+	})
 end
 
 --[[
 Creates a [`UIAspectRatioConstraint`](https://create.roblox.com/docs/reference/engine/classes/UIAspectRatioConstraint)
-constraining a frame's width-to-height ratio. Every argument may be reactive.
-@param ratio - The aspect ratio; may be a static number or a reactive [node](https://flux.kohl.gg/guide/concepts/signals).
-@param aspectType - `"fit"` (FitWithinMaxSize) or `"scale"` (ScaleWithParentSize), or a raw [`Enum.AspectType`](https://create.roblox.com/docs/reference/engine/enums/AspectType).
-@param dominantAxis - `"width"` or `"height"`, or a raw [`Enum.DominantAxis`](https://create.roblox.com/docs/reference/engine/enums/DominantAxis); an unknown string warns and falls back.
+constraining a frame's width-to-height ratio to `ratio`. `aspectType` accepts `"fit"` (`FitWithinMaxSize`), `"scale"`
+(`ScaleWithParentSize`), or an [`Enum.AspectType`](https://create.roblox.com/docs/reference/engine/enums/AspectType);
+`dominantAxis` accepts `"width"`, `"height"`, or an
+[`Enum.DominantAxis`](https://create.roblox.com/docs/reference/engine/enums/DominantAxis) (unknown strings warn and
+fall back). Every argument may be reactive.
 
 [Open Documentation](https://flux.kohl.gg/guide/utilities/layout#aspectratio)
 ]]
@@ -481,7 +489,7 @@ function Layout.aspectRatio(
 		AspectRatio = ratio,
 		AspectType = enumProp(ASPECT_TYPE, aspectType, "aspectType", ASPECT_TYPE.fit),
 		DominantAxis = enumProp(DOMINANT_AXIS, dominantAxis, "dominantAxis", DOMINANT_AXIS.width),
-	}) :: any
+	})
 end
 
 --[[
@@ -490,15 +498,15 @@ arranges siblings in a line with flexbox semantics. `gap` is the spacing between
 [`UDim`](https://create.roblox.com/docs/reference/engine/datatypes/UDim)); `direction` is `"x"`/`"y"`.
 `align` sets the <strong>cross-axis</strong> and `justify` the <strong>main-axis</strong> value:
 `"start"`/`"center"`/`"end"` align items, `"between"`/`"around"`/`"evenly"` distribute the free space,
-and `"stretch"`/`"fill"` resize items to fill the axis. `horizontalAlign`/`verticalAlign` are explicit
-axis-pinned overrides, `wraps` flows items onto multiple lines, and `lineAlign` aligns items within
+and `"stretch"`/`"fill"` resize items to fill the axis. `horizontalAlign` and `verticalAlign` provide explicit
+axis-pinned overrides; `wraps` flows items onto multiple lines, and `lineAlign` aligns items within
 their wrapped line. <em>Every value, including `direction`, may be reactive; alignments re-route when a
 reactive `direction` flips.</em>
 
 [Open Documentation](https://flux.kohl.gg/guide/utilities/layout#list)
 ]]
 function Layout.list(config: ListConfig?): UIListLayout
-	local cfg: ListConfig = (config or EMPTY) :: any
+	local cfg: ListConfig = config or EMPTY
 	local props: Props = {
 		SortOrder = SORT_ORDER,
 		Padding = udimProp(cfg.gap),
@@ -522,12 +530,12 @@ function Layout.list(config: ListConfig?): UIListLayout
 		listAlign(cfg, direction, "x", HORIZONTAL_ALIGN, "horizontalAlign")
 	props.VerticalAlignment, props.VerticalFlex = listAlign(cfg, direction, "y", VERTICAL_ALIGN, "verticalAlign")
 
-	return construct("UIListLayout", props) :: any
+	return construct("UIListLayout", props)
 end
 
 --[[
 Creates a [`UIGridLayout`](https://create.roblox.com/docs/reference/engine/classes/UIGridLayout) that
-arranges siblings in a uniform grid. `cell` is the cell size and `gap` the spacing, each a
+arranges siblings in a uniform grid. `cell` is the cell size and `gap` is the spacing; each accepts a
 [`Vector2`](https://create.roblox.com/docs/reference/engine/datatypes/Vector2), a `number` (offset px), or a
 [`UDim2`](https://create.roblox.com/docs/reference/engine/datatypes/UDim2). `fill` is the flow direction
 `"x"`/`"y"`; `align`/`justify` map to horizontal/vertical alignment; `maxCells` caps cells per line.
@@ -536,16 +544,16 @@ arranges siblings in a uniform grid. `cell` is the cell size and `gap` the spaci
 [Open Documentation](https://flux.kohl.gg/guide/utilities/layout#grid)
 ]]
 function Layout.grid(config: GridConfig?): UIGridLayout
-	local cfg: GridConfig = (config or EMPTY) :: any
+	local cfg: GridConfig = config or EMPTY
 	return construct("UIGridLayout", {
 		SortOrder = SORT_ORDER,
-		CellSize = udim2Prop(cfg.cell),
-		CellPadding = udim2Prop(cfg.gap),
+		CellSize = reactiveProp(cfg.cell, toUDim2),
+		CellPadding = reactiveProp(cfg.gap, toUDim2),
 		FillDirectionMaxCells = cfg.maxCells,
 		FillDirection = enumProp(FILL_DIRECTION, cfg.fill, "fill", FILL_DIRECTION.x),
 		HorizontalAlignment = enumProp(HORIZONTAL_ALIGN, cfg.align, "align", HORIZONTAL_ALIGN.start),
 		VerticalAlignment = enumProp(VERTICAL_ALIGN, cfg.justify, "justify", VERTICAL_ALIGN.start),
-	}) :: any
+	})
 end
 
 --[[
@@ -566,11 +574,11 @@ function Layout.flex(mode: Reactive<FlexMode | Enum.UIFlexMode>?): UIFlexItem
 					then FLEX_MODE.fill
 					else resolveEnum(FLEX_MODE, value, "flexMode") or FLEX_MODE.none
 			end,
-		}) :: any
+		})
 	end
 	return construct("UIFlexItem", {
 		FlexMode = if mode == nil then FLEX_MODE.fill else resolveEnum(FLEX_MODE, mode, "flexMode"),
-	}) :: any
+	})
 end
 
 --[[
@@ -585,30 +593,30 @@ when it changes.</em>
 [Open Documentation](https://flux.kohl.gg/guide/utilities/layout#gradient)
 ]]
 function Layout.gradient(config: GradientConfig?): UIGradient
-	local cfg: GradientConfig = (config or EMPTY) :: any
+	local cfg: GradientConfig = config or EMPTY
 	return construct("UIGradient", {
 		Color = if cfg.color ~= nil then reactiveProp(cfg.color, toColorSequence) else nil,
 		Transparency = if cfg.transparency ~= nil then reactiveProp(cfg.transparency, toNumberSequence) else nil,
 		Rotation = cfg.rotation,
 		Offset = cfg.offset,
 		Enabled = cfg.enabled,
-	}) :: any
+	})
 end
 
 --[[
 Creates a [`UISizeConstraint`](https://create.roblox.com/docs/reference/engine/classes/UISizeConstraint) bounding its
 parent's size. `min` and `max` are whole [`Vector2`](https://create.roblox.com/docs/reference/engine/datatypes/Vector2)
 bounds; `minWidth`, `minHeight`, `maxWidth`, and `maxHeight` set a single axis and win over the matching vector
-component. An axis nothing sets stays unconstrained. <em>Every value may be reactive.</em>
+component. An axis not specified in `config` remains unconstrained. <em>Every value may be reactive.</em>
 
 [Open Documentation](https://flux.kohl.gg/guide/utilities/layout#sizeconstraint)
 ]]
 function Layout.sizeConstraint(config: SizeConstraintConfig?): UISizeConstraint
-	local cfg: SizeConstraintConfig = (config or EMPTY) :: any
+	local cfg: SizeConstraintConfig = config or EMPTY
 	return construct("UISizeConstraint", {
 		MinSize = axisPair(cfg.min, cfg.minWidth, cfg.minHeight, 0),
 		MaxSize = axisPair(cfg.max, cfg.maxWidth, cfg.maxHeight, math.huge),
-	}) :: any
+	})
 end
 
 --[[
@@ -620,11 +628,11 @@ bounding the text size of its parent to `min`/`max` pixels; an omitted bound kee
 [Open Documentation](https://flux.kohl.gg/guide/utilities/layout#textsizeconstraint)
 ]]
 function Layout.textSizeConstraint(config: TextSizeConstraintConfig?): UITextSizeConstraint
-	local cfg: TextSizeConstraintConfig = (config or EMPTY) :: any
+	local cfg: TextSizeConstraintConfig = config or EMPTY
 	return construct("UITextSizeConstraint", {
 		MinTextSize = cfg.min,
 		MaxTextSize = cfg.max,
-	}) :: any
+	})
 end
 
 return table.freeze(Layout)
