@@ -1,0 +1,86 @@
+# sert, the shared test toolkit (github.com/kohltastrophe/sert): `python3 tools/sert.py <command>`.
+#
+#   fetch                       the pinned sert package and luau into .sert/ (gitignored)
+#   run [-a ARGS]               the headless suite ([test].entries; ARGS go to test/spec.client.luau)
+#   studio [--suite core]       the suite in a fresh, unattended Studio
+#   lint / mutate               static checks, compile-time type tests, and mutation testing
+#   coverage --min 90           line coverage after `run --coverage`
+#   release check-version --package flux [--tag TAG]
+#   dist --from REV             the released tree onto the dist branch
+#
+# Work against a sert checkout: put `[override] sert = "../sert"` in sert.local.toml (gitignored).
+
+[sert]
+version = "0.1.0"
+sha256 = "f3f1366746507d1b6966438cf1ad57a3a4fb6aa60d53e43db348d2857052c24c"
+pyz_sha256 = "f25896b19148ca53b8a29be815bc6a0a9bab4889da24d05a68db1b553c41a14c"
+
+[tools]
+luau = "0.724"
+
+[test]
+entries = ["test/spec.client.luau"]
+
+[coverage]
+min = 90
+include = ["src"]
+
+[mutate]
+min = 85
+include = ["src"]
+exclude = ["src/Type"]
+
+[mutate.specs]
+"src/Async.luau" = "@file=Async"
+"src/Bind.luau" = "@file=Bind,Edit"
+"src/Clock.luau" = "@file=Clock,Async,Motion"
+"src/Compat.luau" = "@file=Clock,Motion,Edit"
+"src/Conditional.luau" = "@file=Conditional"
+"src/Edit.luau" = "@file=Edit,Bind"
+"src/Graph.luau" = "@file=Graph,Store,Conditional"
+"src/Interact.luau" = "@file=Interact"
+"src/Layout.luau" = "@file=Layout"
+"src/Motion.luau" = "@file=Motion"
+"src/Responsive.luau" = "@file=Responsive"
+"src/Store.luau" = "@file=Store"
+"src/init.luau" = "@file=Init,Edit,Bind"
+
+[lint]
+paths = ["src", "test"]
+solvers = ["new"]
+registration = { aggregator = "test/unit/init.luau", specs = "test/unit/**/*.spec.luau" }
+
+[types]
+pass = ["test/types"]
+fail = ["test/types/fail"]
+
+[release.packages.flux]
+prefix = "v"
+versions = [{ file = "wally.toml", key = "package.version" }]
+
+[dist]
+paths = ["default.project.json", "src"]
+branch = "dist"
+name = "Flux"
+package = "flux"
+
+[cloud]
+project = "test/default.project.json"
+script = "test/spec.client.luau"
+
+[studio]
+out = "build/sert"
+runner = "ReplicatedStorage/sert/roblox/Runner"
+
+[studio.suites.core]
+mode = "play"
+project = "test/default.project.json"
+config = "ReplicatedStorage/Flux.Tests"
+specs = ["test/unit/**/*.spec.luau"]
+timeout = 300
+
+[tools.sha256]
+"luau/0.724/luau-macos.zip" = "c80e152eb61d6dc07923a86cd433929eaa8736fb52e825da202dd2d4f106ec90"
+"luau/0.724/luau-ubuntu.zip" = "19be57ce53fc21dfe0099d3d763d97138c0f4562fa632da82c72cb3c19d4531a"
+"luau/0.724/luau-windows.zip" = "0840d8a56f4d924c688f4df74d79de28e32f43f2970812758ff9383a1048ee05"
+"luau-lsp/1.70.1/globalTypes.d.luau" = "2857efa8245485f8c25c19c018ee1ef9b46afab4efd2ea70fc3257cd3faf7080"

@@ -1,350 +1,58 @@
 --!nonstrict
-local IS_ROBLOX = game ~= nil
+local env = if game ~= nil
+	then require(game:GetService("ReplicatedStorage"):WaitForChild("Flux.lib"):WaitForChild("env")) :: any
+	else require("../lib/env") :: any
+local Model = if game ~= nil
+	then require(game:GetService("ReplicatedStorage"):WaitForChild("Flux.lib"):WaitForChild("Model")) :: any
+	else require("../lib/Model") :: any
+local Flux, sert, IS_ROBLOX = env.Flux, env.sert, env.IS_ROBLOX
 
-local Flux
-local sert
-if IS_ROBLOX then
-	local ReplicatedStorage = game:GetService("ReplicatedStorage")
-	Flux = require(ReplicatedStorage:WaitForChild("Flux")) :: any
-	sert = require(ReplicatedStorage:WaitForChild("sert")) :: any
-else
-	Flux = require("../../src") :: any
-	sert = require("../sert") :: any
-end
+local Enum = env.Enum
+local Vector2 = env.Vector2
+
+local SINK_NONE = Enum.InputSink.None
+local SINK_ACTIVATE = Enum.InputSink.Activate
+local SINK_ALL = Enum.InputSink.All
 
 local test = sert.test
-local rtest = sert.rtest
 local expect = sert
-local Interact = Flux.Interact
-
 local InteractModule = if IS_ROBLOX
-	then require(game:GetService("ReplicatedStorage"):WaitForChild("Flux"):WaitForChild("Interact")) :: any
+	then require((game :: any).ReplicatedStorage.Flux.Interact) :: any
 	else require("../../src/Interact") :: any
-local Compat = if IS_ROBLOX then nil else require("../../src/Compat") :: any
-local Enum = if IS_ROBLOX then Enum else Compat.Enum
-local Vector2 = if IS_ROBLOX then Vector2 else Compat.Vector2
 
 local ctest = if IS_ROBLOX and game:GetService("Players").LocalPlayer ~= nil then sert.rtest else sert.skip
 
-local function makeSignal()
-	local listeners: { [any]: boolean } = {}
-	return {
-		Connect = function(_, fn: (...any) -> ())
-			listeners[fn] = true
-			return {
-				Disconnect = function()
-					listeners[fn] = nil
-				end,
-			}
-		end,
-		Fire = function(_, ...: any)
-			for fn in table.clone(listeners) do
-				if listeners[fn] then
-					fn(...)
-				end
-			end
-		end,
-	}
-end
-
-local function makeGui(root: any, parent: any?): any
-	return {
-		Active = false,
-		InputSink = { Value = 0 },
-		Destroying = makeSignal(),
-		InputBegan = makeSignal(),
-		InputChanged = makeSignal(),
-		InputEnded = makeSignal(),
-		MouseEnter = makeSignal(),
-		MouseLeave = makeSignal(),
-		FindFirstAncestorWhichIsA = function(_, className: string)
-			return if className == "BasePlayerGui" then root else nil
-		end,
-		IsDescendantOf = function(_, ancestor: any)
-			return parent == ancestor
-		end,
-	}
-end
-
-local function makeEnv()
-	local propSignals: { [string]: any } = {
-		SelectedObject = makeSignal(),
-		MenuIsOpen = makeSignal(),
-	}
-	local env: any = {}
-	env.focusedTextBox = nil
-	env.lastInputType = Enum.UserInputType.MouseMovement
-	env.mouseLocation = Vector2.new(10, 20)
-	env.GuiService = {
-		MenuIsOpen = false,
-		SelectedObject = nil,
-		GetGuiInset = function()
-			return Vector2.new(0, 0)
-		end,
-		GetPropertyChangedSignal = function(_, prop: string)
-			return propSignals[prop]
-		end,
-	}
-	env.UserInputService = {
-		InputBegan = makeSignal(),
-		InputChanged = makeSignal(),
-		InputEnded = makeSignal(),
-		LastInputTypeChanged = makeSignal(),
-		WindowFocusReleased = makeSignal(),
-		GetFocusedTextBox = function()
-			return env.focusedTextBox
-		end,
-		GetLastInputType = function()
-			return env.lastInputType
-		end,
-		GetMouseLocation = function()
-			return env.mouseLocation
-		end,
-	}
-	env.RunService = {
-		Heartbeat = makeSignal(),
-	}
-	env.propSignals = propSignals
-	return env
-end
-
 test("interact · pointIn tests inclusive absolute bounds", function()
-	-- Pure field reads: a plain table stands in for the GuiObject headless.
-	local object = { AbsolutePosition = { X = 100, Y = 50 }, AbsoluteSize = { X = 200, Y = 100 } } :: any
-	expect(Interact.pointIn(100, 50, object) == true, "top-left corner is inside")
-	expect(Interact.pointIn(300, 150, object) == true, "bottom-right corner is inside")
-	expect(Interact.pointIn(200, 100, object) == true, "interior point is inside")
-	expect(Interact.pointIn(99, 100, object) == false, "left of bounds")
-	expect(Interact.pointIn(301, 100, object) == false, "right of bounds")
-	expect(Interact.pointIn(200, 49, object) == false, "above bounds")
-	expect(Interact.pointIn(200, 151, object) == false, "below bounds")
+	local object = { AbsolutePosition = Vector2.new(100, 50), AbsoluteSize = Vector2.new(200, 100) } :: any
+	expect(Flux.Interact.pointIn(100, 50, object) == true, "top-left corner is inside")
+	expect(Flux.Interact.pointIn(300, 150, object) == true, "bottom-right corner is inside")
+	expect(Flux.Interact.pointIn(200, 100, object) == true, "interior point is inside")
+	expect(Flux.Interact.pointIn(99, 100, object) == false, "left of bounds")
+	expect(Flux.Interact.pointIn(301, 100, object) == false, "right of bounds")
+	expect(Flux.Interact.pointIn(200, 49, object) == false, "above bounds")
+	expect(Flux.Interact.pointIn(200, 151, object) == false, "below bounds")
 end)
 
-test("interact · focused tracks TextBox focus and cleans up on Destroy or Destroying", function()
-	local isFoc = false
-	local tb: any = {
-		Focused = makeSignal(),
-		FocusLost = makeSignal(),
-		Destroying = makeSignal(),
-		IsFocused = function()
-			return isFoc
-		end,
-	}
-	local node = Interact.focused(tb)
-	expect(node() == false, "initial unfocused state")
-	tb.Focused:Fire()
-	expect(node() == true, "Focused sets true")
-	tb.FocusLost:Fire()
-	expect(node() == false, "FocusLost sets false")
+local function claimers(x: number, y: number, object: GuiObject): string
+	local player = game:GetService("Players").LocalPlayer
+	local names = {}
+	for _, gui in player.PlayerGui:GetGuiObjectsAtPosition(x, y) do
+		if gui == object then
+			break
+		elseif gui.Active or gui.InputSink.Value ~= 0 then
+			table.insert(names, gui:GetFullName())
+		end
+	end
+	return table.concat(names, ", ")
+end
 
-	tb.Focused:Fire()
-	expect(node() == true, "re-focused")
-	tb.Destroying:Fire()
-	expect(node() == false, "Destroying settles focused node to false")
-	node:Destroy()
-end)
-
-test("interact · selected tracks GuiService.SelectedObject changes and cleans up", function()
-	local env = makeEnv()
-	local root = {
-		GetGuiObjectsAtPosition = function()
-			return {}
-		end,
-	}
-	local btnA = makeGui(root)
-	local btnB = makeGui(root)
-	env.GuiService.SelectedObject = btnA
-
-	local selA = InteractModule._selectedWith(btnA, env)
-	local selB = InteractModule._selectedWith(btnB, env)
-	expect(selA() == true and selB() == false, "seeded from current SelectedObject")
-
-	env.GuiService.SelectedObject = btnB
-	env.propSignals.SelectedObject:Fire()
-	expect(selA() == false and selB() == true, "SelectedObject transition updates both nodes")
-
-	btnB.Destroying:Fire()
-	expect(selB() == false, "Destroying settles selected node to false")
-	selB:Destroy()
-	selA:Destroy()
-end)
-
-test("interact · press handles mouse, touch, gamepad/keyboard activation, occlusion, and MenuIsOpen", function()
-	local hitList: { any } = {}
-	local root = {
-		GetGuiObjectsAtPosition = function()
-			return hitList
-		end,
-	}
-	local env = makeEnv()
-	local btn = makeGui(root)
-	local blocker = makeGui(root)
-	blocker.Active = true
-	hitList = { btn }
-
-	local pressed = InteractModule._pressWith(btn, env)
-	expect(pressed() == false, "initially not pressed")
-
-	-- MouseButton1 press and release via UserInputService.InputEnded
-	local mouseInput = {
-		UserInputType = Enum.UserInputType.MouseButton1,
-		KeyCode = Enum.KeyCode.Unknown,
-		Position = { X = 10, Y = 10 },
-	}
-	btn.InputBegan:Fire(mouseInput)
-	expect(pressed() == true, "MouseButton1 begins press")
-	-- Different MouseButton1 InputObject with matching UserInputType & KeyCode also releases
-	env.UserInputService.InputEnded:Fire({
-		UserInputType = Enum.UserInputType.MouseButton1,
-		KeyCode = Enum.KeyCode.Unknown,
-	})
-	expect(pressed() == false, "MouseButton1 release ends press")
-
-	-- Blocked when an Active gui is above btn
-	hitList = { blocker, btn }
-	local tokenInput = {
-		UserInputType = Enum.UserInputType.MouseButton1,
-		KeyCode = Enum.KeyCode.Unknown,
-		Position = { X = 10, Y = 10 },
-	}
-	btn.InputBegan:Fire(tokenInput)
-	expect(pressed() == false, "press blocked when Active gui is above")
-
-	-- Gamepad/keyboard activation on SelectedObject
-	hitList = { btn }
-	env.GuiService.SelectedObject = btn
-	local keyInput = {
-		UserInputType = Enum.UserInputType.Keyboard,
-		KeyCode = Enum.KeyCode.Return,
-	}
-	env.UserInputService.InputBegan:Fire(keyInput)
-	expect(pressed() == true, "Return key activates press on SelectedObject")
-
-	-- MenuIsOpen releases an active press
-	env.GuiService.MenuIsOpen = true
-	env.propSignals.MenuIsOpen:Fire()
-	expect(pressed() == false, "MenuIsOpen releases active press")
-	env.GuiService.MenuIsOpen = false
-
-	-- Touch press only releases on the exact same Touch InputObject
-	local touch1 = {
-		UserInputType = Enum.UserInputType.Touch,
-		KeyCode = Enum.KeyCode.Unknown,
-		Position = { X = 5, Y = 5 },
-	}
-	local touch2 = {
-		UserInputType = Enum.UserInputType.Touch,
-		KeyCode = Enum.KeyCode.Unknown,
-		Position = { X = 6, Y = 6 },
-	}
-	btn.InputBegan:Fire(touch1)
-	expect(pressed() == true, "touch1 begins press")
-	env.UserInputService.InputEnded:Fire(touch2)
-	expect(pressed() == true, "different touch ending does not release touch1")
-	env.UserInputService.InputEnded:Fire(touch1)
-	expect(pressed() == false, "touch1 ending releases press")
-
-	pressed:Destroy()
-end)
-
-test("interact · hover tracks mouse, touch, within option, frame step occlusion, and focus loss", function()
-	local hitList: { any } = {}
-	local root = {
-		GetGuiObjectsAtPosition = function()
-			return hitList
-		end,
-	}
-	local env = makeEnv()
-	local card = makeGui(root)
-	local childBtn = makeGui(root, card)
-	childBtn.Active = true
-	local modal = makeGui(root)
-	modal.InputSink = { Value = 1 }
-
-	local prev = InteractModule._useHoverServices(env)
-	local hovDefault = Interact.hover(card)
-	local hovWithin = Interact.hover(card, { within = true })
-
-	-- Child button above card sinks default hover, but within=true ignores descendants
-	hitList = { childBtn, card }
-	local moveInput = {
-		UserInputType = Enum.UserInputType.MouseMovement,
-		Position = { X = 15, Y = 25 },
-	}
-	card.InputBegan:Fire(moveInput)
-	expect(hovDefault() == false, "child Active button sinks default hover")
-	expect(hovWithin() == true, "within=true stays hovered over descendant button")
-
-	-- Modal outside card covers both on Heartbeat step
-	hitList = { modal, childBtn, card }
-	env.RunService.Heartbeat:Fire()
-	expect(hovWithin() == false, "external modal covers within=true hover on Heartbeat")
-
-	-- Modal closes -> Heartbeat restores both when childBtn is inactive
-	childBtn.Active = false
-	hitList = { childBtn, card }
-	env.RunService.Heartbeat:Fire()
-	expect(hovDefault() == true and hovWithin() == true, "Heartbeat restores hover when cover leaves")
-
-	-- Card disappears from hit list on Heartbeat -> leaves hover
-	hitList = {}
-	env.RunService.Heartbeat:Fire()
-	expect(hovDefault() == false and hovWithin() == false, "disappearing from hit list leaves hover")
-
-	-- MouseEnter + Heartbeat + WindowFocusReleased
-	hitList = { card }
-	card.MouseEnter:Fire()
-	env.RunService.Heartbeat:Fire()
-	expect(hovDefault() == true, "MouseEnter + Heartbeat enters hover")
-	env.UserInputService.WindowFocusReleased:Fire()
-	expect(hovDefault() == false, "WindowFocusReleased clears mouse hover")
-
-	-- MouseEnter + LastInputTypeChanged to Gamepad1 clears mouse hover
-	card.MouseEnter:Fire()
-	env.RunService.Heartbeat:Fire()
-	expect(hovDefault() == true, "re-entered hover")
-	env.UserInputService.LastInputTypeChanged:Fire({ Name = "Gamepad1" })
-	expect(hovDefault() == false, "switching to Gamepad clears mouse hover")
-
-	-- Touch hover and MenuIsOpen clearing touch
-	local touchInput = {
-		UserInputType = Enum.UserInputType.Touch,
-		Position = { X = 15, Y = 25 },
-	}
-	card.InputBegan:Fire(touchInput)
-	expect(hovDefault() == true, "touch begins hover")
-	env.UserInputService.InputEnded:Fire(touchInput)
-	expect(hovDefault() == false, "touch InputEnded settles touch hover")
-
-	card.InputBegan:Fire(touchInput)
-	expect(hovDefault() == true, "touch begins hover again")
-	env.GuiService.MenuIsOpen = true
-	env.RunService.Heartbeat:Fire()
-	expect(hovDefault() == false, "MenuIsOpen on Heartbeat clears touch and mouse hover")
-	env.GuiService.MenuIsOpen = false
-
-	-- MouseLeave
-	card.InputBegan:Fire(moveInput)
-	expect(hovDefault() == true, "mouse move enters")
-	card.MouseLeave:Fire()
-	expect(hovDefault() == false, "MouseLeave clears hover")
-
-	hovDefault:Destroy()
-	hovWithin:Destroy()
-	InteractModule._useHoverServices(prev)
-end)
-
-rtest("interact · sunk and covered yield false outside a player gui", function()
-	-- No BasePlayerGui ancestor (a bare tree, a SurfaceGui in workspace, a plugin
-	-- dock): nothing can claim the point, so the walk is skipped entirely.
-	local orphan = Flux.new("Frame")({ Size = UDim2.fromOffset(100, 100) })
-	expect(Interact.sunk(0, 0, orphan) == false, "an object outside a player gui is never sunk")
-	expect(Interact.covered(0, 0, orphan) == false, "an object outside a player gui is never covered")
-	orphan:Destroy()
-end)
+local function render()
+	local run = game:GetService("RunService")
+	run.RenderStepped:Wait()
+	run.Heartbeat:Wait()
+end
 
 ctest("interact · sunk detects an input-claiming gui above the object", function()
-	local run = game:GetService("RunService")
 	local player = game:GetService("Players").LocalPlayer
 	local gui = Flux.new("ScreenGui")({
 		DisplayOrder = 1000,
@@ -358,21 +66,1077 @@ ctest("interact · sunk detects an input-claiming gui above the object", functio
 		Parent = gui,
 		Position = position,
 		Size = UDim2.fromOffset(100, 100),
-		Active = true,
+		InputSink = SINK_ALL,
 		ZIndex = 2,
 	})
 
-	run.RenderStepped:Wait()
-	run.Heartbeat:Wait()
+	render()
 	local corner = under.AbsolutePosition
 	local x, y = corner.X + 10, corner.Y + 10
-	expect(Interact.sunk(x, y, under) == true, "an Active frame above sinks the point")
+	expect(
+		Flux.Interact.sunk(x, y, under) == true,
+		`an All sink above sinks the point (at {x}, {y}; claimed by {claimers(x, y, under)})`
+	)
 
-	over.Active = false
-	expect(Interact.sunk(x, y, under) == false, "an inactive frame above does not sink")
-	expect(Interact.sunk(x, y, over) == false, "the topmost gui itself is never sunk")
+	over.InputSink = SINK_NONE
+	expect(
+		Flux.Interact.sunk(x, y, under) == false,
+		`an None sink above does not sink (claimed by {claimers(x, y, under)})`
+	)
+	expect(Flux.Interact.sunk(x, y, over) == false, "the topmost gui itself is never sunk")
+
+	local button = Instance.new("TextButton")
+	button.Parent = gui
+	button.Position = position
+	button.Size = under.Size
+	button.ZIndex = 3
+	render()
+	expect.eq(Flux.Interact.sunk(x, y, under), true, "a native button (Activate by default) claims the press")
+	button.InputSink = Enum.InputSink.None
+	button.Active = false
+	expect.eq(
+		Flux.Interact.sunk(x, y, under),
+		false,
+		"a decorative native button with None permits the underlying control"
+	)
+	button.InputSink = Enum.InputSink.All
+	expect.eq(Flux.Interact.sunk(x, y, under), true, "the native All button claims the point")
 
 	gui:Destroy()
+end)
+
+ctest("interact · covered ignores the object's own buttons and hears only what is on top of it", function()
+	local player = game:GetService("Players").LocalPlayer
+	local gui = Flux.new("ScreenGui")({
+		DisplayOrder = 1000,
+		ScreenInsets = Enum.ScreenInsets.None,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+		Parent = player:WaitForChild("PlayerGui"),
+	})
+	local position = UDim2.new(0.5, -50, 0.5, -50)
+	local list = Flux.new("Frame")({ Parent = gui, Position = position, Size = UDim2.fromOffset(100, 100) })
+	Flux.new("TextButton")({ Parent = list, Size = UDim2.fromScale(1, 1), Text = "" })
+	render()
+	local corner = list.AbsolutePosition
+	local x, y = corner.X + 10, corner.Y + 10
+	expect(
+		Flux.Interact.sunk(x, y, list) == true,
+		`its own row sinks the point for sunk (at {x}, {y}; claimed by {claimers(x, y, list)})`
+	)
+	expect(Flux.Interact.covered(x, y, list) == false, `but doesn't cover it (claimed by {claimers(x, y, list)})`)
+
+	local panel = Flux.new("Frame")({
+		Parent = gui,
+		Position = position,
+		Size = UDim2.fromOffset(100, 100),
+		InputSink = SINK_ALL,
+		ZIndex = 5,
+	})
+	render()
+	expect(Flux.Interact.covered(x, y, list) == true, "a panel on top covers it")
+	panel.InputSink = SINK_NONE
+	expect(Flux.Interact.covered(x, y, list) == false, "unless the panel doesn't claim input")
+
+	gui:Destroy()
+end)
+
+local virtualInput
+if IS_ROBLOX and game:GetService("Players").LocalPlayer ~= nil then
+	local ok, result = pcall(function()
+		return game:GetService("UserInputService"):CreateVirtualInput()
+	end)
+	if ok and result ~= nil then
+		local gui = Instance.new("ScreenGui")
+		gui.Name = "VirtualInputCalibration"
+		gui.DisplayOrder = 1000000
+		gui.ScreenInsets = Enum.ScreenInsets.None
+		gui.Parent = game:GetService("Players").LocalPlayer.PlayerGui
+		local button = Instance.new("TextButton")
+		button.Size = UDim2.fromOffset(160, 100)
+		button.Position = UDim2.new(0.5, -80, 0.5, -50)
+		button.InputSink = Enum.InputSink.Activate
+		button.Parent = gui
+		local began, entered, activated = 0, 0, 0
+		button.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 then
+				began += 1
+			end
+		end)
+		button.MouseEnter:Connect(function()
+			entered += 1
+		end)
+		button.Activated:Connect(function()
+			activated += 1
+		end)
+		local delivered = pcall(function()
+			task.wait(0.1)
+			local at = button.AbsolutePosition + Vector2.new(32, 32) + game:GetService("GuiService"):GetGuiInset()
+			result:SendMousePosition(at)
+			result:SendMouseButton(at, Enum.UserInputType.MouseButton1, true)
+			task.wait(0.05)
+			result:SendMouseButton(at, Enum.UserInputType.MouseButton1, false)
+			task.wait(0.05)
+		end)
+		gui:Destroy()
+		if delivered and began > 0 and entered > 0 and activated > 0 then
+			virtualInput = result
+		else
+			print(
+				`[InputSink-native] SKIPPED: uncovered virtual-input calibration not delivered (began={began}, entered={entered}, activated={activated})`
+			)
+		end
+	else
+		print("[InputSink-native] SKIPPED: public virtual input unavailable")
+	end
+end
+local pointerTest = if virtualInput ~= nil then ctest else sert.skip
+pointerTest("interact · native InputSink None Activate All and release outside bounds", function()
+	local playerGui = game:GetService("Players").LocalPlayer.PlayerGui
+	local gui = Instance.new("ScreenGui")
+	gui.Name = "InputSinkRegression"
+	gui.DisplayOrder = 1000000
+	gui.ResetOnSpawn = false
+	gui.ScreenInsets = Enum.ScreenInsets.None
+	gui.Parent = playerGui
+	local button = Instance.new("TextButton")
+	button.Size = UDim2.fromOffset(160, 100)
+	button.Position = UDim2.new(0.5, -80, 0.5, -50)
+	button.InputSink = Enum.InputSink.Activate
+	button.Parent = gui
+	local cover = Instance.new("Frame")
+	cover.Size = button.Size
+	cover.Position = button.Position
+	cover.ZIndex = 2
+	cover.Parent = gui
+	local hovering, pressing
+	local scope = Flux.scope(function()
+		hovering = Flux.Interact.hover(button)
+		pressing = Flux.Interact.press(button)
+	end)
+	local began, entered, activated = 0, 0, 0
+	button.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+			began += 1
+		end
+	end)
+	button.MouseEnter:Connect(function()
+		entered += 1
+	end)
+	button.Activated:Connect(function()
+		activated += 1
+	end)
+	local ok, failure = pcall(function()
+		task.wait(0.1)
+		local at = button.AbsolutePosition + Vector2.new(32, 32) + game:GetService("GuiService"):GetGuiInset()
+		for _, sink in { Enum.InputSink.All, Enum.InputSink.Activate } do
+			cover.InputSink = sink
+			virtualInput:SendMousePosition(at)
+			task.wait(0.1)
+			Flux.flush()
+			expect.eq(hovering:peek(), false, `{sink.Name} cover suppresses Flux hover`)
+			virtualInput:SendMouseButton(at, Enum.UserInputType.MouseButton1, true)
+			task.wait(0.05)
+			Flux.flush()
+			expect.eq(pressing:peek(), false, `{sink.Name} cover suppresses Flux press`)
+			virtualInput:SendMouseButton(at, Enum.UserInputType.MouseButton1, false)
+			task.wait(0.05)
+		end
+		cover.InputSink = Enum.InputSink.None
+		virtualInput:SendMousePosition(at + Vector2.new(180, 0))
+		task.wait(0.05)
+		virtualInput:SendMousePosition(at)
+		task.wait(0.1)
+		Flux.flush()
+		expect.eq(hovering:peek(), true, "None decoration permits hover")
+		virtualInput:SendMouseButton(at, Enum.UserInputType.MouseButton1, true)
+		task.wait(0.05)
+		Flux.flush()
+		expect.eq(pressing:peek(), true, "None decoration permits a press")
+		local outside = at + Vector2.new(180, 0)
+		virtualInput:SendMousePosition(outside)
+		task.wait(0.05)
+		virtualInput:SendMouseButton(outside, Enum.UserInputType.MouseButton1, false)
+		task.wait(0.05)
+		Flux.flush()
+		expect.eq(pressing:peek(), false, "release outside the button settles the press")
+	end)
+	scope:Destroy()
+	gui:Destroy()
+	if not ok then
+		error(failure, 0)
+	end
+end)
+
+local function fakeSignal()
+	local slots = {}
+	local fake = {}
+	function fake:Connect(fn)
+		local slot = { fn = fn }
+		table.insert(slots, slot)
+		return {
+			Disconnect = function()
+				slot.fn = nil
+			end,
+		}
+	end
+	function fake:Fire(...)
+		for _, slot in table.clone(slots) do
+			if slot.fn then
+				slot.fn(...)
+			end
+		end
+	end
+	function fake:listeners()
+		local count = 0
+		for _, slot in slots do
+			if slot.fn then
+				count += 1
+			end
+		end
+		return count
+	end
+	return fake
+end
+
+local function fakeGui(cover)
+	local gui = {
+		InputBegan = fakeSignal(),
+		InputChanged = fakeSignal(),
+		InputEnded = fakeSignal(),
+		Destroying = fakeSignal(),
+		Focused = fakeSignal(),
+		FocusLost = fakeSignal(),
+	}
+	local root = {}
+	function root:GetGuiObjectsAtPosition()
+		return { cover, gui }
+	end
+	function gui:FindFirstAncestorWhichIsA()
+		return if cover then root else nil
+	end
+	function gui:IsFocused()
+		return false
+	end
+	return gui
+end
+
+local function fakeCover()
+	return {
+		InputSink = SINK_ALL,
+		IsA = function()
+			return false
+		end,
+	}
+end
+
+test("interact · InputSink controls claiming, descendants and decorative buttons", function()
+	expect.eq(Flux.Interact.sunk(0, 0, fakeGui()), false, "an object outside a player gui is never sunk")
+	local over = fakeCover()
+	local under = fakeGui(over)
+	over.InputSink = SINK_NONE
+	expect.eq(Flux.Interact.sunk(10, 10, under), false, "explicit None does not claim")
+	over.InputSink = SINK_ACTIVATE
+	expect.eq(Flux.Interact.sunk(10, 10, under), true, "Activate claims the press without a boolean Active flag")
+	over.IsDescendantOf = function(_, object)
+		return object == under
+	end
+	expect.eq(Flux.Interact.covered(10, 10, under), false, "the container permits its descendant control")
+	over.InputSink = SINK_ALL
+	over.IsDescendantOf = function()
+		return false
+	end
+	expect.eq(Flux.Interact.covered(10, 10, under), true, "an unrelated All sink covers the container")
+	over.InputSink = SINK_NONE
+	over.IsA = function(_, class)
+		return class == "GuiButton"
+	end
+	expect.eq(Flux.Interact.sunk(10, 10, under), false, "a decorative button explicitly permits input")
+	over.IsA = function()
+		return false
+	end
+	over.Active = true
+	expect.eq(Flux.Interact.sunk(10, 10, under), true, "an Active gui claims with InputSink None")
+	expect.eq(Flux.Interact.covered(10, 10, under), true, "and covers a container it isn't inside")
+end)
+
+local function fakeServices()
+	local selectionChanged = fakeSignal()
+	local menuChanged = fakeSignal()
+	local guiService = { MenuIsOpen = false }
+	function guiService:GetPropertyChangedSignal(property)
+		return if property == "MenuIsOpen" then menuChanged else selectionChanged
+	end
+	local userInputService = { InputBegan = fakeSignal(), InputEnded = fakeSignal(), focusedTextBox = nil }
+	function userInputService:GetFocusedTextBox()
+		return self.focusedTextBox
+	end
+	return {
+		GuiService = guiService,
+		UserInputService = userInputService,
+		selectionChanged = selectionChanged,
+		menuChanged = menuChanged,
+	}
+end
+
+local MOUSE_MOVEMENT = Enum.UserInputType.MouseMovement
+local MOUSE_BUTTON1 = Enum.UserInputType.MouseButton1
+local TOUCH = Enum.UserInputType.Touch
+local GAMEPAD1 = Enum.UserInputType.Gamepad1
+local BUTTON_A = Enum.KeyCode.ButtonA
+local BUTTON_B = Enum.KeyCode.ButtonB
+local UNKNOWN_KEY = Enum.KeyCode.Unknown
+
+local function fakeInput(kind, keyCode)
+	return { UserInputType = kind, KeyCode = keyCode or UNKNOWN_KEY, Position = Vector2.new(5, 5) }
+end
+
+test("interact · hover follows the pointer in and out", function()
+	local gui = fakeGui()
+	local hovering = Flux.Interact.hover(gui)
+	expect(hovering:get() == false, "starts unhovered")
+
+	gui.InputBegan:Fire(fakeInput(MOUSE_MOVEMENT))
+	expect(hovering:get() == true, "the pointer entering hovers")
+	gui.InputEnded:Fire(fakeInput(MOUSE_MOVEMENT))
+	expect(hovering:get() == false, "the pointer leaving unhovers")
+
+	local touch = fakeInput(TOUCH)
+	gui.InputChanged:Fire(touch)
+	expect(hovering:get() == true, "a touch contact moving over the object hovers")
+	gui.InputEnded:Fire(touch)
+	expect(hovering:get() == false, "lifting the touch unhovers")
+
+	gui.InputBegan:Fire(fakeInput(MOUSE_BUTTON1))
+	expect(hovering:get() == false, "a button press is not hover")
+	hovering:Destroy()
+end)
+
+test("interact · hover drops while an input-claiming gui covers the object", function()
+	local cover = fakeCover()
+	local gui = fakeGui(cover)
+	local hovering = Flux.Interact.hover(gui)
+
+	gui.InputChanged:Fire(fakeInput(MOUSE_MOVEMENT))
+	expect(hovering:get() == false, "an Active gui above claims the pointer")
+	cover.InputSink = SINK_NONE
+	gui.InputChanged:Fire(fakeInput(MOUSE_MOVEMENT))
+	expect(hovering:get() == true, "the pointer reaches the object once the cover stops sinking input")
+	cover.InputSink = SINK_ALL
+	gui.InputChanged:Fire(fakeInput(MOUSE_MOVEMENT))
+	expect(hovering:get() == false, "a cover arriving mid-hover drops it on the next move")
+	hovering:Destroy()
+end)
+
+local function hoverWorld()
+	local world = { at = {} }
+	local root = { queries = 0 }
+	function root:GetGuiObjectsAtPosition(x, y)
+		root.queries += 1
+		return world.at(x, y)
+	end
+	local lastInput = MOUSE_MOVEMENT
+	world.root = root
+	world.env = {
+		GuiService = { MenuIsOpen = false },
+		UserInputService = {
+			InputChanged = fakeSignal(),
+			InputEnded = fakeSignal(),
+			LastInputTypeChanged = fakeSignal(),
+			WindowFocusReleased = fakeSignal(),
+			GetLastInputType = function()
+				return lastInput
+			end,
+		},
+		RunService = { Heartbeat = fakeSignal() },
+	}
+	function world.input(kind)
+		lastInput = kind
+		world.env.UserInputService.LastInputTypeChanged:Fire(kind)
+	end
+	function world.gui(parent)
+		local gui = fakeGui()
+		gui.MouseEnter = fakeSignal()
+		gui.MouseLeave = fakeSignal()
+		gui.InputSink = SINK_NONE
+		function gui:FindFirstAncestorWhichIsA()
+			return root
+		end
+		function gui:IsA()
+			return false
+		end
+		function gui:IsDescendantOf(other)
+			return parent ~= nil and (parent == other or parent:IsDescendantOf(other))
+		end
+		return gui
+	end
+	function world.frame()
+		world.env.RunService.Heartbeat:Fire(1 / 60)
+	end
+	function world.listening()
+		local uis = world.env.UserInputService
+		return world.env.RunService.Heartbeat:listeners()
+			+ uis.InputChanged:listeners()
+			+ uis.InputEnded:listeners()
+			+ uis.LastInputTypeChanged:listeners()
+			+ uis.WindowFocusReleased:listeners()
+	end
+	return world
+end
+
+local function moveAt(x, y)
+	local move = fakeInput(MOUSE_MOVEMENT)
+	move.Position = Vector2.new(x, y)
+	return move
+end
+
+test("interact · a menu over a hovered card unhovers it on the next frame, and closing it hovers it again", function()
+	local world = hoverWorld()
+	local card = world.gui()
+	local row = world.gui()
+	row.InputSink = SINK_ALL
+	local menuOpen = false
+	world.at = function(x)
+		return if menuOpen and x >= 50 then { row, card } else { card }
+	end
+	local hovering = InteractModule._hoverWith(card, world.env)
+	expect(world.listening() == 0, "nothing listens globally while nothing is hovered")
+
+	card.InputChanged:Fire(moveAt(60, 10))
+	expect(hovering:get() == true, "the pointer on the card hovers it")
+	expect(world.listening() > 0, "and the tracker steps each frame while it is")
+
+	menuOpen = true
+	world.frame()
+	expect(hovering:get() == false, "a menu opening under a still pointer unhovers the card on the next frame")
+	menuOpen = false
+	world.frame()
+	expect(hovering:get() == true, "and closing it with the pointer still there hovers it again")
+
+	menuOpen = true
+	world.env.UserInputService.InputChanged:Fire(moveAt(20, 10))
+	world.frame()
+	expect(hovering:get() == true, "on the card's uncovered half it stays hovered")
+	world.env.UserInputService.InputChanged:Fire(moveAt(70, 10))
+	world.frame()
+	expect(hovering:get() == false, "moving onto the menu inside the card's bounds unhovers it")
+
+	world.at = function()
+		return {}
+	end
+	world.frame()
+	expect(hovering:get() == false, "a scroll or hide that takes the card from under the pointer unhovers it")
+	expect(world.listening() == 0, "and the tracker stops once nothing is under the pointer")
+	hovering:Destroy()
+end)
+
+test("interact · hover asks one hit test per frame, however many objects are hovered", function()
+	local world = hoverWorld()
+	local outer = world.gui()
+	local inner = world.gui(outer)
+	world.at = function()
+		return { inner, outer }
+	end
+	local outerHover = InteractModule._hoverWith(outer, world.env, { within = true })
+	local innerHover = InteractModule._hoverWith(inner, world.env)
+	outer.InputChanged:Fire(moveAt(5, 5))
+	inner.InputChanged:Fire(moveAt(5, 5))
+	local before = world.root.queries
+	world.frame()
+	expect(world.root.queries - before == 1, "two hovered objects, one query a frame")
+	expect(outerHover:get() and innerHover:get(), "and both are hovered")
+	outerHover:Destroy()
+	innerHover:Destroy()
+	expect(world.listening() == 0, "destroying the last hover disconnects the tracker")
+end)
+
+test("interact · with within, only a gui outside the object covers it", function()
+	local world = hoverWorld()
+	local rowArea = world.gui()
+	local button = world.gui(rowArea)
+	button.InputSink = SINK_ALL
+	local panel = world.gui()
+	panel.InputSink = SINK_ALL
+	local above = { button, rowArea }
+	world.at = function()
+		return above
+	end
+	local prev = InteractModule._useHoverServices(world.env)
+	local within = Flux.Interact.hover(rowArea, { within = true })
+	local plain = Flux.Interact.hover(rowArea)
+	rowArea.InputChanged:Fire(moveAt(5, 5))
+	world.frame()
+	expect(within:get() == true, "its own button doesn't cover it with within")
+	expect(plain:get() == false, "but does without")
+	above = { panel, button, rowArea }
+	world.frame()
+	expect(within:get() == false, "a panel on top covers it either way")
+	within:Destroy()
+	plain:Destroy()
+	InteractModule._useHoverServices(prev)
+end)
+
+test("interact · hover under a cover joins on enter and lights when the cover goes, the pointer still", function()
+	local world = hoverWorld()
+	local card = world.gui()
+	local sheet = world.gui()
+	sheet.InputSink = SINK_ALL
+	local open = true
+	world.at = function()
+		return if open then { sheet, card } else { card }
+	end
+	local hovering = InteractModule._hoverWith(card, world.env)
+	card.MouseEnter:Fire(5, 5)
+	world.env.UserInputService.InputChanged:Fire(moveAt(5, 5))
+	world.frame()
+	expect(hovering:get() == false, "entering under a sheet doesn't hover")
+	open = false
+	world.frame()
+	expect(hovering:get() == true, "the sheet closing does")
+	world.env.GuiService.MenuIsOpen = true
+	world.frame()
+	expect(hovering:get() == false, "nothing is hovered under the Roblox menu")
+	world.env.GuiService.MenuIsOpen = false
+	world.frame()
+	expect(hovering:get() == true)
+	card.MouseLeave:Fire(0, 0)
+	expect(hovering:get() == false, "leaving unhovers at once")
+	expect(world.listening() == 0)
+	hovering:Destroy()
+end)
+
+test("interact · the native menu releases touch hover without a mouse position", function()
+	local world = hoverWorld()
+	local card = world.gui()
+	world.at = function()
+		return { card }
+	end
+	local hovering = InteractModule._hoverWith(card, world.env)
+	card.InputBegan:Fire(fakeInput(TOUCH))
+	expect.eq(hovering:get(), true)
+	world.env.GuiService.MenuIsOpen = true
+	world.frame()
+	expect.eq(hovering:get(), false, "opening the system menu releases held touch hover")
+	expect.eq(world.listening(), 0, "the touch tracker disconnects while the system menu owns input")
+	card.InputBegan:Fire(fakeInput(TOUCH))
+	expect.eq(hovering:get(), false, "the system menu keeps fresh touches")
+	world.env.GuiService.MenuIsOpen = false
+	card.InputBegan:Fire(fakeInput(TOUCH))
+	expect.eq(hovering:get(), true, "a fresh contact works after the menu closes")
+	hovering:Destroy()
+end)
+
+test("interact · touch and gamepad leave no hover behind", function()
+	local world = hoverWorld()
+	local card = world.gui()
+	world.at = function()
+		return { card }
+	end
+	local hovering = InteractModule._hoverWith(card, world.env)
+
+	local touch = fakeInput(TOUCH)
+	card.InputBegan:Fire(touch)
+	expect(hovering:get() == true, "a touch contact on the card hovers it")
+	world.env.UserInputService.InputEnded:Fire(touch)
+	expect(hovering:get() == false, "lifting it anywhere, not only on the card, unhovers it")
+	expect(world.listening() == 0)
+
+	card.InputChanged:Fire(moveAt(5, 5))
+	expect(hovering:get() == true)
+	world.input(TOUCH)
+	expect(hovering:get() == false, "a touch taking over from the mouse unhovers what the mouse hovered")
+	world.input(MOUSE_MOVEMENT)
+	card.InputChanged:Fire(moveAt(5, 5))
+	world.input(GAMEPAD1)
+	expect(hovering:get() == false, "and so does a gamepad")
+	world.input(MOUSE_MOVEMENT)
+	card.MouseEnter:Fire(5, 5)
+	card.InputChanged:Fire(moveAt(5, 5))
+	world.env.UserInputService.WindowFocusReleased:Fire()
+	expect(hovering:get() == false, "and the window losing focus")
+	world.input(TOUCH)
+	card.MouseEnter:Fire(5, 5)
+	expect(world.listening() == 0, "an enter the engine sends for a tap doesn't start the tracker")
+	hovering:Destroy()
+end)
+
+test("interact · press holds until that input ends, wherever it is released", function()
+	local env = fakeServices()
+	local gui = fakeGui()
+	local pressed = InteractModule._pressWith(gui, env)
+	local ended = env.UserInputService.InputEnded
+
+	local click = fakeInput(MOUSE_BUTTON1)
+	gui.InputBegan:Fire(click)
+	expect(pressed:get() == true, "a mouse press on the object presses it")
+	expect(ended:listeners() == 1, "the release is watched while held")
+
+	ended:Fire(fakeInput(TOUCH))
+	expect(pressed:get() == true, "an unrelated input ending does not release")
+	ended:Fire(click)
+	expect(pressed:get() == false, "the same input ending anywhere releases")
+	expect(ended:listeners() == 0, "the release listener is dropped")
+
+	gui.InputBegan:Fire(fakeInput(MOUSE_MOVEMENT))
+	expect(pressed:get() == false, "pointer movement never presses")
+	pressed:Destroy()
+end)
+
+test("interact · press follows the first touch only", function()
+	local env = fakeServices()
+	local gui = fakeGui()
+	local pressed = InteractModule._pressWith(gui, env)
+
+	local first, second = fakeInput(TOUCH), fakeInput(TOUCH)
+	gui.InputBegan:Fire(first)
+	gui.InputBegan:Fire(second)
+	env.UserInputService.InputEnded:Fire(second)
+	expect(pressed:get() == true, "lifting another finger keeps the press")
+	env.UserInputService.InputEnded:Fire(first)
+	expect(pressed:get() == false, "lifting the pressing finger releases")
+	pressed:Destroy()
+end)
+
+test("interact · the native Roblox menu releases contact and keeps activation", function()
+	local env = fakeServices()
+	local gui = fakeGui()
+	local pressed = InteractModule._pressWith(gui, env)
+	local input = fakeInput(MOUSE_BUTTON1)
+	gui.InputBegan:Fire(input)
+	expect.eq(pressed:get(), true)
+	env.GuiService.MenuIsOpen = true
+	env.menuChanged:Fire()
+	expect.eq(pressed:get(), false, "opening the native menu releases an existing contact")
+	gui.InputBegan:Fire(fakeInput(MOUSE_BUTTON1))
+	expect.eq(pressed:get(), false, "pointer presses cannot reach the dashboard under the menu")
+	env.GuiService.SelectedObject = gui
+	env.UserInputService.InputBegan:Fire(fakeInput(GAMEPAD1, BUTTON_A))
+	expect.eq(pressed:get(), false, "the native menu keeps gamepad activation")
+	env.GuiService.MenuIsOpen = false
+	env.menuChanged:Fire()
+	gui.InputBegan:Fire(input)
+	expect.eq(pressed:get(), true, "a new contact works once the menu closes")
+	pressed:Destroy()
+	expect.eq(env.menuChanged:listeners(), 0, "the native menu is watched only while a contact is held")
+end)
+
+test("interact · press activates the gamepad-selected object", function()
+	local env = fakeServices()
+	local gui = fakeGui()
+	local pressed = InteractModule._pressWith(gui, env)
+
+	local buttonA = fakeInput(GAMEPAD1, BUTTON_A)
+	env.UserInputService.InputBegan:Fire(buttonA)
+	expect(pressed:get() == false, "ButtonA does nothing unless the object is selected")
+
+	env.GuiService.SelectedObject = gui
+	env.UserInputService.InputBegan:Fire(fakeInput(GAMEPAD1, BUTTON_B))
+	expect(pressed:get() == false, "other buttons do not activate")
+	env.UserInputService.InputBegan:Fire(buttonA)
+	expect(pressed:get() == true, "ButtonA presses the selected object")
+	env.UserInputService.InputEnded:Fire(fakeInput(GAMEPAD1, BUTTON_A))
+	expect(pressed:get() == false, "releasing ButtonA releases, even on a fresh InputObject")
+
+	env.UserInputService.focusedTextBox = {}
+	env.UserInputService.InputBegan:Fire(buttonA)
+	expect(pressed:get() == false, "while a text box has focus the key is its own, not the selected object's")
+	env.UserInputService.focusedTextBox = nil
+	pressed:Destroy()
+end)
+
+test("interact · press ignores a press claimed by a gui above", function()
+	local env = fakeServices()
+	local gui = fakeGui(fakeCover())
+	local pressed = InteractModule._pressWith(gui, env)
+	gui.InputBegan:Fire(fakeInput(MOUSE_BUTTON1))
+	expect(pressed:get() == false, "a covered object is not pressed")
+	expect(env.UserInputService.InputEnded:listeners() == 0, "and no release is watched")
+	pressed:Destroy()
+end)
+
+test("interact · selected follows GuiService.SelectedObject", function()
+	local env = fakeServices()
+	local a, b = fakeGui(), fakeGui()
+	env.GuiService.SelectedObject = a
+	local aSelected = InteractModule._selectedWith(a, env)
+	local bSelected = InteractModule._selectedWith(b, env)
+	expect(aSelected:get() == true and bSelected:get() == false, "seeded from the current selection")
+
+	env.GuiService.SelectedObject = b
+	env.selectionChanged:Fire()
+	expect(aSelected:get() == false and bSelected:get() == true, "the selection moves between objects")
+	aSelected:Destroy()
+	bSelected:Destroy()
+end)
+
+test("interact · every press and selection share one engine listener each", function()
+	local env = fakeServices()
+	local a, b, c = fakeGui(), fakeGui(), fakeGui()
+	local presses =
+		{ InteractModule._pressWith(a, env), InteractModule._pressWith(b, env), InteractModule._pressWith(c, env) }
+	local selections = {
+		InteractModule._selectedWith(a, env),
+		InteractModule._selectedWith(b, env),
+		InteractModule._selectedWith(c, env),
+	}
+	env.GuiService.SelectedObject = b
+	env.selectionChanged:Fire()
+	env.UserInputService.InputBegan:Fire(fakeInput(GAMEPAD1, BUTTON_A))
+	expect(presses[2]:get() == true, "ButtonA presses the selected object")
+	expect(presses[1]:get() == false and presses[3]:get() == false, "and nothing else")
+	env.UserInputService.InputEnded:Fire(fakeInput(GAMEPAD1, BUTTON_A))
+
+	env.GuiService.SelectedObject = c
+	env.selectionChanged:Fire()
+	expect(selections[2]:get() == false and selections[3]:get() == true, "a selection change flips the two it concerns")
+	expect(selections[1]:get() == false, "one it never touched stays as it was")
+
+	presses[1]:Destroy()
+	presses[2]:Destroy()
+	env.UserInputService.InputBegan:Fire(fakeInput(GAMEPAD1, BUTTON_A))
+	expect(presses[3]:get() == true, "the listener stays while any press remains")
+	env.UserInputService.InputEnded:Fire(fakeInput(GAMEPAD1, BUTTON_A))
+	presses[3]:Destroy()
+	expect(env.UserInputService.InputBegan:listeners() == 0, "the last press takes the InputBegan listener with it")
+	for _, node in selections do
+		node:Destroy()
+	end
+	expect(env.selectionChanged:listeners() == 0, "the last selection takes the SelectedObject listener with it")
+end)
+
+test("interact · two states on one object both hear it, and destroying one leaves the rest listening", function()
+	local env = fakeServices()
+	local gui = fakeGui()
+	local first = InteractModule._pressWith(gui, env)
+	local second = InteractModule._pressWith(gui, env)
+	env.GuiService.SelectedObject = gui
+	env.UserInputService.InputBegan:Fire(fakeInput(GAMEPAD1, BUTTON_A))
+	expect(first:get() == true and second:get() == true, "a tooltip's press and the control's both press")
+	env.UserInputService.InputEnded:Fire(fakeInput(GAMEPAD1, BUTTON_A))
+
+	local a, b = fakeGui(), fakeGui()
+	local aSelected = InteractModule._selectedWith(a, env)
+	local bSelected = InteractModule._selectedWith(b, env)
+	local reaction = Flux.effect(function()
+		if aSelected:get() then
+			bSelected:Destroy()
+		end
+	end)
+	env.GuiService.SelectedObject = a
+	env.selectionChanged:Fire()
+	Flux.flush()
+	expect(aSelected:get() == true and bSelected:peek() == nil, "the selection lands and b's state is gone")
+	env.GuiService.SelectedObject = b
+	env.selectionChanged:Fire()
+	expect(aSelected:get() == false, "a still hears the selection leave it")
+	reaction:Destroy()
+	aSelected:Destroy()
+	first:Destroy()
+	second:Destroy()
+end)
+
+test("interact · hover, press and selected on one services table keep separate listeners", function()
+	local world = hoverWorld()
+	local env = world.env
+	local services = fakeServices()
+	env.UserInputService.InputBegan = services.UserInputService.InputBegan
+	env.UserInputService.GetFocusedTextBox = function()
+		return nil
+	end
+	env.GuiService.GetPropertyChangedSignal = services.GuiService.GetPropertyChangedSignal
+	local card = world.gui()
+	world.at = function()
+		return { card }
+	end
+	local hovering = InteractModule._hoverWith(card, env)
+	local pressed = InteractModule._pressWith(card, env)
+	local isSelected = InteractModule._selectedWith(card, env)
+	card.InputChanged:Fire(moveAt(5, 5))
+	expect(hovering:get() == true and world.listening() > 0, "the hover tracker runs")
+	expect(env.UserInputService.InputBegan:listeners() > 0, "beside the activate listener")
+	expect(services.selectionChanged:listeners() > 0, "and the selection listener")
+
+	pressed:Destroy()
+	expect(env.UserInputService.InputBegan:listeners() == 0, "dropping the press drops only the activate listener")
+	expect(world.listening() > 0 and hovering:get() == true, "the hover goes on")
+	isSelected:Destroy()
+	expect(services.selectionChanged:listeners() == 0, "dropping the selection drops its listener")
+	hovering:Destroy()
+	expect(world.listening() == 0, "and the last hover stops the tracker")
+end)
+
+test("interact · the hit test is asked once per input per point", function()
+	local queries = 0
+	local root = {}
+	function root:GetGuiObjectsAtPosition()
+		queries += 1
+		return {}
+	end
+	local function guiUnder()
+		local gui = fakeGui()
+		function gui:FindFirstAncestorWhichIsA()
+			return root
+		end
+		return gui
+	end
+	local outer, inner = guiUnder(), guiUnder()
+	local outerHover = Flux.Interact.hover(outer)
+	local innerHover = Flux.Interact.hover(inner)
+
+	local move = fakeInput(MOUSE_MOVEMENT)
+	move.Position = Vector2.new(5, 5)
+	outer.InputChanged:Fire(move)
+	inner.InputChanged:Fire(move)
+	outer.InputChanged:Fire(move)
+	expect(queries == 1, "three moves over nested objects at one point ask once")
+	expect(outerHover:get() == true and innerHover:get() == true, "and both hover")
+
+	move.Position = Vector2.new(6, 5)
+	outer.InputChanged:Fire(move)
+	expect(queries == 2, "a new point asks again")
+	local another = fakeInput(MOUSE_MOVEMENT)
+	another.Position = Vector2.new(6, 5)
+	outer.InputChanged:Fire(another)
+	expect(queries == 3, "and so does another input at the same point")
+	outerHover:Destroy()
+	innerHover:Destroy()
+end)
+
+test("interact · focused seeds from IsFocused and follows focus events", function()
+	local box = fakeGui()
+	function box:IsFocused()
+		return true
+	end
+	local isFocused = Flux.Interact.focused(box)
+	expect(isFocused:get() == true, "seeded from IsFocused")
+
+	box.FocusLost:Fire(false)
+	expect(isFocused:get() == false, "FocusLost clears it")
+	box.Focused:Fire()
+	expect(isFocused:get() == true, "Focused sets it")
+	isFocused:Destroy()
+end)
+
+test("interact · states disconnect with their scope or their object", function()
+	local env = fakeServices()
+	local gui = fakeGui()
+	local function listening()
+		local count = env.UserInputService.InputBegan:listeners()
+			+ env.UserInputService.InputEnded:listeners()
+			+ env.selectionChanged:listeners()
+		for _, name in { "InputBegan", "InputChanged", "InputEnded", "Destroying", "Focused", "FocusLost" } do
+			count += gui[name]:listeners()
+		end
+		return count
+	end
+
+	local scope = Flux.scope(function()
+		Flux.Interact.hover(gui)
+		InteractModule._pressWith(gui, env)
+		InteractModule._selectedWith(gui, env)
+		Flux.Interact.focused(gui)
+	end)
+	gui.InputBegan:Fire(fakeInput(MOUSE_BUTTON1))
+	expect(listening() > 0, "the states listen while their scope lives")
+	scope:Destroy()
+	expect(listening() == 0, "destroying the scope disconnects every listener, including a held press")
+
+	local hovering = Flux.Interact.hover(gui)
+	gui.InputBegan:Fire(fakeInput(MOUSE_MOVEMENT))
+	expect(hovering:get() == true, "an unowned state works too")
+	gui.Destroying:Fire()
+	expect(hovering:get() == false, "destroying the object settles the state")
+	expect(listening() == 0, "and disconnects it")
+	hovering:Destroy()
+end)
+
+sert.prop("interact · press, selected and focused states match reference across random events", function(g)
+	Model.isolated(function(owners)
+		local services = fakeServices()
+		local guis = { fakeGui(), fakeGui() }
+		local pressed = {}
+		local selected = {}
+		local focused = {}
+		local scope = Flux.scope(function()
+			for i, gui in guis do
+				pressed[i] = InteractModule._pressWith(gui, services)
+				selected[i] = InteractModule._selectedWith(gui, services)
+				focused[i] = Flux.Interact.focused(gui)
+			end
+		end)
+		table.insert(owners, scope)
+
+		local activeInputs: { [number]: any } = {}
+		local selectedIdx: number? = nil
+		local focusedState = { false, false }
+
+		local function verify(where: string)
+			for i = 1, 2 do
+				sert.eq(pressed[i]:peek(), activeInputs[i] ~= nil, `{where}: pressed[{i}]`)
+				sert.eq(selected[i]:peek(), selectedIdx == i, `{where}: selected[{i}]`)
+				sert.eq(focused[i]:peek(), focusedState[i], `{where}: focused[{i}]`)
+			end
+		end
+		verify("initial")
+
+		for _, op in
+			Model.ops(g, {
+				{ 3, "mouseDown" },
+				{ 3, "mouseUp" },
+				{ 3, "select" },
+				{ 2, "gamepadDown" },
+				{ 2, "gamepadUp" },
+				{ 2, "menu" },
+				{ 2, "focus" },
+			})
+		do
+			if op == "mouseDown" then
+				local idx = g:int(1, 2)
+				g:note("mouseDown %d", idx)
+				local inp = fakeInput(MOUSE_BUTTON1)
+				guis[idx].InputBegan:Fire(inp)
+				if not services.GuiService.MenuIsOpen and activeInputs[idx] == nil then
+					activeInputs[idx] = inp
+				end
+			elseif op == "mouseUp" then
+				g:note("mouseUp")
+				services.UserInputService.InputEnded:Fire(fakeInput(MOUSE_BUTTON1))
+				for i = 1, 2 do
+					if activeInputs[i] and activeInputs[i].UserInputType == MOUSE_BUTTON1 then
+						activeInputs[i] = nil
+					end
+				end
+			elseif op == "select" then
+				local idx = g:int(0, 2)
+				g:note("select %d", idx)
+				selectedIdx = if idx == 0 then nil else idx
+				services.GuiService.SelectedObject = if selectedIdx then guis[selectedIdx] else nil
+				services.selectionChanged:Fire()
+			elseif op == "gamepadDown" then
+				g:note("gamepadDown")
+				local inp = fakeInput(GAMEPAD1, BUTTON_A)
+				services.UserInputService.InputBegan:Fire(inp)
+				if not services.GuiService.MenuIsOpen and selectedIdx and activeInputs[selectedIdx] == nil then
+					activeInputs[selectedIdx] = inp
+				end
+			elseif op == "gamepadUp" then
+				g:note("gamepadUp")
+				services.UserInputService.InputEnded:Fire(fakeInput(GAMEPAD1, BUTTON_A))
+				for i = 1, 2 do
+					if activeInputs[i] and activeInputs[i].KeyCode == BUTTON_A then
+						activeInputs[i] = nil
+					end
+				end
+			elseif op == "menu" then
+				local open = g:bool()
+				g:note("menu %s", tostring(open))
+				services.GuiService.MenuIsOpen = open
+				services.menuChanged:Fire()
+				if open then
+					activeInputs[1] = nil
+					activeInputs[2] = nil
+				end
+			elseif op == "focus" then
+				local idx = g:int(1, 2)
+				local gain = g:bool()
+				g:note("focus %d = %s", idx, tostring(gain))
+				focusedState[idx] = gain
+				if gain then
+					guis[idx].Focused:Fire()
+				else
+					guis[idx].FocusLost:Fire()
+				end
+			end
+			verify(op)
+		end
+
+		scope:Destroy()
+	end)
+end, {
+	runs = 120,
+	size = 16,
+	exhaustive = { size = 2 },
+})
+
+ctest("interact · selected and focused mirror a real player gui", function()
+	local GuiService = game:GetService("GuiService")
+	local player = game:GetService("Players").LocalPlayer
+	local gui = Flux.new("ScreenGui")({ DisplayOrder = 1000, Parent = player:WaitForChild("PlayerGui") })
+	local button = Flux.new("TextButton")({ Parent = gui, Size = UDim2.fromOffset(100, 40), Selectable = true })
+	local box =
+		Flux.new("TextBox")({ Parent = gui, Position = UDim2.fromOffset(0, 60), Size = UDim2.fromOffset(100, 40) })
+	local isSelected = Flux.Interact.selected(button)
+	local isFocused = Flux.Interact.focused(box)
+
+	GuiService.SelectedObject = button
+	env.settle()
+	expect(isSelected:get() == true, "selecting the button sets selected")
+	GuiService.SelectedObject = nil
+	env.settle()
+	expect(isSelected:get() == false, "clearing the selection clears it")
+
+	box:CaptureFocus()
+	env.settle()
+	expect(isFocused:get() == true, "capturing focus sets focused")
+	box:ReleaseFocus()
+	env.settle()
+	expect(isFocused:get() == false, "releasing focus clears it")
+
+	isSelected:Destroy()
+	isFocused:Destroy()
+	gui:Destroy()
+end)
+
+local engineTest = if env.engine ~= nil then test else sert.skip
+engineTest("interact · press, selected and focused on the engine's own services", function()
+	local services = env.Compat.services
+	local gui = env.Instance.new("ScreenGui")
+	local button = Flux.new("TextButton")({ Parent = gui })
+	local box = Flux.new("TextBox")({ Parent = gui })
+	local pressed, isSelected, isFocused
+	local scope = Flux.scope(function()
+		pressed = Flux.Interact.press(button)
+		isSelected = Flux.Interact.selected(button)
+		isFocused = Flux.Interact.focused(box)
+	end)
+	local click = fakeInput(MOUSE_BUTTON1)
+	button.InputBegan:Fire(click)
+	services.GuiService.SelectedObject = button
+	box:CaptureFocus()
+	env.settle()
+	expect(pressed:get() and isSelected:get() and isFocused:get(), "a click, the selection and focus each land")
+	services.UserInputService.InputEnded:Fire(click)
+	services.GuiService.SelectedObject = nil
+	box:ReleaseFocus()
+	env.settle()
+	expect(not pressed:get() and not isSelected:get() and not isFocused:get(), "and each ends")
+	scope:Destroy()
+	gui:Destroy()
+end)
+
+test("interact · multi-touch hover isolation and nil-services press/selected fallback", function()
+	local gui = fakeGui()
+	local hovering = Flux.Interact.hover(gui)
+	local touch1 = fakeInput(TOUCH)
+	local touch2 = fakeInput(TOUCH)
+	gui.InputBegan:Fire(touch1)
+	expect(hovering:get() == true, "first touch hovers")
+	gui.InputEnded:Fire(touch2)
+	expect(hovering:get() == true, "unrelated second touch ending does not drop first touch's hover")
+	gui.InputEnded:Fire(touch1)
+	expect(hovering:get() == false, "primary touch ending drops hover")
+	hovering:Destroy()
+
+	local btn = fakeGui()
+	local pressed = InteractModule._pressWith(btn :: any, nil)
+	local sel = InteractModule._selectedWith(btn :: any, nil)
+	expect(pressed:get() == false and sel:get() == false, "nil services start false")
+	local tap = fakeInput(TOUCH)
+	btn.InputBegan:Fire(tap)
+	expect(pressed:get() == true, "press without services tracks object.InputBegan")
+	btn.InputEnded:Fire(tap)
+	expect(pressed:get() == false, "press without services releases on object.InputEnded")
+	pressed:Destroy()
+	sel:Destroy()
 end)
 
 return {}

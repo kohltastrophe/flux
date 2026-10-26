@@ -4,3 +4,12 @@ sourcemap.json
 package-lock.json
 coverage.out
 coverage-table.txt
+__pycache__/
+
+# sert (tools/sert.py): the fetched toolkit and tools, the local override, and `sert studio` results.
+/.sert/
+/sert.local.toml
+/build/
+
+# plexer's local graph cache — regenerable, not committed (run `plexer build`).
+/plexer/

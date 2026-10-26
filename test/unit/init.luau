@@ -1,49 +1,33 @@
 --!nonstrict
---[[
-	Unit-suite aggregator. `spec.luau` requires this for both runtimes; it owns
-	the shared teardown and then requires every `*.spec.luau` sibling, each of
-	which registers its tests with `sert` as a side effect of being required.
-
-	Headless (vanilla luau CLI) resolves siblings by string path; Roblox resolves
-	them as child ModuleScripts. `Init.spec` is required LAST in both runtimes so
-	the trailing `heartbeat ·` test still sees init.luau's Heartbeat hookup alive.
-
-	NOTE ON HEADLESS PATHS: this is a directory module required as `./unit` by
-	spec.luau, and Luau resolves a required directory's init.luau relative paths
-	from the directory's PARENT (test/), not from test/unit/. So the requires
-	below are written relative to test/ (`../src`, `./sert`, `./unit/*.spec`),
-	whereas the leaf `*.spec.luau` files (being ordinary file modules) use
-	their own directory (`../../src`, `../sert`).
-]]
-
 local IS_ROBLOX = game ~= nil
+local env = if IS_ROBLOX
+	then require(game:GetService("ReplicatedStorage"):WaitForChild("Flux.lib"):WaitForChild("env")) :: any
+	else require("./lib/env") :: any
 
-local Flux
-local sert
-if IS_ROBLOX then
-	local ReplicatedStorage = game:GetService("ReplicatedStorage")
-	Flux = require(ReplicatedStorage:WaitForChild("Flux")) :: any
-	sert = require(ReplicatedStorage:WaitForChild("sert")) :: any
-else
-	Flux = require("../src") :: any
-	sert = require("./sert") :: any
+local Flux = env.Flux
+local sert = env.sert
+
+local defaultSnapshot: { [string]: { [string]: any } } = {}
+for class, map in Flux.Defaults do
+	defaultSnapshot[class] = table.clone(map)
 end
 
--- afterEach resets the leak-prone globals a test might flip (Flags.defaults,
--- the responsive viewport singleton) so a throwing test can't leak them into the
--- tests after it, and registration order across suites stays irrelevant.
-sert.afterEach(function()
-	Flux.Flags.defaults = true
-	Flux.Responsive.viewport:set((if IS_ROBLOX then Vector2.new(1920, 1080) else { X = 1920, Y = 1080 }) :: any)
-	if IS_ROBLOX and Flux.Clock.isManual() then
-		Flux.Clock.manual(false)
-	else
-		Flux.Clock.reset()
-	end
-end)
+local hooks = {
+	afterEach = function()
+		local leak = env.idle(Flux)
+		Flux.Flags.defaults = true
+		table.clear(Flux.Defaults)
+		for class, map in defaultSnapshot do
+			Flux.Defaults[class] = table.clone(map)
+		end
+		Flux.Responsive.viewport:set(env.Vector2.new(1920, 1080))
+		env.reset()
+		assert(not leak, leak)
+	end,
+}
+sert.setup(hooks)
 
 if IS_ROBLOX then
-	-- Require every sibling suite, deferring Init.spec to the very end.
 	local initSpec: ModuleScript? = nil
 	for _, child in script:GetChildren() do
 		if not child:IsA("ModuleScript") then
@@ -58,25 +42,18 @@ if IS_ROBLOX then
 		require(initSpec)
 	end
 else
-	require("./unit/Graph.spec")
-	require("./unit/Clean.spec")
-	require("./unit/Store.spec")
-	require("./unit/Wrap.spec")
-	require("./unit/For.spec")
-	require("./unit/Selector.spec")
-	require("./unit/Conditional.spec")
-	require("./unit/Safe.spec")
-	require("./unit/Context.spec")
-	require("./unit/Async.spec")
-	require("./unit/Find.spec")
-	require("./unit/Edit.spec")
-	require("./unit/Bind.spec")
-	require("./unit/Motion.spec")
-	require("./unit/Color.spec")
-	require("./unit/Responsive.spec")
-	require("./unit/Layout.spec")
-	require("./unit/Interact.spec")
-	require("./unit/Init.spec")
+	sert.loaded(require("./unit/Graph.spec"))
+	sert.loaded(require("./unit/Store.spec"))
+	sert.loaded(require("./unit/Conditional.spec"))
+	sert.loaded(require("./unit/Async.spec"))
+	sert.loaded(require("./unit/Clock.spec"))
+	sert.loaded(require("./unit/Edit.spec"))
+	sert.loaded(require("./unit/Bind.spec"))
+	sert.loaded(require("./unit/Motion.spec"))
+	sert.loaded(require("./unit/Responsive.spec"))
+	sert.loaded(require("./unit/Layout.spec"))
+	sert.loaded(require("./unit/Interact.spec"))
+	sert.loaded(require("./unit/Init.spec"))
 end
 
-return {}
+return hooks

@@ -1,87 +1,24 @@
 --!nonstrict
-local IS_ROBLOX = game ~= nil
+local env = if game
+	then require(game:GetService("ReplicatedStorage"):WaitForChild("Flux.lib"):WaitForChild("env")) :: any
+	else require("../lib/env") :: any
+local Model = if game
+	then require(game:GetService("ReplicatedStorage"):WaitForChild("Flux.lib"):WaitForChild("Model")) :: any
+	else require("../lib/Model") :: any
 
-local Flux
-local sert
-if IS_ROBLOX then
-	local ReplicatedStorage = game:GetService("ReplicatedStorage")
-	Flux = require(ReplicatedStorage:WaitForChild("Flux")) :: any
-	sert = require(ReplicatedStorage:WaitForChild("sert")) :: any
-else
-	Flux = require("../../src") :: any
-	sert = require("../sert") :: any
-end
-
+local Flux = env.Flux
+local sert = env.sert
+local IS_ROBLOX = env.IS_ROBLOX
 local test = sert.test
 local expect = sert
 local new = Flux
 local flush = Flux.flush
 local Store = Flux.Store
 
-test("store · deep reactivity per key", function()
-	local state = Flux.store({
-		player = { health = 100, name = "Guest" },
-		settings = { volume = 0.5 },
-	})
-	local healthRuns, volumeRuns = 0, 0
-	Flux.effect(function()
-		healthRuns += 1
-		local _ = state.player.health
-	end)
-	Flux.effect(function()
-		volumeRuns += 1
-		local _ = state.settings.volume
-	end)
-	flush()
-	expect(healthRuns == 1 and volumeRuns == 1, "both effects run once initially")
-	state.player.health = 90
-	flush()
-	expect(state.player.health == 90, "deep write persisted")
-	expect(healthRuns == 2, "health observer re-ran")
-	expect(volumeRuns == 1, "unrelated branch observer did NOT re-run")
-end)
-
-test("store · structural (length) tracking", function()
-	local s = Flux.store({ items = { "a", "b" } })
-	local lenRuns, lastLen = 0, 0
-	Flux.effect(function()
-		lenRuns += 1
-		lastLen = #s.items
-	end)
-	flush()
-	expect(lenRuns == 1 and lastLen == 2, "tracks length initially")
-	s.items[#s.items + 1] = "c"
-	flush()
-	expect(lenRuns == 2 and lastLen == 3, "length observer re-runs on structural change")
-end)
-
-test("store · iteration yields proxies; writes through them track", function()
-	local store = Flux.store({ list = { { n = 1 }, { n = 2 } } })
-	local total = new(function()
-		local sum = 0
-		for _, item in store.list do
-			sum += item.n -- item must be a live proxy, not the raw table
-		end
-		return sum
-	end)
-	expect(total:get() == 3, "store iter sum")
-	local firstProxy
-	for _, item in store.list do
-		firstProxy = item
-		break
-	end
-	firstProxy.n = 10 -- write through an iterated value
-	expect(total:get() == 12, "store iter write tracked")
-end)
-
-test("store · unwrap returns the raw table", function()
-	local s = Flux.store({ a = 1, nested = { b = 2 } })
-	local raw = Store.unwrap(s)
-	expect(type(raw) == "table", "unwrap returns a table")
-	expect(getmetatable(raw) == nil, "raw table has no proxy metatable")
-	expect(raw.a == 1, "values are intact")
-	expect(getmetatable(raw.nested) == nil, "nested raw table is also un-proxied")
-end)
+local function fullCollect(): boolean
+	local collect = if IS_ROBLOX then nil else (_G :: any).collectgarbage
+	return collect ~= nil and (pcall(collect, "collect"))
+end
 
 test("store · metatable'd values stay unwrapped; plain tables proxy", function()
 	local innerNode = new(7)
@@ -111,9 +48,9 @@ test("store · metatable'd values stay unwrapped; plain tables proxy", function(
 	end)
 	expect(total:get() == 11 and sawNode and sawObj, "iteration yields callable values")
 	expect(s.node == innerNode and s.obj == instObj, "__index leaves metatable'd values raw")
-	plainProxy.count = 5 -- plain tables still proxy: writes through them track
+	plainProxy.count = 5
 	expect(total:get() == 15, "plain tables stay tracked")
-	innerNode:set(9) -- node read through iteration was a real tracked get
+	innerNode:set(9)
 	expect(total:get() == 17, "node reads stay tracked")
 end)
 
@@ -125,13 +62,12 @@ test("store · node-valued keys never alias user nodes", function()
 		return if Flux.isNode(n) then n:get() else n
 	end)
 	expect(reader:get() == 7, "baseline read")
-	s.slot = 99 -- replace the key: must not write through to the user node
+	s.slot = 99
 	expect(userNode:get() == 7 and Flux.isNode(userNode), "replaced key leaves user node untouched")
 	expect(reader:get() == 99, "reader sees the replacement")
 	Store.Destroy(s)
 	expect(getmetatable(userNode) ~= nil and userNode:get() == 7, "store teardown spares the user node")
 
-	-- array of nodes: remove must not cross-write or destroy them
 	local nodeA, nodeB = new(1), new(2)
 	local s2 = Flux.store({ nodeA, nodeB })
 	local first = new(function()
@@ -149,8 +85,6 @@ test("store · node-valued keys never alias user nodes", function()
 end)
 
 test("store · function values stay opaque leaves through every set path", function()
-	-- __newindex / insert / remove route through Graph.set, so a stored
-	-- callback never becomes a tracker's computation and never executes
 	local calls = 0
 	local fnA = function()
 		calls += 1
@@ -178,265 +112,9 @@ test("store · function values stay opaque leaves through every set path", funct
 	expect(first:get() == fnB, "remove shift returns the fn raw")
 	Store.insert(arr, 1, fnA)
 	expect(first:get() == fnA, "insert shift returns the fn raw")
+	Store.reconcile(s, { cb = fnA })
+	expect(reader:get() == fnA, "reconcile swaps the fn leaf")
 	expect(calls == 0, "stored fns never executed")
-end)
-
-test("store.remove · shifted readers, trackers, pos validation", function()
-	local s = Flux.store({ 10, 20, 30, 40 })
-	local r2 = new(function()
-		return s[2]
-	end)
-	local r4 = new(function()
-		return s[4]
-	end)
-	local len = new(function()
-		return #s
-	end)
-	local total = new(function()
-		local sum = 0
-		for _, v in s do
-			sum += v
-		end
-		return sum
-	end)
-	expect(r2:get() == 20 and r4:get() == 40 and len:get() == 4 and total:get() == 100, "baseline")
-	expect(Store.remove(s, 2) == 20, "middle returns removed value")
-	expect(r2:get() == 30 and r4:get() == nil and len:get() == 3 and total:get() == 80, "readers shift")
-	expect(Store.remove(s) == 40, "default pos removes the tail")
-	expect(r2:get() == 30 and len:get() == 2 and total:get() == 40, "tail removal tracked")
-	expect(
-		(pcall(Store.remove, s, 5)) == false
-			and (pcall(Store.remove, s, 0)) == false
-			and (pcall(Store.remove, s, 1.5)) == false
-			and (pcall(Store.remove, s, "2")) == false,
-		"out-of-range / fractional / string pos errors"
-	)
-	expect(len:get() == 2 and total:get() == 40, "rejected pos leaves state intact")
-	local empty = Flux.store({})
-	expect(Store.remove(empty) == nil, "empty store with no pos is a nil no-op")
-end)
-
-test("store.remove · alias survival and displaced teardown", function()
-	-- same raw table at two keys: removing one must keep the survivor live
-	local shared = { x = 1 }
-	local s = Flux.store({ shared, shared })
-	local reader = new(function()
-		return s[1].x
-	end)
-	expect(reader:get() == 1, "baseline")
-	expect(Store.remove(s, 1) == shared, "returns the raw table")
-	s[1].x = 5
-	expect(reader:get() == 5, "survivor stays reactive")
-
-	-- non-aliased: removed table's proxy torn down; reader follows the shifted survivor
-	local s2 = Flux.store({ { v = 1 }, { v = 2 } })
-	local first = new(function()
-		return s2[1].v
-	end)
-	expect(first:get() == 1, "shift baseline")
-	Store.remove(s2, 1)
-	expect(first:get() == 2, "reader follows the survivor")
-end)
-
-test("store · displacement via assignment runs the same alias scan", function()
-	-- overwriting one occurrence of a shared raw table must not sever
-	-- readers of the surviving occurrence (mirrors Store.remove's scan)
-	local shared = { x = 1 }
-	local s = Flux.store({ shared, shared, "filler" })
-	local reader = new(function()
-		return s[2].x
-	end)
-	expect(reader:get() == 1, "baseline")
-	s[1] = "other"
-	s[2].x = 5
-	expect(reader:get() == 5, "survivor stays reactive")
-end)
-
-test("store.insert · middle/append with readers and a length tracker", function()
-	local s = Flux.store({ 10, 30 })
-	local r1 = new(function()
-		return s[1]
-	end)
-	local r2 = new(function()
-		return s[2]
-	end)
-	local r3 = new(function()
-		return s[3]
-	end)
-	local len = new(function()
-		return #s
-	end)
-	expect(r1:get() == 10 and r2:get() == 30 and r3:get() == nil and len:get() == 2, "baseline")
-	Store.insert(s, 2, 20) -- middle: shifts 30 from index 2 to 3
-	expect(r1:get() == 10 and r2:get() == 20 and r3:get() == 30 and len:get() == 3, "middle shifts readers")
-	Store.insert(s, 40) -- append
-	expect(s[4] == 40 and len:get() == 4, "append updates the length tracker")
-end)
-
-test("store.insert · validates explicit positions", function()
-	-- Luau's table.insert silently accepts fractional/out-of-range pos,
-	-- which would desync the per-index nodes from the raw table
-	local s = Flux.store({ 10, 20, 30 })
-	local r1 = new(function()
-		return s[1]
-	end)
-	expect(r1:get() == 10, "baseline")
-	expect((pcall(Store.insert, s, 1.5, 99)) == false, "fractional pos rejected")
-	expect((pcall(Store.insert, s, 50, 99)) == false, "out-of-range pos rejected")
-	expect((pcall(Store.insert, s, "2", 99)) == false, "string pos rejected")
-	Store.insert(s, 4, 40) -- length+1 is a valid append position
-	expect(s[4] == 40 and r1:get() == 10, "append at length+1")
-end)
-
-test("store.reconcile · sparse and out-of-band integer keys", function()
-	local s = Flux.store({ [2] = "old", name = "n" })
-	Store.reconcile(s, { [2] = "new", name = "n" })
-	expect(Store.unwrap(s)[2] == "new", "sparse [2] (no [1]) updated")
-
-	local s2 = Flux.store({ name = "n" })
-	Store.reconcile(s2, { [2] = "added", name = "n" })
-	expect(Store.unwrap(s2)[2] == "added", "sparse [2] added")
-
-	local s3 = Flux.store({ [3] = "x", name = "n" })
-	Store.reconcile(s3, { name = "n" })
-	expect(Store.unwrap(s3)[3] == nil, "hole [3] removed")
-
-	local s4 = Flux.store({ 10, 20, [5] = "x" })
-	Store.reconcile(s4, { 10, 20, [5] = "z" })
-	expect(Store.unwrap(s4)[5] == "z", "out-of-band [5] past a real array updated")
-end)
-
-test("store.reconcile · fires only changed leaves, leaves others untouched", function()
-	local s = Flux.store({ player = { health = 100, name = "Guest" }, settings = { volume = 0.5 } })
-	local healthRuns, nameRuns, volRuns = 0, 0, 0
-	Flux.effect(function()
-		healthRuns += 1
-		local _ = s.player.health
-	end)
-	Flux.effect(function()
-		nameRuns += 1
-		local _ = s.player.name
-	end)
-	Flux.effect(function()
-		volRuns += 1
-		local _ = s.settings.volume
-	end)
-	flush()
-	expect(healthRuns == 1 and nameRuns == 1 and volRuns == 1, "baseline runs")
-
-	Store.reconcile(s, { player = { health = 90, name = "Guest" }, settings = { volume = 0.5 } })
-	flush()
-	expect(s.player.health == 90, "changed leaf applied")
-	expect(healthRuns == 2, "only the changed leaf observer re-ran")
-	expect(nameRuns == 1 and volRuns == 1, "unchanged leaves did not fire")
-end)
-
-test("store.reconcile · identical snapshot is a no-op", function()
-	local s = Flux.store({ a = 1, nested = { b = 2 } })
-	local runs = 0
-	Flux.effect(function()
-		runs += 1
-		local _ = s.a + s.nested.b
-	end)
-	flush()
-	expect(runs == 1, "baseline")
-	Store.reconcile(s, { a = 1, nested = { b = 2 } })
-	flush()
-	expect(runs == 1, "identical reconcile fired nothing")
-end)
-
-test("store.reconcile · reuses nested proxy identity, no teardown", function()
-	local s = Flux.store({ nested = { b = 2 } })
-	local nestedBefore = s.nested
-	local reader = new(function()
-		return s.nested.b
-	end)
-	expect(reader:get() == 2, "baseline")
-	Store.reconcile(s, { nested = { b = 5 } })
-	expect(s.nested == nestedBefore, "nested proxy identity preserved")
-	expect(reader:get() == 5, "leaf updated through the reused proxy")
-end)
-
-test("store.reconcile · adds and removes keys, fires the tracker once", function()
-	local s = Flux.store({ a = 1, b = 2 })
-	local keyRuns, sawKeys = 0, {}
-	Flux.effect(function()
-		keyRuns += 1
-		sawKeys = {}
-		for k in s do
-			sawKeys[k] = true
-		end
-	end)
-	flush()
-	expect(keyRuns == 1 and sawKeys.a and sawKeys.b, "baseline keys")
-	Store.reconcile(s, { a = 1, c = 3 })
-	flush()
-	expect(keyRuns == 2, "key-set change fired the tracker exactly once")
-	expect(s.a == 1 and s.b == nil and s.c == 3, "key set reconciled")
-	expect(sawKeys.c and sawKeys.b == nil, "iteration reflects new key set")
-end)
-
-test("store.reconcile · array positional diff with grow and shrink", function()
-	local s = Flux.store({ 10, 20, 30 })
-	local r2 = new(function()
-		return s[2]
-	end)
-	local len = new(function()
-		return #s
-	end)
-	expect(r2:get() == 20 and len:get() == 3, "baseline")
-
-	Store.reconcile(s, { 10, 99, 30, 40 })
-	expect(r2:get() == 99 and len:get() == 4, "changed index + grow")
-	expect(Store.unwrap(s)[4] == 40, "appended value present")
-
-	Store.reconcile(s, { 10 })
-	expect(len:get() == 1, "length tracker followed the shrink")
-	expect(Store.unwrap(s)[2] == nil and Store.unwrap(s)[3] == nil, "tail cleared")
-end)
-
-test("store.reconcile · scalar replaces nested table tears down the displaced proxy", function()
-	local s = Flux.store({ slot = { v = 1 } })
-	local innerRaw = Store.unwrap(s).slot
-	local _ = s.slot.v
-	expect(getmetatable(s.slot) ~= nil, "nested proxy exists")
-	Store.reconcile(s, { slot = "gone" })
-	expect(s.slot == "gone", "scalar replacement applied")
-	local reproxied = Flux.store(innerRaw)
-	expect(getmetatable(reproxied) ~= nil, "displaced proxy was torn down")
-end)
-
-test("store.reconcile · nested array inside hash reconciles positionally", function()
-	local s = Flux.store({ items = { "a", "b" }, count = 2 })
-	local lenRuns, lastLen = 0, 0
-	Flux.effect(function()
-		lenRuns += 1
-		lastLen = #s.items
-	end)
-	flush()
-	expect(lenRuns == 1 and lastLen == 2, "baseline")
-	Store.reconcile(s, { items = { "a", "b", "c" }, count = 3 })
-	flush()
-	expect(lastLen == 3, "nested array length followed reconcile")
-	expect(s.items[3] == "c" and s.count == 3, "nested + sibling scalar applied")
-end)
-
-test("store.reconcile · stored functions stay opaque leaves", function()
-	local calls = 0
-	local fnA = function()
-		calls += 1
-	end
-	local fnB = function()
-		calls += 1
-	end
-	local s = Flux.store({ cb = fnA })
-	local reader = new(function()
-		return s.cb
-	end)
-	expect(reader:get() == fnA, "baseline")
-	Store.reconcile(s, { cb = fnB })
-	expect(reader:get() == fnB, "fn leaf swapped")
-	expect(calls == 0, "stored fns never executed by reconcile")
 end)
 
 test("store.reconcile · rejects non-store and non-table args", function()
@@ -445,115 +123,773 @@ test("store.reconcile · rejects non-store and non-table args", function()
 	expect((pcall(Store.reconcile, s, 5 :: any)) == false, "non-table newData rejected")
 end)
 
-test("store · per-key nodes are owned by the store, not the reading reaction", function()
-	-- A store created at the root owns the nodes its reads materialize. Destroying a
-	-- reader must not take those nodes with it, or the next reader would track a corpse.
-	local s = Flux.store({ count = 1 })
-	local first = new(function()
-		return s.count -- materializes the per-key node for `count`
-	end)
-	expect(first:get() == 1, "first reader sees the value")
-	first:Destroy() -- the per-key node is owned by the store, not this reader
-
-	local runs, last = 0, 0
-	Flux.effect(function()
-		runs += 1
-		last = s.count
-	end)
-	flush()
-	expect(runs == 1 and last == 1, "a fresh reader still sees the live store node")
-	s.count = 2
-	flush()
-	expect(runs == 2 and last == 2, "the surviving store node still propagates writes")
-	Store.Destroy(s)
-end)
-
-test("store · created in a scope is destroyed with the scope", function()
-	local raw = { hp = 100, nested = { mp = 50 } }
-	local s, nestedProxy
-	local owner = Flux.scope(function()
+test("store · a raw table can be re-wrapped after its store's scope is destroyed", function()
+	local raw = { hp = 100 }
+	local s
+	Flux.scope(function()
 		s = Flux.store(raw)
-		Flux.effect(function()
-			local _ = s.hp
-		end)
-		nestedProxy = s.nested -- materialize the nested proxy (owned by the store)
-		Flux.effect(function()
-			local _ = s.nested.mp
-		end)
-	end)
-	flush()
-	expect(getmetatable(s) ~= nil and getmetatable(nestedProxy) ~= nil, "proxies are live inside the scope")
-
-	owner:Destroy()
-	expect(getmetatable(s) == nil, "root proxy is stripped when its scope is destroyed")
-	expect(getmetatable(nestedProxy) == nil, "nested proxy is torn down by the cascade too")
-	expect(raw.hp == 100 and raw.nested.mp == 50, "the raw table is left intact")
-
+	end):Destroy()
 	local s2 = Flux.store(raw)
-	expect(getmetatable(s2) ~= nil and s2 ~= s, "the raw table can be re-wrapped after teardown")
+	expect(getmetatable(s2) ~= nil and s2 ~= s, "a fresh proxy over the same raw table")
 	Store.Destroy(s2)
 end)
 
-test("store.reconcile · duplicate keys alias one element (expected warn)", function()
-	-- Keys must be unique; a duplicate reuses the same matched element across slots. This
-	-- now warns (parity with For.value), but the aliasing behavior itself is unchanged.
+test("store.reconcile · duplicate keys alias one element, with a warning", function()
 	local s = Flux.store({ { id = 1, name = "a" } })
-	Store.reconcile(s, { { id = 1, name = "b" }, { id = 1, name = "c" } }, "id")
+	local warnings = env.warnings(function()
+		Store.reconcile(s, { { id = 1, name = "b" }, { id = 1, name = "c" } }, "id")
+	end)
+	expect(#warnings == 1 and string.find(warnings[1], "duplicate key", 1, true) ~= nil, "warned once")
 	local raw = Store.unwrap(s)
 	expect(raw[1] == raw[2], "duplicate keys collapse onto one reused element")
 end)
 
-test("store.move · shifts elements forward and backward and notifies affected indices", function()
-	local s = Flux.store({ "a", "b", "c", "d" })
-	local seen1, seen2, seen3, seen4
-	local runs2, runs4 = 0, 0
-	Flux.effect(function()
-		seen1 = s[1]
-	end)
-	Flux.effect(function()
-		runs2 += 1
-		seen2 = s[2]
-	end)
-	Flux.effect(function()
-		seen3 = s[3]
-	end)
-	Flux.effect(function()
-		runs4 += 1
-		seen4 = s[4]
+test("store · a dropped unowned store is garbage collected", function()
+	if not fullCollect() then
+		return
+	end
+	local weak = setmetatable({}, { __mode = "v" })
+	do
+		local s = Flux.store({ hp = 100, nested = { mp = 50 }, list = { 1, 2 } })
+		local c = new(function()
+			return s.hp + s.nested.mp + #s.list
+		end)
+		expect(c:get() == 152, "the store is read through a computed")
+		weak.store, weak.nested = s, s.nested
+	end
+	fullCollect()
+	expect(weak.store == nil, "the root proxy was collected")
+	expect(weak.nested == nil, "the nested proxy went with it")
+end)
+
+test("store · a live store keeps its nested proxies and their nodes across a collection", function()
+	local s = Flux.store({ player = { hp = 100 } })
+	local runs, last = 0, 0
+	local e = Flux.effect(function()
+		runs += 1
+		last = s.player.hp
 	end)
 	flush()
-	expect(seen1 == "a" and seen2 == "b" and seen3 == "c" and seen4 == "d", "initial elements")
-
-	-- Forward move: 1 -> 3 yields {"b", "c", "a", "d"} (index 4 untouched)
-	Store.move(s, 1, 3)
+	fullCollect()
+	s.player.hp = 90
 	flush()
-	expect(seen1 == "b" and seen2 == "c" and seen3 == "a" and seen4 == "d", "forward move 1 -> 3")
-	expect(runs4 == 1, "index 4 outside moved range [1..3] was not re-evaluated")
-
-	-- Backward move: 4 -> 2 yields {"b", "d", "c", "a"}
-	Store.move(s, 4, 2)
-	flush()
-	expect(seen1 == "b" and seen2 == "d" and seen3 == "c" and seen4 == "a", "backward move 4 -> 2")
-
-	-- No-op when from == to
-	local beforeRuns2 = runs2
-	Store.move(s, 2, 2)
-	flush()
-	expect(runs2 == beforeRuns2, "from == to is a no-op")
-
-	-- Plain table fallback
-	local plain = { 10, 20, 30 }
-	Store.move(plain, 3, 1)
-	expect(plain[1] == 30 and plain[2] == 10 and plain[3] == 20, "Store.move works on plain tables")
-
-	-- Out-of-bounds errors
-	sert.fails(function()
-		Store.move(s, 0, 2)
-	end, "out of range")
-	sert.fails(function()
-		Store.move(s, 1, 99)
-	end, "out of range")
+	expect(runs == 2 and last == 90, "the write reaches the reader through the same nested node")
+	e:Destroy()
 	Store.Destroy(s)
 end)
+
+test("store · Store.Destroy tears down every proxy, and its readers stop depending on it", function()
+	local s = Flux.store({ count = 1, nested = { mp = 50 } })
+	local nested = s.nested
+	local runs = 0
+	local c = new(function()
+		runs += 1
+		return s.count + s.nested.mp + #s
+	end)
+	expect(c:get() == 51 and runs == 1, "the computed read three nodes")
+	Store.Destroy(s)
+	expect(getmetatable(s) == nil and getmetatable(nested) == nil, "the proxies are stripped")
+	local before = runs
+	expect(c:get() == 51 and runs == before, "the computed no longer depends on the store")
+end)
+
+test("store · Flux.dispose and Flux.cleanup tear the store down, not its elements", function()
+	local a, b = Flux.signal(1), Flux.signal(2)
+	local s = Flux.store({ a, b })
+	local c = new(function()
+		return s[1]:get() + #s
+	end)
+	expect(c:get() == 3, "the array store is read")
+	Flux.dispose(s)
+	expect(getmetatable(s) == nil, "dispose destroyed the store")
+	expect(a:get() == 1 and b:get() == 2, "its node elements are untouched")
+	Flux.dispose(s)
+	expect(a:get() == 1, "a second dispose does not reach the elements either")
+
+	local scoped
+	local owner = Flux.scope(function()
+		scoped = Flux.store({ a, b })
+	end)
+	local outer = Flux.store({ a })
+	owner:Destroy()
+	Flux.scope(function()
+		Flux.cleanup(outer)
+	end):Destroy()
+	expect(getmetatable(scoped) == nil and getmetatable(outer) == nil, "cleanup(store) runs the same teardown")
+	expect(a:get() == 1 and b:get() == 2, "the elements survive")
+	a:Destroy()
+	b:Destroy()
+end)
+
+test("store.reconcile · regression: elements past an array border survive", function()
+	local s = Flux.store({ "a", "b" })
+	Store.reconcile(s, { [2] = "c" })
+	sert.eq(Store.unwrap(s), { [2] = "c" }, "the sparse [2] past the new border is kept")
+
+	local keyed = Flux.store({ [1] = "s", [2] = { n = 1 } })
+	local row = keyed[2]
+	Store.reconcile(keyed, { [2] = { n = 1 }, [5] = 1 }, "id")
+	expect(keyed[2] == row and Store.unwrap(keyed)[1] == nil, "keyed: [2] past the new border reconciles in place")
+
+	local sparse = Flux.store({ [2] = { n = 1 } })
+	local sparseRow = sparse[2]
+	Store.reconcile(sparse, { 1, { n = 2 } }, "id")
+	expect(sparse[2] == sparseRow and sparseRow.n == 2, "keyed: [2] past the old border reconciles in place")
+end)
+
+test("store.reconcile · regression: keyed rows without the key reconcile by position", function()
+	local s = Flux.store({ { x = 1 } })
+	local row = s[1]
+	local runs = 0
+	local reader = Flux.effect(function()
+		runs += 1
+		local _ = s[1].x
+	end)
+	flush()
+	Store.reconcile(s, { { x = 1 } }, "id")
+	flush()
+	expect(s[1] == row and runs == 1, "an unchanged keyless row keeps its proxy and fires nothing")
+	Store.reconcile(s, { { x = 2 } }, "id")
+	flush()
+	expect(s[1] == row and runs == 2 and row.x == 2, "a changed keyless row is updated in place")
+	reader:Destroy()
+end)
+
+test("store.reconcile · regression: an identical unread row fires nothing", function()
+	local s = Flux.store({ list = { { id = 1, v = 1 } } })
+	local raw = Store.unwrap(s).list[1]
+	local runs = 0
+	local length = Flux.computed(function()
+		runs += 1
+		return #s.list
+	end)
+	expect(length:get() == 1 and runs == 1, "baseline")
+	for _, keyed in { false, true } do
+		Store.reconcile(s, { list = { { id = 1, v = 1 } } }, if keyed then "id" else nil)
+		expect(length:get() == 1 and runs == 1, `no length re-run (keyed: {keyed})`)
+	end
+	Store.reconcile(s, { list = { { id = 1, v = 2 } } })
+	expect(Store.unwrap(s).list[1] == raw and raw.v == 2, "the unread row is updated in place")
+	length:Destroy()
+end)
+
+test("store · a cleared key keeps serving its readers, observed or not", function()
+	local s = Flux.store({ a = 1, b = 1, c = 1 })
+	local reader = Flux.computed(function()
+		return (s.a or 0) + (s.b or 0) + (s.c or 0)
+	end)
+	expect(reader:get() == 3, "a read makes per-key nodes")
+	reader:Destroy()
+	s.a = nil
+
+	local runs, last = 0, nil
+	local watcher = Flux.effect(function()
+		runs += 1
+		last = s.b
+	end)
+	flush()
+	s.b = nil
+	flush()
+	expect(last == nil and runs == 2, "an observed key's reader sees the clear")
+
+	local writer = Flux.effect(function()
+		if s.c ~= nil then
+			s.c = nil
+		end
+	end)
+	flush()
+	s.c = 5
+	flush()
+	expect(s.c == nil, "the run still tracks the key it cleared, and clears it again")
+
+	s.a = 2
+	local again = Flux.computed(function()
+		return s.a
+	end)
+	expect(again:get() == 2, "a dropped key is read through a fresh node")
+	s.a = 3
+	expect(again:get() == 3, "which tracks writes")
+	watcher:Destroy()
+	writer:Destroy()
+	again:Destroy()
+end)
+
+-- Store model property ------------------------------------------------------------------------------------------------
+
+local ROOT_KEYS = { "a", "b", 1, 2, 5 }
+local READ_SPECS = {
+	{ path = {} },
+	{ path = { "a" } },
+	{ path = { "b" } },
+	{ path = { 2 } },
+	{ path = { 5 } },
+	{ path = { "a", "x" } },
+	{ path = { "b", "y" } },
+	{ path = { "list" } },
+	{ path = { "list" }, len = true },
+	{ path = { "list", 1 } },
+	{ path = { "list", 2, "v" } },
+	{ path = { "list", 3 } },
+	{ path = { "list", 1, "v" } },
+	{ path = { "list", 3, "v" } },
+}
+local MOVES_TABLES = {
+	alias = true,
+	insert = true,
+	remove = true,
+	move = true,
+	aliasRow = true,
+	reconcileList = true,
+	reconcileRoot = true,
+}
+
+local function plain(value: any): any
+	if type(value) ~= "table" then
+		return value
+	end
+	local out = {}
+	for key, item in value do
+		out[key] = plain(item)
+	end
+	return out
+end
+
+local function readSpec(root: any, spec: any): any
+	local value = root
+	for _, key in spec.path do
+		if type(value) ~= "table" then
+			value = nil
+			break
+		end
+		value = value[key]
+	end
+	if spec.len then
+		return if type(value) == "table" then #value else nil
+	end
+	return plain(value)
+end
+
+local function readSet(root: any, spec: any): { [any]: { [any]: boolean } }
+	local set = {}
+	local function mark(t: any, key: any)
+		local keys = set[t] or {}
+		keys[key] = true
+		set[t] = keys
+	end
+	local value = root
+	for _, key in spec.path do
+		if type(value) ~= "table" then
+			return set
+		end
+		mark(value, key)
+		value = value[key]
+	end
+	local function deep(t: any)
+		if type(t) == "table" then
+			mark(t, "*")
+			if not spec.len then
+				for _, item in t do
+					deep(item)
+				end
+			end
+		end
+	end
+	deep(value)
+	return set
+end
+
+local function reachable(root: any): ({ [any]: boolean }, boolean)
+	local seen, aliased = {}, false
+	local function visit(t: any)
+		if seen[t] then
+			aliased = true
+			return
+		end
+		seen[t] = true
+		for _, item in t do
+			if type(item) == "table" then
+				visit(item)
+			end
+		end
+	end
+	visit(root)
+	return seen, aliased
+end
+
+local function hasAlias(root: any): boolean
+	return (select(2, reachable(root)))
+end
+
+local function show(value: any): string
+	if type(value) ~= "table" then
+		return if type(value) == "string" then `"{value}"` else tostring(value)
+	end
+	local keys = {}
+	for key in value do
+		table.insert(keys, key)
+	end
+	table.sort(keys, function(a, b)
+		return tostring(a) < tostring(b)
+	end)
+	local parts = {}
+	for _, key in keys do
+		table.insert(parts, `{key}={show(value[key])}`)
+	end
+	return "{" .. table.concat(parts, ",") .. "}"
+end
+
+local function genField(g): number?
+	local n = g:int(0, 2)
+	return if n == 0 then nil else n
+end
+
+local function genRootValue(g): any
+	local kind = g:weighted({ { 2, "nil" }, { 3, "scalar" }, { 3, "record" } })
+	if kind == "nil" then
+		return nil
+	elseif kind == "scalar" then
+		return g:pick({ 1, 2, "s" })
+	end
+	return { x = genField(g), y = genField(g) }
+end
+
+local function genList(g, current: { any }?, nextId: () -> number): { any }
+	local pool = if current then table.clone(current) else {}
+	local out = {}
+	for _ = 1, g:int(0, math.min(4, g.size + 1)) do
+		if #pool > 0 and g:bool(0.7) then
+			local row = table.remove(pool, g:int(1, #pool))
+			table.insert(out, { id = row.id, v = if g:bool() then row.v else g:int(1, 3) })
+		else
+			table.insert(out, { id = nextId(), v = g:int(1, 3) })
+		end
+	end
+	return out
+end
+
+sert.prop("store · random writes, array ops and reconciles match a plain-table mirror", function(g)
+	Model.isolated(function(owners)
+		local small = g.size <= 3
+		local idCounter = 0
+		local function nextId(): number
+			idCounter += 1
+			return idCounter
+		end
+
+		local initial: { [any]: any } = {
+			a = { x = 1 },
+			[1] = "s",
+			list = { { id = nextId(), v = 1 }, { id = nextId(), v = 2 }, { id = nextId(), v = 1 } },
+		}
+		local mirror = plain(initial)
+		local store
+		local inScope = g:bool()
+		if inScope then
+			table.insert(owners, (Flux.scope(function()
+				store = Flux.store(plain(initial))
+			end)))
+		else
+			store = Flux.store(plain(initial))
+		end
+		local rawRoot = Store.unwrap(store)
+		local readerScope = Flux.scope(function() end)
+		table.insert(owners, readerScope)
+
+		local proxies: { [any]: any } = {}
+		local function capture(value: any)
+			if type(value) == "table" and getmetatable(value) ~= nil then
+				local raw = Store.unwrap(value)
+				local known = proxies[raw]
+				sert(known == nil or known == value, "a reachable raw table kept its proxy")
+				proxies[raw] = value
+			end
+		end
+		local function walkStore(path: { any }): any
+			local value = store
+			for _, key in path do
+				if type(value) ~= "table" then
+					return nil
+				end
+				value = value[key]
+				capture(value)
+			end
+			return value
+		end
+
+		local readers = {}
+		local function checkState(where: string)
+			sert.eq(Store.unwrap(store), mirror, `{where}: raw table matches the mirror`)
+			local live = reachable(rawRoot)
+			for raw, proxy in proxies do
+				if live[raw] then
+					sert(getmetatable(proxy) ~= nil, `{where}: a reachable table's proxy is live ({show(raw)})`)
+				else
+					sert(getmetatable(proxy) == nil, `{where}: a displaced table's proxy is torn down ({show(raw)})`)
+					proxies[raw] = nil
+				end
+			end
+		end
+		local touched: { { any } } = {}
+		local dirtyAll = false
+		local function leafWrite(t: any, key: any, new: any)
+			if t[key] ~= new then
+				table.insert(touched, { t, key })
+			end
+			t[key] = new
+		end
+		local function checkReaders(where: string)
+			for _, reader in readers do
+				local seen = if reader.effect then reader.value else reader.node:get()
+				sert.eq(
+					seen,
+					readSpec(mirror, reader.spec),
+					`{where}: reader of {show(reader.spec)} (effect: {reader.effect})`
+				)
+				local set = reader.set
+				if set and not dirtyAll then
+					local hit = false
+					for _, write in touched do
+						local keys = set[write[1]]
+						hit = hit or (keys ~= nil and (keys[write[2]] or keys["*"]) ~= nil)
+					end
+					if not hit then
+						sert.eq(
+							reader.runs,
+							reader.checkedRuns,
+							`{where}: no write reached {show(reader.spec)}, no re-run`
+						)
+					end
+				end
+			end
+			for _, reader in readers do
+				reader.set, reader.checkedRuns = readSet(mirror, reader.spec), reader.runs
+			end
+			table.clear(touched)
+			dirtyAll = false
+		end
+		local function settle(): { number }
+			Flux.flush()
+			local counts = {}
+			for index, reader in readers do
+				if not reader.effect then
+					reader.node:get()
+				end
+				counts[index] = reader.runs
+			end
+			return counts
+		end
+		local function listOf(): ({ any }?, any)
+			local list = mirror.list
+			if type(list) == "table" then
+				return list, walkStore({ "list" })
+			end
+			return nil, nil
+		end
+
+		for _, op in
+			Model.ops(g, {
+				{ 3, "setRoot" },
+				{ 3, "setField" },
+				{ 1, "alias" },
+				{ 3, "insert" },
+				{ 3, "remove" },
+				{ 2, "move" },
+				{ 2, "setRow" },
+				{ 1, "aliasRow" },
+				{ 1, "badPos" },
+				{ 2, "reconcileList" },
+				{ if small then 0 else 2, "reconcileRoot" },
+				{ 1, "reconcileSame" },
+				{ 2, "reconcileLeaf" },
+				{ 3, "reader" },
+				{ 1, "dropReader" },
+				{ 5, "flush" },
+			})
+		do
+			dirtyAll = dirtyAll or MOVES_TABLES[op] == true
+			if op == "setRoot" then
+				local key = g:pick({ "a", "b", 1, 2, 5, "list" })
+				local value = if key == "list"
+					then (if g:bool(0.8) then genList(g, nil, nextId) else nil)
+					else genRootValue(g)
+				g:note("store[%s] = %s", show(key), show(value))
+				store[key] = plain(value)
+				if type(value) == "table" or type(mirror[key]) == "table" then
+					dirtyAll = true
+					mirror[key] = plain(value)
+				else
+					leafWrite(mirror, key, value)
+				end
+			elseif op == "setField" then
+				local key = g:pick(ROOT_KEYS)
+				local field, value = g:pick({ "x", "y" }), genField(g)
+				local viaIteration = g:bool()
+				if type(mirror[key]) == "table" then
+					g:note(
+						"store[%s].%s = %s%s",
+						show(key),
+						field,
+						show(value),
+						if viaIteration then " (iterated)" else ""
+					)
+					local proxy
+					if viaIteration then
+						for k, item in store do
+							if k == key then
+								proxy = item
+							end
+						end
+					else
+						proxy = store[key]
+					end
+					capture(proxy)
+					proxy[field] = value
+					leafWrite(mirror[key], field, value)
+				end
+			elseif op == "alias" then
+				local from, to = g:pick(ROOT_KEYS), g:pick(ROOT_KEYS)
+				if from ~= to and type(mirror[from]) == "table" then
+					g:note("store[%s] = store[%s]", show(to), show(from))
+					store[to] = walkStore({ from })
+					mirror[to] = mirror[from]
+				end
+			elseif op == "insert" then
+				local list, proxy = listOf()
+				if list then
+					local how = g:pick({ "append", "past the end", "at" })
+					local pos = g:int(1, #list + 1)
+					local row = { id = nextId(), v = g:int(1, 3) }
+					if how == "append" then
+						g:note("Store.insert(list, %s)", show(row))
+						Store.insert(proxy, plain(row))
+						table.insert(list, row)
+					elseif how == "past the end" then
+						g:note("list[%d] = %s", #list + 1, show(row))
+						proxy[#list + 1] = plain(row)
+						table.insert(list, row)
+					else
+						g:note("Store.insert(list, %d, %s)", pos, show(row))
+						Store.insert(proxy, pos, plain(row))
+						table.insert(list, pos, row)
+					end
+				end
+			elseif op == "remove" then
+				local list, proxy = listOf()
+				if list then
+					local pos = if g:bool() and #list > 0 then g:int(1, #list) else nil
+					g:note("Store.remove(list, %s)", show(pos))
+					sert.eq(
+						Store.remove(proxy, pos),
+						table.remove(list, pos),
+						"Store.remove returns the removed element"
+					)
+				end
+			elseif op == "move" then
+				local list, proxy = listOf()
+				if list and #list > 0 then
+					local from, to = g:int(1, #list), g:int(1, #list)
+					g:note("Store.move(list, %d, %d)", from, to)
+					Store.move(proxy, from, to)
+					table.insert(list, to, table.remove(list, from))
+				end
+			elseif op == "setRow" then
+				local list = listOf()
+				if list and #list > 0 then
+					local index, value = g:int(1, #list), g:int(1, 3)
+					g:note("list[%d].v = %d", index, value)
+					walkStore({ "list", index }).v = value
+					leafWrite(list[index], "v", value)
+				end
+			elseif op == "aliasRow" then
+				local list, proxy = listOf()
+				if list and #list > 1 then
+					local from, to = g:int(1, #list), g:int(1, #list)
+					if from ~= to then
+						g:note("list[%d] = list[%d]", to, from)
+						proxy[to] = walkStore({ "list", from })
+						list[to] = list[from]
+					end
+				end
+			elseif op == "badPos" then
+				local list, proxy = listOf()
+				if list then
+					local n = #list
+					local kind = g:pick({ "insert", "remove", "move" })
+					local bad = g:pick({ 0, n + 2, 1.5, "1" })
+					g:note("Store.%s(list, bad %s)", kind, show(bad))
+					local beyond = if bad == n + 2 then n + 1 else bad
+					local ok
+					if kind == "insert" then
+						ok = pcall(Store.insert, proxy, bad, { id = 0, v = 0 })
+					elseif kind == "remove" then
+						ok = pcall(Store.remove, proxy, beyond)
+					else
+						ok = pcall(Store.move, proxy, if n > 0 then 1 else bad, beyond)
+					end
+					sert(not ok, `Store.{kind} rejects position {show(bad)}`)
+				end
+			elseif op == "reconcileLeaf" then
+				local keyed = g:bool()
+				local leaves = {}
+				for _, key in ROOT_KEYS do
+					local value = mirror[key]
+					if type(value) == "table" then
+						table.insert(leaves, { value, g:pick({ "x", "y" }) })
+					else
+						table.insert(leaves, { mirror, key })
+					end
+				end
+				local list = listOf()
+				if list and #list > 0 then
+					table.insert(leaves, { list[g:int(1, #list)], "v" })
+				end
+				local leaf = g:pick(leaves)
+				local value = g:int(1, 3)
+				if not hasAlias(mirror) then
+					leafWrite(leaf[1], leaf[2], value)
+					g:note(
+						"Store.reconcile(store, <mirror with %s = %d>%s)",
+						show(leaf[2]),
+						value,
+						if keyed then ', "id"' else ""
+					)
+					Store.reconcile(store, plain(mirror), if keyed then "id" else nil)
+				end
+			elseif op == "reconcileList" or op == "reconcileRoot" or op == "reconcileSame" then
+				local keyed = g:bool()
+				local list = listOf()
+				if not hasAlias(mirror) and (op ~= "reconcileList" or list) then
+					local snapshot
+					if op == "reconcileSame" then
+						snapshot = plain(mirror)
+					elseif op == "reconcileList" then
+						snapshot = genList(g, list, nextId)
+					else
+						snapshot = {}
+						for _, key in ROOT_KEYS do
+							local current = mirror[key]
+							if g:bool(0.6) then
+								snapshot[key] = plain(current)
+								if type(current) == "table" and g:bool() then
+									snapshot[key][g:pick({ "x", "y" })] = genField(g)
+								end
+							else
+								snapshot[key] = genRootValue(g)
+							end
+						end
+						snapshot.list = if g:bool(0.9) then genList(g, list, nextId) else g:pick({ 1, "s" })
+					end
+					g:note(
+						"Store.reconcile(%s, %s%s)",
+						if op == "reconcileList" then "list" else "store",
+						show(snapshot),
+						if keyed then ', "id"' else ""
+					)
+
+					local before, rows, counts = {}, {}, nil
+					local function remember(path: { any })
+						local value = walkStore(path)
+						if type(value) == "table" then
+							before[show(path)] = value
+						end
+					end
+					if op == "reconcileSame" then
+						counts = settle()
+					else
+						if op == "reconcileRoot" then
+							for _, key in ROOT_KEYS do
+								remember({ key })
+							end
+							remember({ "list" })
+						end
+						for index, row in list or {} do
+							rows[row.id] = walkStore({ "list", index })
+							remember({ "list", index })
+						end
+					end
+
+					local target = if op == "reconcileList" then walkStore({ "list" }) else store
+					local result = Store.reconcile(target, plain(snapshot), if keyed then "id" else nil)
+					sert(result == target, "returns proxy")
+					if op == "reconcileList" then
+						mirror.list = snapshot
+					elseif op == "reconcileRoot" then
+						mirror = snapshot
+					end
+
+					if op == "reconcileRoot" then
+						for _, key in ROOT_KEYS do
+							local old = before[show({ key })]
+							if old and type(mirror[key]) == "table" then
+								sert(
+									walkStore({ key }) == old,
+									`store[{show(key)}] kept its proxy across the reconcile`
+								)
+							end
+						end
+					end
+					local newList = mirror.list
+					if type(newList) == "table" and (op == "reconcileList" or before[show({ "list" })]) then
+						for index, row in newList do
+							local old = if keyed then rows[row.id] else before[show({ "list", index })]
+							if old then
+								sert(
+									walkStore({ "list", index }) == old,
+									`list[{index}] kept its proxy (keyed: {keyed})`
+								)
+							end
+						end
+					end
+					if counts then
+						sert.eq(settle(), counts, "a reconcile that changes nothing runs no reader")
+					end
+				end
+			elseif op == "reader" then
+				local spec = g:pick(READ_SPECS)
+				local isEffect = g:bool()
+				g:note("reader %s (effect: %s)", show(spec), tostring(isEffect))
+				local reader = Model.reader(readerScope, isEffect, function()
+					return readSpec(store, spec)
+				end)
+				reader.spec = spec
+				table.insert(readers, reader)
+			elseif op == "dropReader" then
+				if #readers > 0 then
+					local index = g:int(1, #readers)
+					g:note("drop reader %d", index)
+					table.remove(readers, index).node:Destroy()
+				end
+			else
+				g:note("flush")
+				Flux.flush()
+				checkReaders("after flush")
+			end
+			checkState(op)
+		end
+
+		Flux.flush()
+		checkReaders("at the end")
+
+		local how = g:pick({ "Store.Destroy", "Flux.dispose", "scope" })
+		g:note("teardown: %s", how)
+		if how == "scope" and inScope then
+			owners[1]:Destroy()
+		elseif how == "Flux.dispose" then
+			Flux.dispose(store)
+		else
+			Store.Destroy(store)
+		end
+		sert(getmetatable(store) == nil, "the root proxy is stripped")
+		for raw, proxy in proxies do
+			sert(getmetatable(proxy) == nil, `every nested proxy is torn down ({show(raw)})`)
+		end
+		sert.eq(rawRoot, mirror, "teardown leaves the raw table intact")
+	end)
+end, {
+	runs = 200,
+	size = 30,
+	exhaustive = { size = 1 },
+	regressions = { 894361127 },
+})
 
 return {}

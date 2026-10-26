@@ -8,13 +8,26 @@
 				"$path": "../src"
 			},
 			"sert": {
-				"$path": "sert.luau"
+				"$path": "../.sert/sert/src"
 			},
-			"Flux.spec": {
-				"$path": "spec.client.luau"
+			"Flux.Tests": {
+				"$path": "runner/Config.luau"
+			},
+			"Flux.lib": {
+				"$path": "lib"
 			},
 			"Flux.unit": {
 				"$path": "unit"
+			}
+		},
+		"ServerScriptService": {
+			"Flux.TestRunner": {
+				"$path": "runner/server.server.luau"
+			}
+		},
+		"ReplicatedFirst": {
+			"Flux.TestRunner": {
+				"$path": "runner/client.client.luau"
 			}
 		}
 	}

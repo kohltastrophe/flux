@@ -7,56 +7,83 @@ on:
   pull_request:
     branches:
       - main
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
-  headless:
-    environment: testing
+  check:
+    if: github.event_name != 'schedule'
+    name: Lint, Coverage & Mutation
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      coverage: ${{ steps.coverage.outputs.pct }}
+      mutate: ${{ steps.mutate.outputs.pct }}
     steps:
       - uses: actions/checkout@v6
         with:
           submodules: recursive
 
-      - name: Install Luau
+      - uses: kohltastrophe/sert/actions/setup@v0.1.0
+
+      - name: sert lint
+        run: python3 tools/sert.py lint
+
+      - name: sert run
+        run: python3 tools/sert.py run --coverage
+
+      - name: sert coverage
+        id: coverage
         run: |
-          curl -sL https://github.com/luau-lang/luau/releases/download/0.724/luau-ubuntu.zip -o luau.zip
-          unzip -o luau.zip luau
-          chmod +x ./luau
-          rm luau.zip
+          status=0
+          pct=$(python3 tools/sert.py coverage --min 90) || status=$?
+          echo "pct=$pct" >> "$GITHUB_OUTPUT"
+          exit "$status"
 
-      - name: Run headless spec
-        run: ./luau test/spec.client.luau
-
-      - name: Measure coverage
-        id: cov
+      - name: sert mutate
+        id: mutate
         run: |
-          ./luau --coverage test/spec.client.luau > /dev/null
-          PCT=$(python3 .github/scripts/coverage.py 2> coverage-table.txt)
-          echo "pct=$PCT" >> "$GITHUB_OUTPUT"
-          {
-            echo "### Headless coverage: ${PCT}%"
-            echo ''
-            echo '```'
-            cat coverage-table.txt
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          status=0
+          pct=$(python3 tools/sert.py mutate --no-coverage-run --min 85) || status=$?
+          echo "pct=$pct" >> "$GITHUB_OUTPUT"
+          exit "$status"
 
+  coverage-badge:
+    needs: check
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment: testing
+    runs-on: ubuntu-latest
+    steps:
       - name: Update coverage badge
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: schneegans/dynamic-badges-action@v1.7.0
+        uses: schneegans/dynamic-badges-action@28b0fa8bdeb46170ac397105ece0c1fe58f68910 # v1.9.0
         with:
           auth: ${{ secrets.GIST_KEY }}
           gistID: ${{ secrets.GIST_ID }}
           filename: flux-coverage.json
           label: coverage
-          message: ${{ steps.cov.outputs.pct }}%
-          valColorRange: ${{ steps.cov.outputs.pct }}
+          message: ${{ needs.check.outputs.coverage }}%
+          valColorRange: ${{ needs.check.outputs.coverage }}
           minColorRange: 50
           maxColorRange: 90
 
   roblox:
-    environment: testing
+    if: github.event_name != 'schedule'
+    name: Roblox (Open Cloud)
     runs-on: ubuntu-latest
+    environment: testing
+    timeout-minutes: 30
     concurrency:
       group: luau-execution
       cancel-in-progress: false
@@ -65,14 +92,31 @@ jobs:
         with:
           submodules: recursive
 
-      - uses: CompeyDev/setup-rokit@1d9390883f7ebce19d48f5b8d006e11d387c92ab
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: kohltastrophe/sert/actions/setup@v0.1.0
 
-      - name: Run tests
-        run: set -e && rojo build ./test/default.project.json --output dist.rbxl && python3 ./test/upload_and_run_task.py dist.rbxl $TEST_TASK_FILE && rm dist.rbxl
+      - name: Build the place
+        run: rojo build test/default.project.json --output "$RUNNER_TEMP/sert-cloud.rbxl"
+
+      - name: sert cloud
         env:
           ROBLOX_API_KEY: ${{ secrets.ROBLOX_API_KEY }}
-          ROBLOX_UNIVERSE_ID: ${{ secrets.ROBLOX_TEST_UNIVERSE_ID }}
-          ROBLOX_PLACE_ID: ${{ secrets.ROBLOX_TEST_PLACE_ID }}
-          TEST_TASK_FILE: test/spec.client.luau
+          ROBLOX_UNIVERSE_ID: ${{ secrets.ROBLOX_UNIVERSE_ID || secrets.ROBLOX_TEST_UNIVERSE_ID }}
+          ROBLOX_PLACE_ID: ${{ secrets.ROBLOX_PLACE_ID || secrets.ROBLOX_TEST_PLACE_ID }}
+        run: python3 tools/sert.py cloud --place "$RUNNER_TEMP/sert-cloud.rbxl" --script test/spec.client.luau
+
+  exhaustive:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    name: Exhaustive Properties
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - uses: kohltastrophe/sert/actions/setup@v0.1.0
+        with:
+          rokit: "false"
+
+      - name: sert run --exhaustive
+        run: python3 tools/sert.py run --exhaustive

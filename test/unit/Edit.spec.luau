@@ -1,120 +1,320 @@
 --!nonstrict
-local IS_ROBLOX = game ~= nil
+local env = if game
+	then require(game:GetService("ReplicatedStorage"):WaitForChild("Flux.lib"):WaitForChild("env")) :: any
+	else require("../lib/env") :: any
+local Model = if game
+	then require(game:GetService("ReplicatedStorage"):WaitForChild("Flux.lib"):WaitForChild("Model")) :: any
+	else require("../lib/Model") :: any
 
-local Flux
-local sert
-if IS_ROBLOX then
-	local ReplicatedStorage = game:GetService("ReplicatedStorage")
-	Flux = require(ReplicatedStorage:WaitForChild("Flux")) :: any
-	sert = require(ReplicatedStorage:WaitForChild("sert")) :: any
-else
-	Flux = require("../../src") :: any
-	sert = require("../sert") :: any
-end
-
+local Flux = env.Flux
+local sert = env.sert
 local test = sert.test
-local rtest = sert.rtest
 local expect = sert
 local flush = Flux.flush
+local settle = env.settle
+local Instance = env.Instance
+local workspace = env.workspace
+local Find = Flux.Find
+local expectError = sert.fails
 
-local approx = sert.approx
+local function tagsOf(instance: Instance): string
+	local tags = instance:GetTags()
+	table.sort(tags)
+	return table.concat(tags, ",")
+end
 
-test("edit · init actions run via task.defer", function()
-	local ran = 0
-	local fake = { Parent = nil }
-	Flux.edit(fake)({
-		function(inst)
-			ran += 1
-		end,
-	})
-	if IS_ROBLOX then
-		task.wait() -- real defer runs at the next resumption point
-	else
-		Flux.Clock.drain()
-	end
-	expect(ran == 1, "init action ran")
+test("new · rejects a non-string className", function()
+	expectError(function()
+		Flux.new(123 :: any)
+	end, "String expected, got number")
 end)
 
-rtest("new · static properties", function()
-	-- Flux.new inside a scope is owned by it: the instance is destroyed on scope Destroy.
-	local frame
+test("edit · __TAG takes a string, an array, a node, a function or a mixed array; reactive tags swap", function()
+	local status, alive = Flux.signal("Idle"), Flux.signal(true)
+	local cases = {
+		{ "Enemy", "Enemy", "Enemy" },
+		{ { "Enemy", "Boss" }, "Boss,Enemy", "Boss,Enemy" },
+		{ status, "Idle", "Running" },
+		{
+			function()
+				return if alive() then "Alive" else "Dead"
+			end,
+			"Alive",
+			"Dead",
+		},
+		{ { "Enemy", status }, "Enemy,Idle", "Enemy,Running" },
+	}
+	local frames = {}
 	local s = Flux.scope(function()
-		frame = Flux.new("Frame")({
-			Name = "TestFrame",
-			Size = UDim2.fromOffset(100, 50),
-			BackgroundTransparency = 0.25,
+		for i, case in cases do
+			frames[i] = Instance.new("Frame")
+			Flux.edit(frames[i])({ __TAG = case[1] })
+		end
+	end)
+	flush()
+	for i, case in cases do
+		expect.eq(tagsOf(frames[i]), case[2], `case {i} applied`)
+	end
+	status:set("Running")
+	alive:set(false)
+	flush()
+	for i, case in cases do
+		expect.eq(tagsOf(frames[i]), case[3], `case {i} after its nodes changed`)
+	end
+	s:Destroy()
+	status:set("Done")
+	flush()
+	expect.eq(tagsOf(frames[3]), "Running", "the scope's Destroy ends the binding, leaving the last tag in place")
+	for _, frame in frames do
+		frame:Destroy()
+	end
+end)
+
+test("edit · a __TAG node diffs its table or string value, keeping tags a static sibling declares", function()
+	local frame = Instance.new("Frame")
+	local tags = Flux.signal({ "A", "B" } :: any)
+	local s = Flux.scope(function()
+		Flux.edit(frame)({ __TAG = { "S", tags } })
+	end)
+	flush()
+	expect.eq(tagsOf(frame), "A,B,S")
+	for _, step in
+		{ { { "B", "C" }, "B,C,S" }, { "B", "B,S" }, { { "B", "D" }, "B,D,S" }, { "S", "S" }, { "E", "E,S" } }
+	do
+		tags:set(step[1])
+		flush()
+		expect.eq(
+			tagsOf(frame),
+			step[2],
+			`after {if type(step[1]) == "table" then table.concat(step[1], "+") else step[1]}`
+		)
+	end
+	s:Destroy()
+	frame:Destroy()
+end)
+
+test("edit · a __TAG node bound without an owner stops when the instance is destroyed", function()
+	local frame = Instance.new("Frame")
+	local status = Flux.signal("Idle")
+	Flux.edit(frame)({ __TAG = status })
+	status:set("Running")
+	flush()
+	expect.eq(tagsOf(frame), "Running", "the node's tag swaps on the flush")
+	frame:Destroy()
+	settle()
+	status:set("Done")
+	flush()
+	expect.eq(tagsOf(frame), "Running", "the binding ends with the instance")
+end)
+
+test("edit · __EVENT rejects a node, a non-function value or an event key", function()
+	local label = Instance.new("TextButton")
+	local mirror = Flux.signal(nil)
+	expectError(function()
+		Flux.edit(label)({ __EVENT = { Text = mirror } })
+	end, "use Flux.model(node) for two-way binding or Flux.property(instance, prop) to follow a property")
+	expectError(function()
+		Flux.edit(label)({ __EVENT = { __ATTR = { Level = mirror } } })
+	end, "__EVENT.__ATTR.Level is a node")
+	expectError(function()
+		Flux.edit(label)({ __EVENT = { __TAG = { Boss = mirror } } })
+	end, "__EVENT.__TAG.Boss is a node")
+	expectError(function()
+		Flux.edit(label)({ __EVENT = { Text = "nope" } })
+	end, "expects a function")
+	expectError(function()
+		Flux.edit(label)({ __EVENT = { Activated = function() end } })
+	end, "connect `Activated` as a top-level key")
+	label:Destroy()
+end)
+
+test("edit · __EVENT listeners get the new value and end with the scope; a frozen map is taken as is", function()
+	local label = Instance.new("TextLabel")
+	label:SetAttribute("Score", 1)
+	local texts, scores = {}, {}
+	local s = Flux.scope(function()
+		Flux.edit(label)({
+			__EVENT = table.freeze({
+				Text = function(text)
+					table.insert(texts, text)
+				end,
+				__ATTR = table.freeze({
+					Score = function(score)
+						table.insert(scores, score)
+					end,
+				}),
+			}),
 		})
 	end)
-	expect(frame:IsA("Frame"), "created the requested class")
-	expect(frame.Name == "TestFrame", "string property assigned")
-	expect(frame.Size == UDim2.fromOffset(100, 50), "UDim2 property assigned")
-	expect(approx(frame.BackgroundTransparency, 0.25), "number property assigned")
+	settle()
+	expect(#texts == 0 and #scores == 0, "nothing fires on connect")
+	label.Text = "b"
+	label:SetAttribute("Score", 2)
+	settle()
+	expect(texts[1] == "b" and scores[1] == 2, "each listener is called with the new value")
+	s:Destroy()
+	label.Text = "c"
+	label:SetAttribute("Score", 3)
+	settle()
+	expect(#texts == 1 and #scores == 1, "both connections end with the scope")
+	label:Destroy()
+end)
+
+test("edit · handlers run with the contexts provided where they were declared", function()
+	local ctx = Flux.context("default")
+	local label = Instance.new("TextLabel")
+	local seen = {}
+	local s = Flux.scope(function()
+		ctx:provide("declared", function()
+			Flux.edit(label)({
+				__EVENT = {
+					Text = function()
+						table.insert(seen, `listener {ctx:get()}`)
+					end,
+				},
+				function()
+					table.insert(seen, `action {ctx:get()}`)
+				end,
+			})
+		end)
+	end)
+	settle()
+	label.Text = "b"
+	settle()
+	expect(table.find(seen, "action declared") ~= nil, "an init action reads the declared value")
+	expect(table.find(seen, "listener declared") ~= nil, "a change listener reads the declared value")
+	expect(ctx:get() == "default", "and the caller's value is restored")
+	s:Destroy()
+	label:Destroy()
+end)
+
+test("edit · handlers declared outside any provide read what their caller provides", function()
+	local listeners = {}
+	local stub = { Text = "a" }
+	function stub:GetPropertyChangedSignal()
+		return {
+			Connect = function(_, fn)
+				table.insert(listeners, fn)
+				return { Disconnect = function() end }
+			end,
+		}
+	end
+	stub.Destroying = {
+		Once = function()
+			return { Disconnect = function() end }
+		end,
+	}
+	local ctx = Flux.context("default")
+	local seen
+	local s = Flux.scope(function()
+		Flux.edit(stub)({
+			__EVENT = {
+				Text = function()
+					seen = ctx:get()
+				end,
+			},
+		})
+	end)
+	ctx:provide("caller", function()
+		listeners[1]()
+	end)
+	expect(seen == "caller", "connected as is: nothing to restore")
 	s:Destroy()
 end)
 
-rtest("new · reactive property binding (direct node)", function()
-	local text = Flux("hello")
-	local label
+test("edit · init actions run via task.defer, after the instance is parented", function()
+	local ran, parentSeen = 0, nil
+	local holder = Instance.new("Folder")
+	local frame = Flux.new("Frame")({
+		Parent = holder,
+		function(inst)
+			ran += 1
+			parentSeen = inst.Parent
+		end,
+	})
+	expect(ran == 0, "an init action waits for the deferred queue")
+	settle()
+	expect(ran == 1, "init action ran")
+	expect(parentSeen == holder, "and saw the Parent the table set last")
+	frame:Destroy()
+	holder:Destroy()
+end)
+
+test("new · an event handler runs with the contexts provided where it was declared", function()
+	local ctx = Flux.context("default")
+	local seen = {}
+	local event = ctx:provide("declared", function()
+		return Flux.new("BindableEvent")({
+			Event = function(tag)
+				table.insert(seen, `{tag} {ctx:get()}`)
+			end,
+		})
+	end)
+	ctx:provide("caller", function()
+		event:Fire("bound")
+	end)
+	settle()
+	expect(table.find(seen, "bound declared") ~= nil, "a handler declared under provide reads that value")
+	event:Destroy()
+end)
+
+test("new · a node or a function value binds a property, and edit binds one on an existing instance", function()
+	local text, count = Flux("hello"), Flux(1)
+	local existing = Instance.new("TextLabel")
+	local label, counter
 	local s = Flux.scope(function()
 		label = Flux.new("TextLabel")({ Text = text })
-	end)
-	flush()
-	expect(label.Text == "hello", "bound to initial node value after flush")
-	text("world")
-	flush()
-	expect(label.Text == "world", "property tracks the node")
-	s:Destroy()
-end)
-
-rtest("new · inline function binding (implicit memo)", function()
-	local count = Flux(1)
-	local label
-	local s = Flux.scope(function()
-		label = Flux.new("TextLabel")({
+		counter = Flux.new("TextLabel")({
 			Text = function()
 				return "Count: " .. count
 			end,
 		})
+		Flux.edit(existing)({ Name = "Edited", Text = text })
 	end)
 	flush()
-	expect(label.Text == "Count: 1", "implicit memo evaluated")
+	expect(label.Text == "hello" and counter.Text == "Count: 1", "bound to the initial values")
+	expect(existing.Name == "Edited" and existing.Text == "hello", "edit applies static props and bindings")
+	text("world")
 	count(2)
 	flush()
-	expect(label.Text == "Count: 2", "implicit memo reacts to its dependency")
+	expect(label.Text == "world" and counter.Text == "Count: 2", "properties track their node and function")
+	expect(existing.Text == "world", "and so does the existing instance's")
 	s:Destroy()
+	existing:Destroy()
 end)
 
-rtest("new · numeric children are parented", function()
-	local parent
-	local s = Flux.scope(function()
-		parent = Flux.new("Frame")({
-			Name = "Parent",
-			Flux.new("TextLabel")({ Name = "ChildA" }),
-			Flux.new("TextLabel")({ Name = "ChildB" }),
-		})
-	end)
-	expect(parent:FindFirstChild("ChildA") ~= nil, "first child parented")
-	expect(parent:FindFirstChild("ChildB") ~= nil, "second child parented")
-	s:Destroy()
-end)
-
-rtest("new · plain array of instances flattens into children", function()
-	local a, b, parent
+test("new · children at numeric indices and in plain arrays are parented and numbered", function()
+	local a, b, c, parent
 	local s = Flux.scope(function()
 		a = Flux.new("TextLabel")({ Name = "A" })
 		b = Flux.new("TextLabel")({ Name = "B" })
+		c = Flux.new("TextLabel")({ Name = "C" })
 		parent = Flux.new("Frame")({
 			Name = "Parent",
-			{ a, b }, -- a plain array at a numeric index parents each element
+			a,
+			{ b, c },
 		})
 	end)
-	expect(parent:FindFirstChild("A") ~= nil, "first array child parented")
-	expect(parent:FindFirstChild("B") ~= nil, "second array child parented")
-	expect(a.LayoutOrder == 1 and b.LayoutOrder == 2, "flattened children get incrementing LayoutOrder")
+	expect(a.Parent == parent and b.Parent == parent and c.Parent == parent, "every child parented")
+	expect(a.LayoutOrder == 1 and b.LayoutOrder == 2 and c.LayoutOrder == 3, "children get incrementing LayoutOrder")
 	s:Destroy()
 end)
 
-rtest("new · array flattening binds a node child (Flux.show)", function()
+test("new · an explicit LayoutOrder 0 is kept, siblings still auto-number", function()
+	local first, second, third
+	local s = Flux.scope(function()
+		first = Flux.new("TextLabel")({ Name = "First", LayoutOrder = 0 })
+		second = Flux.new("TextLabel")({ Name = "Second" })
+		third = Flux.new("TextLabel")({ Name = "Third", LayoutOrder = 1 })
+		Flux.new("Frame")({ first, second, third })
+	end)
+	expect(first.LayoutOrder == 0, "an explicit zero stays zero instead of taking its index")
+	expect(second.LayoutOrder == 1, "the next child without an order numbers from 1")
+	expect(third.LayoutOrder == 1, "an explicit order is never touched")
+	s:Destroy()
+end)
+
+test("new · array flattening binds a node child (Flux.show)", function()
 	local cond = Flux.signal(true)
 	local static, shown, parent
 	local s = Flux.scope(function()
@@ -124,7 +324,7 @@ rtest("new · array flattening binds a node child (Flux.show)", function()
 		static = Flux.new("TextLabel")({ Name = "Static" })
 		parent = Flux.new("Frame")({
 			Name = "Parent",
-			{ static, shown }, -- array mixes a static child and a reactive children-binder
+			{ static, shown },
 		})
 	end)
 	flush()
@@ -136,7 +336,7 @@ rtest("new · array flattening binds a node child (Flux.show)", function()
 	s:Destroy()
 end)
 
-rtest("new · Flux.model two-way binds a property", function()
+test("new · Flux.model two-way binds a property", function()
 	local text = Flux.signal("hello")
 	local box
 	local s = Flux.scope(function()
@@ -147,18 +347,18 @@ rtest("new · Flux.model two-way binds a property", function()
 	flush()
 	expect(box.Text == "hello", "instance is driven from the node (authored value wins)")
 
-	text:set("world") -- node -> instance
+	text:set("world")
 	flush()
 	expect(box.Text == "world", "writing the node updates the instance")
 
-	box.Text = "typed" -- instance -> node (the user typing)
-	task.wait() -- let the property-changed signal run node:set
+	box.Text = "typed"
+	settle()
 	flush()
 	expect(text() == "typed", "changing the instance writes back to the node")
 	s:Destroy()
 end)
 
-rtest("new · Flux.model two-way binds an attribute via __ATTR", function()
+test("new · Flux.model two-way binds an attribute via __ATTR", function()
 	local level = Flux.signal(1)
 	local frame
 	local s = Flux.scope(function()
@@ -169,18 +369,18 @@ rtest("new · Flux.model two-way binds an attribute via __ATTR", function()
 	flush()
 	expect(frame:GetAttribute("Level") == 1, "attribute driven from the node")
 
-	level:set(5) -- node -> attribute
+	level:set(5)
 	flush()
 	expect(frame:GetAttribute("Level") == 5, "writing the node updates the attribute")
 
-	frame:SetAttribute("Level", 9) -- attribute -> node
-	task.wait() -- let the attribute-changed signal run node:set
+	frame:SetAttribute("Level", 9)
+	settle()
 	flush()
 	expect(level() == 9, "changing the attribute writes back to the node")
 	s:Destroy()
 end)
 
-rtest("new · __REF (callback and node forms)", function()
+test("new · __REF (callback and node forms)", function()
 	local captured
 	local refNode = Flux.signal(nil)
 	local s = Flux.scope(function()
@@ -196,326 +396,104 @@ rtest("new · __REF (callback and node forms)", function()
 	s:Destroy()
 end)
 
-rtest("new · __ATTR (static and reactive)", function()
-	local lvl = Flux(1)
-	local f, f2
-	local s = Flux.scope(function()
-		f = Flux.new("Frame")({ __ATTR = { Level = 7, Tag = "boss" } })
-		f2 = Flux.new("Frame")({ __ATTR = { Level = lvl } })
-	end)
+test("new · __ATTR sets static attributes", function()
+	local f = Flux.new("Frame")({ __ATTR = { Level = 7, Tag = "boss" } })
 	expect(f:GetAttribute("Level") == 7, "static numeric attribute set")
 	expect(f:GetAttribute("Tag") == "boss", "static string attribute set")
-	flush()
-	expect(f2:GetAttribute("Level") == 1, "reactive attribute initial value")
-	lvl(2)
-	flush()
-	expect(f2:GetAttribute("Level") == 2, "reactive attribute updates")
-	s:Destroy()
+	f:Destroy()
 end)
 
-rtest("new · __TAG static string and array of strings", function()
-	local f, f2
-	local s = Flux.scope(function()
-		f = Flux.new("Frame")({ __TAG = "Enemy" })
-		f2 = Flux.new("Frame")({ __TAG = { "Enemy", "Boss" } })
-	end)
-	expect(f:HasTag("Enemy"), "single string tag applied")
-	expect(f2:HasTag("Enemy") and f2:HasTag("Boss"), "every tag in an array applied")
-	s:Destroy()
-end)
-
-rtest("new · __TAG reactive string node swaps the tag", function()
-	local tag = Flux.signal("Idle")
-	local f
-	local s = Flux.scope(function()
-		f = Flux.new("Frame")({ __TAG = tag })
-	end)
-	expect(f:HasTag("Idle"), "initial node value applied on mount")
-	tag:set("Running")
-	flush()
-	expect(f:HasTag("Running"), "new tag added when the node changes")
-	expect(not f:HasTag("Idle"), "previous tag removed when the node changes")
-	s:Destroy()
-end)
-
-rtest("new · __TAG node with a table value diffs adds and removes", function()
-	local tags = Flux.signal({ "A", "B" })
-	local f
-	local s = Flux.scope(function()
-		f = Flux.new("Frame")({ __TAG = tags })
-	end)
-	expect(f:HasTag("A") and f:HasTag("B"), "initial table tags applied")
-
-	tags:set({ "B", "C" })
-	flush()
-	expect(not f:HasTag("A"), "dropped tag removed")
-	expect(f:HasTag("B"), "kept tag untouched")
-	expect(f:HasTag("C"), "added tag applied")
-
-	-- table -> string transition: the shared tag must survive the diff
-	tags:set("B")
-	flush()
-	expect(f:HasTag("B"), "tag shared between old table and new string kept")
-	expect(not f:HasTag("C"), "unshared table tag removed")
-
-	-- string -> table transition
-	tags:set({ "B", "D" })
-	flush()
-	expect(f:HasTag("B") and f:HasTag("D"), "string -> table transition applies the new set")
-	s:Destroy()
-end)
-
-rtest("new · __TAG inline function is an implicit memo", function()
-	local alive = Flux.signal(true)
+test("new · directive keys in nested tables at numeric indices", function()
+	local lvl = Flux.signal(1)
+	local status = Flux.signal("Idle")
+	local cleaned = 0
+	local captured
 	local f
 	local s = Flux.scope(function()
 		f = Flux.new("Frame")({
-			__TAG = function()
-				return alive() and "Alive" or "Dead"
-			end,
-		})
-	end)
-	flush()
-	expect(f:HasTag("Alive"), "function value evaluated and applied")
-	alive:set(false)
-	flush()
-	expect(f:HasTag("Dead"), "tag tracks the function's dependencies")
-	expect(not f:HasTag("Alive"), "stale tag removed")
-	s:Destroy()
-end)
-
-rtest("new · __TAG mixed array of static strings and nodes", function()
-	local state = Flux.signal("Idle")
-	local f
-	local s = Flux.scope(function()
-		f = Flux.new("Frame")({ __TAG = { "Enemy", state } })
-	end)
-	expect(f:HasTag("Enemy"), "static tag in the array applied")
-	expect(f:HasTag("Idle"), "node tag in the array applied")
-	state:set("Running")
-	flush()
-	expect(f:HasTag("Enemy"), "static tag unaffected by node updates")
-	expect(f:HasTag("Running") and not f:HasTag("Idle"), "node tag in the array swaps independently")
-	s:Destroy()
-end)
-
-rtest("new · reactive tag moving off a static sibling keeps the shared tag", function()
-	local status = Flux.signal("Enemy")
-	local f
-	local s = Flux.scope(function()
-		f = Flux.new("Frame")({ __TAG = { "Enemy", status } })
-	end)
-	expect(f:HasTag("Enemy"), "shared tag applied")
-	status:set("Boss")
-	flush()
-	expect(f:HasTag("Enemy"), "statically declared tag survives the node moving off it")
-	expect(f:HasTag("Boss"), "new node tag applied")
-	s:Destroy()
-end)
-
-rtest("edit · frozen __EVENT maps are accepted without mutation", function()
-	local label = Instance.new("TextLabel")
-	local changes = 0
-	local frozen = table.freeze({
-		Text = function()
-			changes += 1
-		end,
-	})
-	local s = Flux.scope(function()
-		Flux.edit(label)({ __EVENT = frozen })
-	end)
-	label.Text = "updated"
-	task.wait() -- let the property-changed signal fire
-	expect(changes == 1, "handler from a frozen event map connected")
-	label:Destroy()
-	s:Destroy()
-end)
-
-rtest("edit · __TAG stops tracking after scope destroy", function()
-	local f = Instance.new("Frame")
-	local tag = Flux.signal("A")
-	local s = Flux.scope(function()
-		Flux.edit(f)({ __TAG = tag })
-	end)
-	expect(f:HasTag("A"), "initial tag applied to existing instance")
-	tag:set("B")
-	flush()
-	expect(f:HasTag("B") and not f:HasTag("A"), "tag tracks the node while the scope is alive")
-	s:Destroy()
-	tag:set("C")
-	flush()
-	expect(f:HasTag("B"), "last applied tag is left in place after scope destroy")
-	expect(not f:HasTag("C"), "listener disconnected by scope destroy")
-	f:Destroy()
-end)
-
-rtest("new · defaults applied and toggleable via Flux.Flags", function()
-	-- Default for Frame sets BorderSizePixel = 0 (Roblox default is 1)
-	local frame
-	local s = Flux.scope(function()
-		frame = Flux.new("Frame")({})
-	end)
-	expect(frame.BorderSizePixel == 0, "class defaults applied when Flags.defaults is true")
-	s:Destroy()
-	Flux.Flags.defaults = false -- afterEach restores it to true, even if the assert below throws
-	local frame2
-	local s2 = Flux.scope(function()
-		frame2 = Flux.new("Frame")({})
-	end)
-	local borderWithoutDefaults = frame2.BorderSizePixel
-	s2:Destroy()
-	expect(borderWithoutDefaults == 1, "no defaults applied when Flags.defaults is false")
-end)
-
-rtest("new · function on a signal property connects (signal-prop sugar)", function()
-	local fired = 0
-	local payload
-	-- BindableEvent.Event is an RBXScriptSignal-typed property: a function
-	-- assigned to it is connected implicitly (Edit.luau signal-property sugar)
-	local bindable
-	local s = Flux.scope(function()
-		bindable = Flux.new("BindableEvent")({
-			Event = function(value)
-				fired += 1
-				payload = value
-			end,
-		})
-	end)
-	bindable:Fire(42)
-	task.wait() -- BindableEvent connections fire at the next resumption point
-	expect(fired == 1, "function on a signal-typed property was connected and fired")
-	expect(payload == 42, "connected handler received the fired argument")
-	bindable:Destroy()
-	s:Destroy()
-end)
-
-rtest("edit · props and reactive bindings on an existing instance", function()
-	local existing = Instance.new("Frame")
-	local color = Flux(Color3.new(1, 0, 0))
-	local s = Flux.scope(function()
-		Flux.edit(existing)({
-			Name = "Edited",
-			BackgroundColor3 = color,
-		})
-	end)
-	flush()
-	expect(existing.Name == "Edited", "static prop applied to existing instance")
-	expect(existing.BackgroundColor3 == Color3.new(1, 0, 0), "reactive bind initial value")
-	color(Color3.new(0, 1, 0))
-	flush()
-	expect(existing.BackgroundColor3 == Color3.new(0, 1, 0), "reactive bind updates")
-	existing:Destroy()
-	s:Destroy()
-end)
-
-rtest("edit · node-driven Parent + __CLEAN survive immediate destroy", function()
-	-- the Destroying connection is hooked BEFORE parenting, so a destroy
-	-- right after edit() still flushes __CLEAN
-	local screen = Instance.new("ScreenGui")
-	local parentFrame = Instance.new("Frame")
-	parentFrame.Parent = screen
-
-	local cleaned = 0
-	local child = Instance.new("Frame")
-	local parentNode = Flux.signal(parentFrame)
-	Flux.edit(child)({
-		Parent = parentNode,
-		__CLEAN = {
-			function()
-				cleaned += 1
-			end,
-		},
-	})
-	expect(child.Parent == parentFrame, "node-driven Parent applied")
-	child:Destroy()
-	task.wait() -- let deferred Destroying handlers run
-	expect(cleaned == 1, "__CLEAN flushed on immediate destroy")
-
-	-- node-driven Parent keeps following on a fresh instance
-	local child2 = Instance.new("Frame")
-	Flux.edit(child2)({ Parent = parentNode })
-	local otherParent = Instance.new("Frame")
-	otherParent.Parent = screen
-	parentNode:set(otherParent)
-	flush()
-	expect(child2.Parent == otherParent, "node Parent retargets")
-	screen:Destroy()
-end)
-
-rtest("edit · __CLEAN runs exactly once across instance and scope destroy", function()
-	local f = Instance.new("Frame")
-	local cleaned = 0
-	local s = Flux.scope(function()
-		Flux.edit(f)({
-			__CLEAN = {
-				function()
-					cleaned += 1
+			{ __ATTR = { Level = lvl } },
+			{ __ATTR = { Kind = "NPC" } },
+			{ __TAG = { "Enemy", status } },
+			{
+				__REF = function(inst)
+					captured = inst
 				end,
 			},
-		})
-	end)
-	f:Destroy()
-	task.wait()
-	expect(cleaned == 1, "cleaned on instance destroy")
-	s:Destroy()
-	expect(cleaned == 1, "scope destroy does not re-run the cleanup")
-end)
-
-rtest("edit · __EVENT rejects an RBXScriptSignal and directs to top-level key", function()
-	local bindable = Instance.new("BindableEvent")
-	sert.fails(function()
-		Flux.edit(bindable)({
-			__EVENT = {
-				Event = function() end,
-			},
-		})
-	end, "connect `Event` as a top-level key")
-	bindable:Destroy()
-end)
-
-rtest("edit · __EVENT GetPropertyChangedSignal handler", function()
-	local label = Instance.new("TextLabel")
-	local changes = 0
-	local s = Flux.scope(function()
-		Flux.edit(label)({
-			__EVENT = {
-				Text = function()
-					changes += 1
-				end,
-			},
-		})
-	end)
-	expect(changes == 0, "property-changed handler does not fire on connect")
-	label.Text = "updated"
-	task.wait() -- changed-signal connections fire at the next resumption point
-	expect(changes == 1, "GetPropertyChangedSignal handler ran on a real property write")
-	label:Destroy()
-	s:Destroy()
-end)
-
-rtest("edit · __EVENT.__ATTR attribute-changed handler", function()
-	local frame = Instance.new("Frame")
-	frame:SetAttribute("Score", 1)
-	local attrChanges = 0
-	local s = Flux.scope(function()
-		Flux.edit(frame)({
-			__EVENT = {
-				__ATTR = {
-					Score = function()
-						attrChanges += 1
+			{
+				__CLEAN = {
+					function()
+						cleaned += 1
 					end,
 				},
 			},
 		})
 	end)
-	frame:SetAttribute("Score", 2)
-	task.wait() -- let the attribute-changed signal fire its connection
-	expect(attrChanges == 1, "attribute-changed handler ran on SetAttribute")
-	frame:Destroy()
+	flush()
+	expect(f:GetAttribute("Level") == 1, "reactive nested attr applied")
+	expect(f:GetAttribute("Kind") == "NPC", "second nested attr applied")
+	expect(f:HasTag("Enemy") and f:HasTag("Idle"), "tag array applied static and node values")
+	expect(captured == f, "ref callback received the instance")
+	lvl:set(2)
+	status:set("Running")
+	flush()
+	expect(f:GetAttribute("Level") == 2, "nested attr tracks its node")
+	expect(f:HasTag("Running") and not f:HasTag("Idle"), "node inside the tag array swaps")
+	s:Destroy()
+	expect(cleaned == 1, "nested __CLEAN ran on scope destroy")
+end)
+
+test("edit · nested event and tag directives accumulate", function()
+	local label = Instance.new("TextLabel")
+	label.Text = "start"
+	local a, b = 0, 0
+	local mirror
+	local function follow(text)
+		mirror = text
+	end
+	local s = Flux.scope(function()
+		Flux.edit(label)({
+			{ __TAG = "Enemy" },
+			{ __TAG = "Boss" },
+			{
+				__EVENT = {
+					Text = function()
+						a += 1
+					end,
+				},
+			},
+			{
+				__EVENT = {
+					Text = function()
+						b += 1
+					end,
+				},
+			},
+			{ __EVENT = { Text = follow } },
+		})
+	end)
+	expect(label:HasTag("Enemy") and label:HasTag("Boss"), "each nested tag applied")
+	label.Text = "next"
+	settle()
+	expect(a == 1 and b == 1, "both nested event handlers connected")
+	expect(mirror == "next", "and a third, called with the new value")
+	label:Destroy()
 	s:Destroy()
 end)
 
-rtest("new · _attr_Name prefix sets static, node, function, and Flux.model attributes", function()
+test("new · duplicate attr names dedupe with the root table winning", function()
+	local f
+	local s = Flux.scope(function()
+		f = Flux.new("Frame")({
+			__ATTR = { Kind = "root" },
+			{ __ATTR = { Kind = "nested", Other = "kept" } },
+		})
+	end)
+	expect(f:GetAttribute("Kind") == "root", "root __ATTR wins over a nested duplicate")
+	expect(f:GetAttribute("Other") == "kept", "non-duplicate nested attr still applied")
+	s:Destroy()
+end)
+
+test("new · _attr_Name prefix sets static, node, function, and Flux.model attributes", function()
 	local level = Flux.signal(3)
 	local bonus = Flux.signal(2)
 	local twoWay = Flux.signal("initial")
@@ -542,13 +520,12 @@ rtest("new · _attr_Name prefix sets static, node, function, and Flux.model attr
 	expect(frame:GetAttribute("Total") == 12, "function _attr_Name updates")
 
 	frame:SetAttribute("Status", "enraged")
-	task.wait()
-	flush()
+	settle()
 	expect(twoWay() == "enraged", "Flux.model _attr_Name writes back when attribute changes")
 	s:Destroy()
 end)
 
-rtest("new & edit · _tag_Name prefix sets static, node, function, and Flux.model tags", function()
+test("new & edit · _tag_Name prefix sets static, node, function, and Flux.model tags", function()
 	local alive = Flux.signal(true)
 	local hp = Flux.signal(100)
 	local stunned = Flux.signal(false)
@@ -579,15 +556,13 @@ rtest("new & edit · _tag_Name prefix sets static, node, function, and Flux.mode
 	expect(frame:HasTag("LowHealth"), "function _tag_Name added when truthy")
 
 	frame:AddTag("Stunned")
-	task.wait()
-	flush()
+	settle()
 	expect(stunned() == true, "Flux.model _tag_Name writes true back when tag is added")
 
 	stunned:set(false)
 	flush()
 	expect(not frame:HasTag("Stunned"), "Flux.model _tag_Name removes tag when node is set to false")
 
-	-- Stripping a pre-existing unmanaged tag via Flux.edit with _tag_Name = false
 	local existing = Instance.new("Frame")
 	existing:AddTag("Legacy")
 	existing:AddTag("Shared")
@@ -596,7 +571,7 @@ rtest("new & edit · _tag_Name prefix sets static, node, function, and Flux.mode
 			_tag_Legacy = false,
 			__TAG = "Shared",
 			{
-				_tag_Shared = false, -- flattened child cannot strip a ref-counted tag
+				_tag_Shared = false,
 			},
 		})
 	end)
@@ -607,7 +582,78 @@ rtest("new & edit · _tag_Name prefix sets static, node, function, and Flux.mode
 	s:Destroy()
 end)
 
-rtest(
+test("edit · _tag_Name replaces prior static, reactive, and Flux.model claims on the same tag", function()
+	local sig1 = Flux.signal(true)
+	local sig2 = Flux.signal(false)
+	local model1 = Flux.signal(true)
+	local model2 = Flux.signal(false)
+	local getterRuns = 0
+	local getterSig = Flux.signal(true)
+	local btn
+	local s = Flux.scope(function()
+		btn = Flux.new("TextButton")({
+			Parent = workspace,
+			__TAG = "Kept",
+			_tag_Kept = true,
+			_tag_Static = true,
+			_tag_Reactive = sig1,
+			_tag_Getter = function()
+				getterRuns += 1
+				return getterSig()
+			end,
+			_tag_TwoWay = Flux.model(model1),
+		})
+	end)
+	flush()
+	expect(
+		btn:HasTag("Kept")
+			and btn:HasTag("Static")
+			and btn:HasTag("Reactive")
+			and btn:HasTag("Getter")
+			and btn:HasTag("TwoWay"),
+		"all initial _tag_Name bindings applied"
+	)
+
+	local s2 = Flux.scope(function()
+		Flux.edit(btn)({
+			_tag_Kept = false,
+			_tag_Static = false,
+			_tag_Reactive = sig2,
+			_tag_Getter = false,
+			_tag_TwoWay = Flux.model(model2),
+		})
+	end)
+	flush()
+	expect(btn:HasTag("Kept"), "__TAG ref stays when _tag_Kept claim is released")
+	expect(not btn:HasTag("Static"), "static _tag_Name = false overrides prior _tag_Name = true")
+	expect(not btn:HasTag("Reactive"), "new reactive _tag_Name overrides prior reactive _tag_Name")
+	expect(not btn:HasTag("Getter"), "static false overrides prior getter _tag_Name")
+	expect(not btn:HasTag("TwoWay") and model2() == false, "new Flux.model overrides prior Flux.model _tag_Name")
+
+	local beforeRuns = getterRuns
+	sig1:set(false)
+	flush()
+	sig1:set(true)
+	getterSig:set(false)
+	flush()
+	expect(not btn:HasTag("Reactive"), "old reactive _tag_Name no longer drives the instance")
+	expect(getterRuns == beforeRuns, "old getter _tag_Name node was disposed")
+
+	sig2:set(true)
+	flush()
+	expect(btn:HasTag("Reactive"), "new reactive _tag_Name drives the instance")
+
+	model1:set(false)
+	flush()
+	btn:AddTag("TwoWay")
+	settle()
+	expect(model2() == true and model1() == false, "only the new Flux.model receives tag writebacks")
+
+	s2:Destroy()
+	s:Destroy()
+end)
+
+test(
 	"edit · _PropName, __attr_Name, __tag_Name, and __EVENT.__TAG connect changed listeners and validate errors",
 	function()
 		local label = Instance.new("TextLabel")
@@ -646,7 +692,7 @@ rtest(
 		label:SetAttribute("Score", 42)
 		label:AddTag("Marked")
 		label:AddTag("Pinned")
-		task.wait()
+		settle()
 		expect(seenText == "hello", "_PropName listener received new property value")
 		expect(seenScore == 42, "__attr_Name listener received new attribute value")
 		expect(seenTag == true, "__tag_Name listener received true when tag added")
@@ -654,40 +700,40 @@ rtest(
 
 		label:RemoveTag("Marked")
 		label:RemoveTag("Pinned")
-		task.wait()
+		settle()
 		expect(seenTag == false, "__tag_Name listener received false when tag removed")
 		expect(seenEventTag == false, "__EVENT.__TAG listener received false when tag removed")
 
 		local bindable = Instance.new("BindableEvent")
-		sert.fails(function()
+		expectError(function()
 			Flux.edit(bindable)({
 				_Event = function() end,
 			})
 		end, "connect `Event` as a top-level key")
 		bindable:Destroy()
 
-		sert.fails(function()
+		expectError(function()
 			Flux.edit(label)({ _attr_ = 1 })
 		end, 'after "_attr_" cannot be empty')
-		sert.fails(function()
+		expectError(function()
 			Flux.edit(label)({ _tag_ = true })
 		end, 'after "_tag_" cannot be empty')
-		sert.fails(function()
+		expectError(function()
 			Flux.edit(label)({ _ = function() end })
 		end, 'after "_" cannot be empty')
-		sert.fails(function()
+		expectError(function()
 			Flux.edit(label)({ __attr_ = function() end })
 		end, 'after "__attr_" cannot be empty')
-		sert.fails(function()
+		expectError(function()
 			Flux.edit(label)({ __tag_ = function() end })
 		end, 'after "__tag_" cannot be empty')
-		sert.fails(function()
+		expectError(function()
 			Flux.edit(label)({ _Text = 123 :: any })
 		end, '"_Text" expects a function')
-		sert.fails(function()
+		expectError(function()
 			Flux.edit(label)({ __attr_Score = Flux.signal(0) :: any })
 		end, '"__attr_Score" is a node')
-		sert.fails(function()
+		expectError(function()
 			Flux.edit(label)({ __tag_Marked = Flux.signal(false) :: any })
 		end, '"__tag_Marked" is a node')
 
@@ -696,35 +742,7 @@ rtest(
 	end
 )
 
-rtest("new · flattened tables deduplicate _attr_Name with __ATTR and _tag_Name", function()
-	local f
-	local s = Flux.scope(function()
-		f = Flux.new("Frame")({
-			_attr_A = "root-prefix",
-			__ATTR = { B = "root-table" },
-			_tag_Boss = true,
-			{
-				_attr_A = "child-prefix",
-				_attr_B = "child-prefix-b",
-				__ATTR = { A = "child-table" },
-				_tag_Boss = false,
-				_attr_C = "child-only",
-			},
-		})
-	end)
-	expect(f:GetAttribute("A") == "root-prefix", "root _attr_A wins over flattened _attr_A and __ATTR.A")
-	expect(f:GetAttribute("B") == "root-table", "root __ATTR.B wins over flattened _attr_B")
-	expect(f:GetAttribute("C") == "child-only", "unseen flattened _attr_C is applied")
-	expect(f:HasTag("Boss"), "root _tag_Boss wins over flattened _tag_Boss")
-	s:Destroy()
-end)
-
-test("split · non-table props returns empty Own and Rest tables without erroring", function()
-	local own, rest = Flux.split(nil :: any, { "Label" })
-	expect(next(own) == nil and next(rest) == nil, "split(nil) returns two empty tables")
-end)
-
-rtest("edit · reactive Parent getter function and flattened _Prop/__attr_/__tag_ deduplication", function()
+test("new · flattened tables deduplicate _attr_Name with __ATTR, _tag_Name, and _Prop/__attr_/__tag_", function()
 	local p1 = Instance.new("Folder")
 	local p2 = Instance.new("Folder")
 	p1.Parent = workspace
@@ -743,6 +761,9 @@ rtest("edit · reactive Parent getter function and flattened _Prop/__attr_/__tag
 			Parent = function()
 				return if useSecond() then p2 else p1
 			end,
+			_attr_A = "root-prefix",
+			__ATTR = { B = "root-table" },
+			_tag_Boss = true,
 			_Text = function()
 				rootTextSeen += 1
 			end,
@@ -753,6 +774,11 @@ rtest("edit · reactive Parent getter function and flattened _Prop/__attr_/__tag
 				rootTagSeen += 1
 			end,
 			{
+				_attr_A = "child-prefix",
+				_attr_B = "child-prefix-b",
+				__ATTR = { A = "child-table" },
+				_tag_Boss = false,
+				_attr_C = "child-only",
 				_Text = function()
 					childTextSeen += 1
 				end,
@@ -765,16 +791,20 @@ rtest("edit · reactive Parent getter function and flattened _Prop/__attr_/__tag
 			},
 		})
 	end)
-	Flux.flush()
+	flush()
+	expect(label:GetAttribute("A") == "root-prefix", "root _attr_A wins over flattened _attr_A and __ATTR.A")
+	expect(label:GetAttribute("B") == "root-table", "root __ATTR.B wins over flattened _attr_B")
+	expect(label:GetAttribute("C") == "child-only", "unseen flattened _attr_C is applied")
+	expect(label:HasTag("Boss"), "root _tag_Boss wins over flattened _tag_Boss")
 	expect(label.Parent == p1, "initial Parent getter mounted under p1")
 	useSecond:set(true)
-	Flux.flush()
+	flush()
 	expect(label.Parent == p2, "Parent getter updated parent to p2")
 
 	label.Text = "changed"
 	label:SetAttribute("Count", 5)
 	label:AddTag("Tracked")
-	task.wait()
+	settle()
 	expect(rootTextSeen == 1 and childTextSeen == 0, "root _Text wins over flattened _Text")
 	expect(rootAttrSeen == 1 and childAttrSeen == 0, "root __attr_Count wins over flattened __attr_Count")
 	expect(rootTagSeen == 1 and childTagSeen == 0, "root __tag_Tracked wins over flattened __tag_Tracked")
@@ -782,6 +812,412 @@ rtest("edit · reactive Parent getter function and flattened _Prop/__attr_/__tag
 	s:Destroy()
 	p1:Destroy()
 	p2:Destroy()
+end)
+
+test("new · defaults applied and toggleable via Flux.Flags; AutoButtonColor is off either way", function()
+	local btn
+	local s = Flux.scope(function()
+		btn = Flux.new("ImageButton")({})
+	end)
+	expect(btn.BorderSizePixel == 0, "class defaults applied when Flags.defaults is true")
+	expect(btn.AutoButtonColor == false, "AutoButtonColor off")
+	s:Destroy()
+	Flux.Flags.defaults = false
+	local btn2, btn3
+	local s2 = Flux.scope(function()
+		btn2 = Flux.new("ImageButton")({})
+		btn3 = Flux.new("TextButton")({ AutoButtonColor = true })
+	end)
+	local borderWithoutDefaults = btn2.BorderSizePixel
+	local autoColorWithoutDefaults = btn2.AutoButtonColor
+	local autoColorOverridden = btn3.AutoButtonColor
+	s2:Destroy()
+	expect(borderWithoutDefaults == 1, "no class defaults applied when Flags.defaults is false")
+	expect(autoColorWithoutDefaults == false, "AutoButtonColor stays off with the defaults disabled")
+	expect(autoColorOverridden == true, "your own properties still win")
+end)
+
+test("edit · __CLEAN runs once on an immediate destroy, owned or not; a node Parent keeps following", function()
+	local screen = Instance.new("ScreenGui")
+	local parentFrame = Instance.new("Frame")
+	parentFrame.Parent = screen
+	local parentNode = Flux.signal(parentFrame)
+	for _, owned in { false, true } do
+		local cleaned = 0
+		local child = Instance.new("Frame")
+		local function build()
+			Flux.edit(child)({
+				Parent = parentNode,
+				__CLEAN = {
+					function()
+						cleaned += 1
+					end,
+				},
+			})
+		end
+		local s = if owned then Flux.scope(build) else build()
+		expect(child.Parent == parentFrame, `node-driven Parent applied (owned: {owned})`)
+		child:Destroy()
+		settle()
+		expect(cleaned == 1, `__CLEAN flushed on immediate destroy (owned: {owned})`)
+		if s then
+			s:Destroy()
+			expect(cleaned == 1, "scope destroy does not re-run the cleanup")
+		end
+	end
+
+	local child2 = Instance.new("Frame")
+	Flux.edit(child2)({ Parent = parentNode })
+	local otherParent = Instance.new("Frame")
+	otherParent.Parent = screen
+	parentNode:set(otherParent)
+	flush()
+	expect(child2.Parent == otherParent, "node Parent retargets")
+	screen:Destroy()
+end)
+
+sert.prop("edit · reactive properties, attributes, tags and two-way models stay synchronized", function(g)
+	Model.isolated(function(owners)
+		local textSig = Flux.signal("t0")
+		local attrSig = Flux.signal(1)
+		local tagBool = Flux.signal(g:bool())
+		local tagSet = Flux.signal({ "A" } :: any)
+
+		local box
+		local scope = Flux.scope(function()
+			box = Flux.new("TextBox")({
+				Text = Flux.model(textSig),
+				_attr_Score = Flux.model(attrSig),
+				_tag_Flag = tagBool,
+				__TAG = { "Static", tagSet },
+			})
+		end)
+		table.insert(owners, scope)
+
+		local expectedText = "t0"
+		local expectedAttr = 1
+		local expectedFlag = tagBool:peek()
+		local expectedSet: { string } = { "A" }
+
+		local function verify(where: string)
+			flush()
+			sert.eq(box.Text, expectedText, `{where}: box.Text`)
+			sert.eq(textSig:peek(), expectedText, `{where}: textSig`)
+			sert.eq(box:GetAttribute("Score"), expectedAttr, `{where}: Score attr`)
+			sert.eq(attrSig:peek(), expectedAttr, `{where}: attrSig`)
+			sert.eq(box:HasTag("Flag"), expectedFlag, `{where}: Flag tag`)
+			sert(box:HasTag("Static"), `{where}: Static tag preserved`)
+			for _, t in { "A", "B", "C" } do
+				local inSet = table.find(expectedSet, t) ~= nil
+				sert.eq(box:HasTag(t), inSet, `{where}: tag {t}`)
+			end
+		end
+		verify("initial")
+
+		local TAG_POOL = { { "A" }, { "B" }, { "A", "B" }, { "B", "C" }, {} }
+		for _, op in
+			Model.ops(g, {
+				{ 2, "nodeText" },
+				{ 2, "instText" },
+				{ 2, "nodeAttr" },
+				{ 2, "instAttr" },
+				{ 2, "flag" },
+				{ 2, "tags" },
+			})
+		do
+			if op == "nodeText" then
+				expectedText = "n" .. tostring(g:int(1, 9))
+				g:note("textSig = %s", expectedText)
+				textSig:set(expectedText)
+			elseif op == "instText" then
+				expectedText = "i" .. tostring(g:int(1, 9))
+				g:note("box.Text = %s", expectedText)
+				box.Text = expectedText
+				settle()
+			elseif op == "nodeAttr" then
+				expectedAttr = g:int(1, 20)
+				g:note("attrSig = %d", expectedAttr)
+				attrSig:set(expectedAttr)
+			elseif op == "instAttr" then
+				expectedAttr = g:int(1, 20)
+				g:note("SetAttribute Score = %d", expectedAttr)
+				box:SetAttribute("Score", expectedAttr)
+				settle()
+			elseif op == "flag" then
+				expectedFlag = g:bool()
+				g:note("tagBool = %s", tostring(expectedFlag))
+				tagBool:set(expectedFlag)
+			elseif op == "tags" then
+				expectedSet = TAG_POOL[g:int(1, #TAG_POOL)]
+				g:note("tagSet = {%s}", table.concat(expectedSet, ","))
+				tagSet:set(expectedSet)
+			end
+			verify(op)
+		end
+
+		scope:Destroy()
+	end)
+end, {
+	runs = 120,
+	size = 14,
+	exhaustive = { size = 2 },
+})
+
+test("edit · a later edit replaces a property's binding instead of stacking it", function()
+	local first = Flux.signal(1)
+	local second = Flux.signal(0.5)
+	local frame
+	local s = Flux.scope(function()
+		frame = Flux.new("Frame")({ BackgroundTransparency = first })
+	end)
+	flush()
+	expect.near(frame.BackgroundTransparency, 1, nil, "first binding applied")
+
+	-- static override releases the first binding
+	Flux.edit(frame)({ BackgroundTransparency = 0 })
+	first:set(0.75)
+	flush()
+	expect.near(frame.BackgroundTransparency, 0, nil, "static override sticks after the old source changes")
+
+	-- node override replaces, and the older source stays released
+	Flux.edit(frame)({ BackgroundTransparency = second })
+	flush()
+	expect.near(frame.BackgroundTransparency, 0.5, nil, "node override applied")
+	first:set(0.25)
+	second:set(0.4)
+	flush()
+	expect.near(frame.BackgroundTransparency, 0.4, nil, "only the newest binding drives the property")
+
+	-- a getter override replaces the node and disposes on the next override
+	local getterRuns = 0
+	Flux.edit(frame)({
+		BackgroundTransparency = function()
+			getterRuns += 1
+			return second() / 2
+		end,
+	})
+	flush()
+	expect.near(frame.BackgroundTransparency, 0.2, nil, "getter override applied")
+	Flux.edit(frame)({ BackgroundTransparency = 0.9 })
+	local runsAtOverride = getterRuns
+	second:set(0.1)
+	flush()
+	expect.near(frame.BackgroundTransparency, 0.9, nil, "static override replaced the getter")
+	expect.eq(getterRuns, runsAtOverride, "the replaced getter node was disposed, not recomputed")
+
+	s:Destroy()
+end)
+
+test("edit · attribute and Parent overrides replace their bindings", function()
+	local score = Flux.signal(1)
+	local p1 = Instance.new("Folder")
+	local p2 = Instance.new("Folder")
+	local parent = Flux.signal(p1)
+	local frame
+	local s = Flux.scope(function()
+		frame = Flux.new("Frame")({ _attr_Score = score, Parent = parent })
+	end)
+	flush()
+	expect(frame:GetAttribute("Score") == 1 and frame.Parent == p1, "initial attribute and Parent bound")
+
+	Flux.edit(frame)({ _attr_Score = 7, Parent = p2 })
+	score:set(2)
+	parent:set(p1)
+	flush()
+	expect.eq(frame:GetAttribute("Score"), 7, "static attribute override sticks")
+	expect(frame.Parent == p2, "static Parent override sticks")
+
+	s:Destroy()
+	p1:Destroy()
+	p2:Destroy()
+end)
+
+test("edit · a replaced binding's original cleanup stays safe to run", function()
+	local first = Flux.signal("a")
+	local second = Flux.signal("b")
+	local label = Instance.new("TextLabel")
+	local s1 = Flux.scope(function()
+		Flux.edit(label)({ Text = first })
+	end)
+	local s2 = Flux.scope(function()
+		Flux.edit(label)({ Text = second })
+	end)
+	flush()
+	expect.eq(label.Text, "b", "override applied")
+	-- disposing the original edit must not release the newer binding
+	s1:Destroy()
+	second:set("c")
+	flush()
+	expect.eq(label.Text, "c", "newer binding survives the older edit's cleanup")
+	s2:Destroy()
+	second:set("d")
+	flush()
+	expect.eq(label.Text, "c", "binding released with its own edit")
+	label:Destroy()
+end)
+
+-- Find ----------------------------------------------------------------------------------------------------------------
+
+local function make(class: string, name: string, parent: Instance?): Instance
+	local inst = Instance.new(class)
+	inst.Name = name
+	inst.Parent = parent
+	return inst
+end
+
+test("find.parent · a selector miss warns without erroring", function()
+	local orphan = Instance.new("Folder")
+	local warned = env.warnings(function()
+		Flux.edit(orphan)({ Find.Parent()({ Name = "target" }) })
+	end)
+	expect.eq(warned[1], "[Flux] Instance expected for a Find selector, got nil", "a miss warns")
+	expect.eq(orphan.Name, "Folder", "and applies nothing")
+	orphan:Destroy()
+end)
+
+local walkPath = Find.Path("")({})[2]
+
+test("find.path · walks dot-separated child names", function()
+	local root = make("Folder", "Root")
+	local a = make("Folder", "A", root)
+	local b = make("Folder", "B", a)
+	make("Folder", "Decoy", root)
+
+	expect(walkPath(root, "A.B") == b, "descends two named segments")
+	expect(walkPath(root, "A") == a, "resolves a single segment")
+	expect(walkPath(root, "A.Missing") == nil, "returns nil when a segment misses")
+	expect(walkPath(root, "Missing.B") == nil, "returns nil when the first segment misses")
+	root:Destroy()
+end)
+
+test("find.path · Parent and ^ segments climb, empty segments are skipped", function()
+	local root = make("Folder", "Root")
+	local a = make("Folder", "A", root)
+	local b = make("Folder", "B", a)
+
+	expect(walkPath(b, "Parent") == a, "'Parent' climbs one level")
+	expect(walkPath(b, "^.^") == root, "'^' chains climb multiple levels")
+	expect(walkPath(b, "^.B") == b, "climb then descend round-trips")
+	expect(walkPath(root, "^") == nil, "climbing past a nil Parent returns nil")
+	expect(walkPath(root, "") == root, "empty path resolves to the instance itself")
+	expect(walkPath(root, ".A..B.") == b, "stray dots are skipped, not treated as misses")
+	root:Destroy()
+end)
+
+test("find · each selector resolves its target through Flux.edit and applies props to it alone", function()
+	local screen = make("ScreenGui", "Grand")
+	local mid = make("Folder", "Mid", screen)
+	local a = make("Frame", "A", mid)
+	local b = make("Frame", "B", a)
+	local label = make("TextLabel", "Label", mid)
+	local button = make("TextButton", "Button", mid)
+	local boxed1, boxed2 = make("Frame", "Boxed", mid), make("Frame", "Boxed", mid)
+	local unboxed = make("Frame", "Unboxed", mid)
+	local guis = { a, b, label, button, boxed1, boxed2, unboxed } :: { any }
+
+	local cases = {
+		{ "Child", Find.Child("A"), mid, { a } },
+		{ "ChildClass", Find.ChildClass("TextLabel"), mid, { label } },
+		{ "ChildIsA", Find.ChildIsA("GuiButton"), mid, { button } },
+		{ "Descendant", Find.Descendant("B"), screen, { b } },
+		{ "Path", Find.Path("A.B"), mid, { b } },
+		{ "Path climbing", Find.Path("^.^.Label"), b, { label } },
+		{ "QueryFirst", Find.QueryFirst("#Boxed"), mid, { boxed1 } },
+		{ "Query", Find.Query("#Boxed"), mid, { boxed1, boxed2 } },
+	}
+	for i, case in cases do
+		local name, selector, from, targets = case[1], case[2], case[3], case[4]
+		Flux.edit(from)({ selector({ LayoutOrder = i }) })
+		for _, gui in guis do
+			local hit = table.find(targets, gui) ~= nil
+			expect((gui.LayoutOrder == i) == hit, `{name}: {gui.Name} {if hit then "applied" else "untouched"}`)
+		end
+	end
+
+	Flux.edit(b)({ Find.Ancestor("Mid")({ Name = "MidRenamed" }) })
+	expect(mid.Name == "MidRenamed" and screen.Name == "Grand", "Ancestor: the named ancestor, not another")
+	Flux.edit(b)({ Find.Parent()({ Name = "ARenamed" }) })
+	expect(a.Name == "ARenamed", "Parent: the direct parent")
+	for _, selector in { Find.AncestorClass("ScreenGui"), Find.AncestorIsA("LayerCollector") } do
+		screen.Enabled = true
+		Flux.edit(b)({ selector({ Enabled = false }) })
+		expect(screen.Enabled == false, "AncestorClass / AncestorIsA (inherited) resolve the ScreenGui")
+	end
+	screen:Destroy()
+end)
+
+-- Split ---------------------------------------------------------------------------------------------------------------
+
+test("split · separates named keys from everything else", function()
+	local size = Flux("md")
+	local child = {}
+	local event = {}
+	local function onClick() end
+	local input = { variant = "filled", size = size, onClick = onClick, Name = "Save", [1] = child, __EVENT = event }
+
+	local own, rest = Flux.split(input, { "variant", "size", "onClick" })
+	expect(own.variant == "filled" and own.size == size and own.onClick == onClick, "named keys move by reference")
+	expect(own.Name == nil and own[1] == nil, "nothing else lands in the named group")
+	expect(
+		rest.Name == "Save" and rest[1] == child and rest.__EVENT == event,
+		"instance props, children and directives stay in the rest"
+	)
+	expect(rest.variant == nil and rest.size == nil, "named keys leave the rest")
+	expect(input.variant == "filled" and own ~= input and rest ~= input, "the input is left untouched")
+end)
+
+test("split · takes schemas and several groups, first group wins", function()
+	local DEFAULTS = { label = "", disabled = false }
+	local style, own, rest = Flux.split(
+		{ label = "Row", color = "red", disabled = true, Name = "Item" },
+		{ "color", "label" },
+		DEFAULTS
+	)
+	expect(style.color == "red" and style.label == "Row", "the first group takes the keys it names")
+	expect(own.disabled == true and own.label == nil, "a schema names the second group; label was already claimed")
+	expect(rest.Name == "Item" and rest.label == nil, "the rest gets what no group named")
+end)
+
+test("split · a nil props table yields empty groups", function()
+	local own, rest = Flux.split(nil, { "a" })
+	expect(next(own) == nil and next(rest) == nil, "both tables are empty")
+	local onlyRest = Flux.split({ a = 1 })
+	expect(onlyRest.a == 1, "with no groups, everything is the rest")
+end)
+
+test("edit · LayoutOrder model/node pinning, Find numeric ordering, and __REF post-children ordering", function()
+	local orderNode = Flux.signal(0)
+	local c1 = Flux.new("Frame")({ Name = "C1", LayoutOrder = orderNode })
+	local c2 = Flux.new("Frame")({ Name = "C2" })
+	local parent = Flux.new("Frame")({ c1, c2 })
+	flush()
+	expect(
+		c1.LayoutOrder == 0 and c2.LayoutOrder == 1,
+		"reactive LayoutOrder=0 is pinned and not overwritten by auto-numbering"
+	)
+	parent:Destroy()
+
+	local modelOrder = Flux.signal(0)
+	local m1 = Flux.new("Frame")({ Name = "M1", LayoutOrder = Flux.model(modelOrder) })
+	local m2 = Flux.new("Frame")({ Name = "M2" })
+	local parent2 = Flux.new("Frame")({ m1, m2 })
+	flush()
+	expect(m1.LayoutOrder == 0 and m2.LayoutOrder == 1, "Flux.model LayoutOrder=0 is pinned and not overwritten")
+	parent2:Destroy()
+
+	local refSawChild = false
+	local foundChild = false
+	local host = Flux.new("Frame")({
+		[1] = Flux.new("TextLabel")({ Name = "Target", Text = "Initial" }),
+		[2] = Flux.Find.Child("Target")({ Text = "Hydrated" }),
+		__REF = function(inst: Instance)
+			local target = inst:FindFirstChild("Target") :: TextLabel?
+			refSawChild = target ~= nil
+			foundChild = target ~= nil and target.Text == "Hydrated"
+		end,
+	})
+	expect(refSawChild and foundChild, "__REF runs after numeric children and Find selectors")
+	host:Destroy()
 end)
 
 return {}

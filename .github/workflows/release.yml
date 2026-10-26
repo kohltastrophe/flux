@@ -1,22 +1,81 @@
+# Release Flux: check the version, wait for CI on the tagged commit, build the .rbxm files, create the GitHub release,
+# then publish to Wally and the Creator Store.
+#
+#   push a v* tag              release (the tag must equal v<wally.toml version>: sert release check-version)
+#   Run workflow (dry_run on)  everything up to the release, including the Wally package check
+#
+# Bump wally.toml's version in the commit you tag. The only write is the Dist job: it commits the released tree
+# (sert.toml [dist].paths: default.project.json, src) onto the `dist` branch.
 name: Release
 
 on:
   push:
-    tags:
-      - "v*.*.*"
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build and package only; no GitHub release, no Wally or Creator Store publish
+        type: boolean
+        default: true
 
 permissions:
-  contents: write
-  actions: read
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
-  verify-ci:
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      prerelease: ${{ steps.check.outputs.prerelease }}
+      release: ${{ steps.check.outputs.release }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check the version (and the tag)
+        id: check
+        env:
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            version=$(python3 tools/sert.py release check-version --package flux --tag "$GITHUB_REF_NAME")
+          elif [ "$DRY_RUN" = true ]; then
+            version=$(python3 tools/sert.py release check-version --package flux)
+          else
+            echo "::error::Only a v* tag is released: push the tag, or run this workflow on the tag."
+            exit 1
+          fi
+          case "$version" in *-*) prerelease=true ;; *) prerelease=false ;; esac
+          if [ "$DRY_RUN" = true ]; then release=false; else release=true; fi
+          {
+            echo "version=$version"
+            echo "prerelease=$prerelease"
+            echo "release=$release"
+          } >> "$GITHUB_OUTPUT"
+          echo "Flux $version: release=$release prerelease=$prerelease"
+
+  ci:
+    name: Wait for CI
+    needs: version
+    if: needs.version.outputs.release == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      actions: read
     steps:
       - name: Wait for CI to pass on this commit
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           while true; do
             RESULT=$(gh api \
@@ -34,68 +93,166 @@ jobs:
             sleep 15
           done
 
-  publish:
-    needs: verify-ci
+  package:
+    name: Package
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # rojo builds the .rbxm files; wally packages the library. Versions are pinned in rokit.toml.
+      - uses: CompeyDev/setup-rokit@1d9390883f7ebce19d48f5b8d006e11d387c92ab # v0.2.1
+        with:
+          version: v1.2.0
+
+      - name: Build the release assets
+        run: |
+          mkdir -p dist
+          rojo build default.project.json --output dist/Flux.rbxm
+          rojo build .github/model.project.json --output dist/Flux-Model.rbxm
+
+      - name: Check the Wally package
+        run: |
+          wally package --list
+          wally package --output "$RUNNER_TEMP/wally.zip"
+          size=$(stat -c %s "$RUNNER_TEMP/wally.zip")
+          echo "Wally package: $size bytes (the registry refuses more than 2 MiB)"
+          [ "$size" -le 2097152 ]
+
+      # The Wally package is also a release asset, so sert.toml [deps] can pin it by digest without the registry.
+      - name: Add the package zip and SHA256SUMS
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          cp "$RUNNER_TEMP/wally.zip" "dist/Flux-$VERSION-package.zip"
+          (cd dist && sha256sum Flux.rbxm "Flux-$VERSION-package.zip" > SHA256SUMS)
+          { echo '```'; cat dist/SHA256SUMS; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release
+          path: dist/
+          if-no-files-found: error
+          overwrite: true
+
+  release:
+    name: GitHub release
+    needs: [version, ci, package]
+    if: needs.version.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release
+          path: dist
+
+      - name: Create the release (a re-run refreshes its assets)
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.version.outputs.version }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+        run: |
+          sha256sum --check --strict SHA256SUMS
+          assets=(Flux.rbxm "Flux-$VERSION-package.zip" SHA256SUMS)
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" "${assets[@]}" --clobber
+          elif [ "$PRERELEASE" = true ]; then
+            gh release create "$TAG" "${assets[@]}" --verify-tag --title "Flux $VERSION" --generate-notes --prerelease
+          else
+            gh release create "$TAG" "${assets[@]}" --verify-tag --title "Flux $VERSION" --generate-notes
+          fi
+
+  # The `dist` branch: one commit per release holding only the shipped tree, for consumers that vendor by git
+  # (subtree, submodule) rather than through Wally. `sert dist` builds the commit with plumbing on top of the previous
+  # dist tip and never touches the working tree (sert.toml [dist]; versioned by [release.packages.flux]).
+  dist:
+    name: Dist branch
+    needs: [version, release]
+    if: needs.version.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: dist
+      cancel-in-progress: false
+    steps:
+      # Credentials stay in this job only: it pushes the dist branch.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Commit the release onto dist
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git ls-remote --exit-code --heads origin dist > /dev/null; then
+            git fetch --no-tags origin dist:dist
+          fi
+          python3 tools/sert.py dist --from "$GITHUB_SHA"
+          git log -1 --format='%H %s' dist
+
+      - name: Push dist
+        run: git push origin dist
+
+  wally:
+    name: Publish to Wally
+    needs: [version, release]
+    if: needs.version.outputs.release == 'true'
     environment: release
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-
-      - uses: CompeyDev/setup-rokit@1d9390883f7ebce19d48f5b8d006e11d387c92ab
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: false
 
-      - name: Build .rbxm
-        run: rojo build default.project.json --output Flux.rbxm
-
-      - name: Build model .rbxm
-        run: rojo build .github/model.project.json --output Flux-Model.rbxm
-
-      - name: Create release and attach .rbxm
-        uses: softprops/action-gh-release@v3
+      - uses: CompeyDev/setup-rokit@1d9390883f7ebce19d48f5b8d006e11d387c92ab # v0.2.1
         with:
-          files: Flux.rbxm
-          generate_release_notes: true
+          version: v1.2.0
+
+      - name: Publish kohltastrophe/flux
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Set wally.toml version
+          WALLY_AUTH_TOKEN: ${{ secrets.WALLY_AUTH_TOKEN }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          sed -i 's/^version = ".*"$/version = "'"$VERSION"'"/' wally.toml
+          if [ -z "$WALLY_AUTH_TOKEN" ]; then echo "::notice::No WALLY_AUTH_TOKEN secret: Wally publish skipped"; exit 0; fi
+          wally login --token "$WALLY_AUTH_TOKEN"
+          # `wally publish` exits 0 even when the registry refuses the package, so read what it printed.
+          output=$(wally publish 2>&1) || { echo "$output"; exit 1; }
+          echo "$output"
+          case "$output" in
+            *"published successfully"*) ;;
+            *"already exists"*) echo "::notice::kohltastrophe/flux@$VERSION was already on Wally" ;;
+            *) echo "::error::Wally did not accept kohltastrophe/flux@$VERSION"; exit 1 ;;
+          esac
 
-      - name: Publish to Wally
-        env:
-          WALLY_AUTH: ${{ secrets.WALLY_AUTH_TOKEN }}
-        run: |
-          mkdir -p ~/.wally
-          printf '[tokens]\n"https://api.wally.run/" = "%s"\n' "$WALLY_AUTH" > ~/.wally/auth.toml
-          wally publish
+  creator-store:
+    name: Publish to the Creator Store
+    needs: [version, release]
+    if: needs.version.outputs.release == 'true'
+    environment: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release
+          path: dist
 
-      - name: Commit version bump
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch origin main
-          git checkout -f -B main origin/main
-          sed -i 's/^version = ".*"$/version = "'"$VERSION"'"/' wally.toml
-          if git diff --quiet wally.toml; then
-            echo "wally.toml already at $VERSION, nothing to commit"
-          else
-            git add wally.toml
-            git commit -m "chore: bump wally.toml to $VERSION"
-            git push origin main
-          fi
-
-      - name: Publish model to Creator Store
+      # Uploading the same model again only adds an asset version, so a re-run is safe.
+      - name: Update the Flux model
         env:
           MODEL_TOKEN: ${{ secrets.MODEL_TOKEN }}
           MODEL_ASSET_ID: 18506925834
         run: |
+          if [ -z "$MODEL_TOKEN" ]; then echo "::notice::No MODEL_TOKEN secret: Creator Store publish skipped"; exit 0; fi
           curl --fail-with-body -sS -X PATCH \
             "https://apis.roblox.com/assets/v1/assets/$MODEL_ASSET_ID" \
             -H "x-api-key: $MODEL_TOKEN" \
             -F 'request={"assetId":"'"$MODEL_ASSET_ID"'"};type=application/json' \
-            -F "fileContent=@Flux-Model.rbxm;type=model/x-rbxm"
+            -F "fileContent=@dist/Flux-Model.rbxm;type=model/x-rbxm"
