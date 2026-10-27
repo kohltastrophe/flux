@@ -53,7 +53,7 @@ local ThemeContext = Flux.context("Dark")
 
 ThemeContext:provide("Light", function()
     -- Any descendant created inside this block (including inside Computeds,
-    -- Effects, and event handlers) reads "Light" from ThemeContext:consume()
+    -- Effects, and event handlers) reads "Light" from ThemeContext:get()
     return MainWindow()
 end)
 ```

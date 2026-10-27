@@ -69,12 +69,12 @@ count(3)
 
 ## Reading the Previous Value
 
-A Computed (or [Effect](/guide/concepts/effects)) receives its own **previous return value** as its first argument (`nil` on the first run), making folds and running maximums straightforward:
+A Computed created with `Flux(fn)` receives its own **previous return value** as its first argument (`nil` on the first run), making folds and running maximums straightforward:
 
 ```luau
 local score = Flux.signal(0)
 
-local highScore = Flux.computed(function(previous: number?)
+local highScore = Flux(function(previous: number?)
 	return math.max(previous or 0, score())
 end)
 

@@ -114,7 +114,7 @@ Flux.edit(existingTextBox) {
 }
 ```
 
-> [!TIP]
+> [!TIP] Two-Way Binding vs. Read-Only Mirroring
 > To two-way bind a property, attribute, or tag to a signal node, use [`Flux.model(node)`](/guide/roblox/creation#flux-model-two-way-binding-in-one-key) (`Text = Flux.model(textNode)`, `_attr_Score = Flux.model(scoreNode)`, or `_tag_Selected = Flux.model(selectedNode)`). To follow an instance property, attribute, or tag as a read-only node, use [`Flux.property(instance, key)`](/guide/concepts/signals#binding-from-an-instance-property).
 
 ### `__REF` (Instance Reference)

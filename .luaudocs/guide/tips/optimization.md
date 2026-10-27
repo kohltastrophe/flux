@@ -62,7 +62,7 @@ end)
 setCount(10)
 ```
 
-> [!NOTE]
+> [!NOTE] Reactive Compatibility of Fast-Path Closures
 > `createSignal`{luau} and `createMemo`{luau} closures are valid `Flux.Reactive<T>`{luau} sources; you can pass `getCount`{luau} or `getDoubled`{luau} directly to property bindings, `Flux.spring`{luau}, or `Flux.show`{luau}.
 
 ## 5. How the Reactive Graph Minimizes Work

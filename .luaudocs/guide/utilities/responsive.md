@@ -20,7 +20,7 @@ Flux.new "ScreenGui" {
 }
 ```
 
-> [!TIP]
+> [!TIP] Screen Insets and Safe Areas
 > For safe areas (the Roblox topbar, device notches, and rounded corners), configure Roblox's built-in [`ScreenGui.ScreenInsets`](https://create.roblox.com/docs/en-us/reference/engine/classes/ScreenGui#ScreenInsets) (`CoreUISafeInsets`{luau} or `DeviceSafeInsets`{luau}) and `ScreenGui.SafeAreaCompatibility`{luau}.
 
 ## Screen & Layout Nodes

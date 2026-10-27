@@ -25,7 +25,7 @@ _Flux is a declarative Luau library for creating user interfaces. It runs on fin
 
 </div>
 
-Flux exploits Luau's type checker to its absolute limit, if you're going to be lazy, your editor should do the heavy lifting. The moment you declare an instance like a `TextLabel` or a `Frame`, you get zero-guesswork autocomplete for every valid property, event, and expected type.
+Flux exploits Luau's type checker to its absolute limit: if you're going to be lazy, your editor should do the heavy lifting. The moment you declare an instance like a `TextLabel` or a `Frame`, you get zero-guesswork autocomplete for every valid property, event, and expected type.
 
 ---
 
@@ -53,7 +53,7 @@ new "ScreenGui" {
 }
 ```
 
-Flux cuts boilerplate with `__call` metamethods and full <b>operator overloading</b> on every reactive node, so reading and writing state takes zero ceremony. Forget `:get()` and `:set(1)`, just use `count()` to read and `count(1)` to write. Arithmetic, comparison, and concatenation operators automatically subscribe, so reactive expressions read like the plain Luau around them.
+Flux cuts boilerplate with `__call` metamethods and full <b>operator overloading</b> on every reactive node, so reading and writing state takes zero ceremony. Forget `:get()` and `:set(1)`; just use `count()` to read and `count(1)` to write. Arithmetic, comparison, and concatenation operators automatically subscribe, so reactive expressions read like the plain Luau around them.
 
 </div>
 
@@ -87,7 +87,7 @@ Download the latest `Flux.rbxm` from [Releases](https://github.com/kohltastrophe
 
 From there, the **[Getting Started](https://flux.kohl.gg/guide/introduction/getting-started)** guide covers the core concepts and your first reactive components.
 
-## Acknowledgements
+## Acknowledgments
 
 Flux is heavily inspired by:
 

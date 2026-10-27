@@ -98,7 +98,7 @@ local total = Flux.computed(Flux.on(trigger, function(value, previousValue)
 end))
 ```
 
-Pass `true` as the third argument (`defer`) to skip the first run and execute `fn` only on subsequent changes to `deps` ( returning `nil` on the skipped initial run):
+Pass `true` as the third argument (`defer`) to skip the first run and execute `fn` only on subsequent changes to `deps` (returning `nil` on the skipped initial run):
 
 ```luau
 local health = Flux.signal(100)

@@ -33,7 +33,7 @@ print(parsed().ok) -- true
 
 Any reactive dependencies read before `tryFn`{luau} threw are still tracked, so updating `rawJson`{luau} automatically re-runs `parsed`{luau} and recovers cleanly.
 
-> [!NOTE]
+> [!NOTE] Untracked Fallback Execution
 > The `fallback`{luau} handler itself runs **untracked** so fallback logging or recovery reads never subscribe the computation to unintended dependencies.
 
 ## Asynchronous Errors

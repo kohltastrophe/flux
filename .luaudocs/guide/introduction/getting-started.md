@@ -17,7 +17,7 @@ Add Flux to `[dependencies]` in `wally.toml` and run `wally install`:
 
 ```toml
 [dependencies]
-Flux = "kohltastrophe/flux@0.3.0"
+Flux = "kohltastrophe/flux@0.3.1"
 ```
 
 Flux installs as a `shared` dependency in `Packages`, available to both client and server scripts.
@@ -102,14 +102,14 @@ If you are upgrading an existing project from `0.2.0` to `0.3.0`, update these r
 | `Flux.attr`, `Flux.tag`, `Flux.event`, `Flux.ref`, `Flux.onDestroy` | `_attr_Name`, `_tag_Name`, `_Prop`, `__attr_Name`, `__tag_Name` | One-off directive helpers are replaced by inline [prefix keys](/guide/roblox/hydration#prefix-keys-special-directives) and `__*` directive tables. |
 | `Flux.listen(inst, prop)` | [`Flux.property(inst, key)`](/guide/concepts/signals#binding-from-an-instance-property) | Also supports `"$Attr"` / `"_attr_Attr"` and `"#Tag"` / `"_tag_Tag"` (or `Flux(inst, key)`). |
 | `Flux(fn, true)` | [`Flux.effect(fn)`](/guide/concepts/effects) | `Flux()` only constructs signals (`Flux(v)`), computeds (`Flux(fn)`), and property nodes (`Flux(inst, key)`). |
-| `Flux.on(deps, fn)` | `Flux.effect(Flux.on(deps, fn))` | [`Flux.on`](/guide/concepts/effects#explicit-dependencies-with-flux-on) now returns a tracked effect callback rather than a standalone listener. |
+| `Flux.on(deps, fn)` | `Flux.effect(Flux.on(deps, fn))` | [`Flux.on`](/guide/concepts/effects#bridging-to-external-systems-with-flux-on) now returns a tracked effect callback rather than a standalone listener. |
 | `Flux.wrap` / `Flux.props` | [`Flux.split(props, ...)`](/guide/concepts/components#splitting-props-with-flux-split) | Split custom component props from pass-through instance props; nested tables in `Flux.new` / `Flux.edit` flatten automatically. |
 | `Flux.default` | [`Flux.otherwise`](/guide/concepts/conditionals#switching-between-many-branches) | Default branch key in `Flux.switch`. |
 | `Flux.safe` + `Flux.catch` | [`Flux.safe(tryFn, catchFn)`](/guide/tips/errors) | Combined into a single error-boundary helper. |
 | `Flux.clean(...)` | [`Flux.dispose(...)`](/guide/concepts/scopes) | Immediately tears down any `Cleanable` (use `Flux.cleanup(fn)` to register on the active owner). |
 | `Flux.viewport`, `Flux.scale`, `Flux.safeArea` | [`Flux.Responsive.*`](/guide/utilities/responsive) | Accessed via `Flux.Responsive.viewport`, `scale`, `breakpoint`, `displaySize`, `platform`, `input`, etc. |
 | `Flux.pointIn`, `Flux.sunk`, `Flux.exclusive` | [`Flux.Interact.*`](/guide/utilities/interact) | Accessed via `Flux.Interact.pointIn`, `sunk`, `covered`, `hover`, `press`, `selected`, and `focused`. |
-| `Flux.Color.readable`, `rotateHue` | [`Flux.Color.contrastText`](/guide/motion/color), `spin` | Renamed on the Oklab color utility namespace. |
+| `Flux.Color.contrastText`, `spin` | [`Flux.Color.readable`](/guide/motion/color), `rotateHue` | Renamed on the Oklab color utility namespace. |
 
 ## Next Steps
 

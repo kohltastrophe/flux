@@ -40,7 +40,7 @@ local screen = Flux.new "Frame" {
 }
 ```
 
-- **Keyed on truthiness:** Changing between two truthy values (e.g. `{ name = "Ada" }` → `{ name = "Grace" }`) keeps the mounted branch alive without rebuilding its Instances.
+- **Keyed on truthiness:** Changing between two truthy values (e.g. `{ name = "Ada" }` to `{ name = "Grace" }`) keeps the mounted branch alive without rebuilding its Instances.
 - **Live `value` accessor:** The truthy branch function receives a `value` getter (`() -> T`) that reads the current truthy condition reactively inside bindings.
 - **Branch scope:** Every branch runs inside its own child [Scope](/guide/concepts/scopes); when the condition flips, the outgoing branch's instances, effects, and cleanups are destroyed automatically.
 

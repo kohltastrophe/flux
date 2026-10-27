@@ -122,3 +122,5 @@ local function Toast(message: string): Frame
 	return frame
 end
 ```
+
+The scope matters here: the instance owns getter functions bound to its properties, but not a [spring](/guide/motion/spring#lifecycle) or [tween](/guide/motion/tween#lifecycle) node bound to one. Without an owner, `opacity` would outlive `frame`.

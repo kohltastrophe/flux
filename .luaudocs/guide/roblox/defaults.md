@@ -36,7 +36,7 @@ Set `Flux.Flags.defaults = false` at startup to disable the visual default overr
 Flux.Flags.defaults = false
 ```
 
-> [!NOTE]
+> [!NOTE] AutoButtonColor Remains Disabled
 > `AutoButtonColor = false` on `TextButton` and `ImageButton` is applied even when `Flux.Flags.defaults = false`, since it controls button behavior rather than visual styling. Pass `AutoButtonColor = true` in the properties table when you want the engine's default tinting.
 
 ## Customizing Defaults

@@ -78,7 +78,7 @@ Each manual frame of `dt`{luau} seconds executes in deterministic engine order:
 4. Fires `"Heartbeat"`{luau} listeners with `dt`{luau}.
 5. Drains `Clock.defer`{luau} queues between each phase.
 
-> [!TIP]
+> [!TIP] Isolated Motion Stepping
 > If you want to advance springs and tweens in isolation without stepping timers or `Clock` listeners, call `Flux.Motion.step(dt)`{luau} followed by `Flux.flush()`{luau} directly.
 
 ## Isolating Tests with Scopes

@@ -80,7 +80,7 @@ end)
 - A **function** `() -> ()` or `(oldValue, destroyed) -> ()`
 - An **`Instance`** (destroyed via `:Destroy()`)
 - An **`RBXScriptConnection`** (disconnected)
-- A suspended **`thread`** (cancelled via `task.cancel`)
+- A suspended **`thread`** (canceled via `task.cancel`)
 - Any **table** with a `:Destroy()`, `:destroy()`, `:Disconnect()`, or `:disconnect()` method (including Flux nodes, scopes, stores, and async tasks)
 - An **array** of cleanables
 
@@ -89,7 +89,7 @@ end)
 | | `Flux.computed(fn)` | `Flux.effect(fn)` |
 | :--- | :--- | :--- |
 | **Purpose** | Derive a new value from state | Synchronize state with an external system |
-| **Return value** | Cached and read via `node()` | Ignored (passed only to its own next run as `prev`) |
+| **Return value** | Cached and read via `node()` | Ignored |
 | **Purity** | Must be pure (no side effects) | Built for side effects and resource setup |
 | **When it runs** | On demand when unobserved; before effects on flush when observed | Once per frame flush after upstream computeds settle |
 

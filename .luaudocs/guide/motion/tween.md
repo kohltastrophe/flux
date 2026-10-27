@@ -73,4 +73,18 @@ end)
 
 When created inside a [Scope](/guide/concepts/scopes), a tween's per-frame step registration is cleaned up automatically when the scope is destroyed. To stop and dispose a tween early, call `tween:Destroy()`{luau}.
 
+> [!CAUTION] A Bound Tween Is Not Owned by Its Instance
+> `Flux.new`{luau} and `Flux.edit`{luau} own a getter function bound to a property (`Size = function() ... end`{luau}), but a tween passed straight to a property (`Size = Flux.tween(fn)`{luau}) only gets a binding. Created outside any owner, a tween with a reactive target or `tweenInfo`{luau} keeps its driving Effect subscribed to those sources after the instance is destroyed, and re-runs it whenever they change. Create the tween inside a [Scope](/guide/concepts/scopes) that is destroyed with the instance, or hand it to the instance's `__CLEAN`{luau}:
+>
+> ```luau
+> local width = Flux.tween(function()
+>     return if isOpen() then UDim2.fromOffset(300, 40) else UDim2.fromOffset(0, 40)
+> end)
+>
+> local panel = Flux.new "Frame" {
+>     Size = width,
+>     __CLEAN = { width }, -- destroying `panel` destroys the tween and its Effect
+> }
+> ```
+
 <!--@include: ./_snippets/data-types.md-->

@@ -7,7 +7,7 @@ sidebar_position: 3
 
 # Developer Tools
 
-Flux works out of the box in Roblox Studio, and pairs cleanly with external Luau tooling for typechecking, linting, headless testing, and UI storybooks.
+Flux works out of the box in Roblox Studio and pairs cleanly with external Luau tooling for type checking, linting, headless testing, and UI storybooks.
 
 ## Editor & Static Analysis
 
@@ -33,7 +33,7 @@ Flux's reactive graph and [`Flux.Clock`](/guide/tips/testing) run under the stan
 
 ## UI Previewing (Storybooks)
 
-Roblox storybook plugins mount a component into a `target` container and return a cleanup callback, a direct match for [`Flux.scope`](/guide/concepts/scopes).
+Roblox storybook plugins mount a component into a `target` container and return a cleanup callback: a direct match for [`Flux.scope`](/guide/concepts/scopes).
 
 Given a reusable `Counter` component:
 

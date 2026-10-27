@@ -56,7 +56,7 @@ local myButton = Flux.new "TextButton" {
 }
 ```
 
-> [!NOTE]
+> [!NOTE] Reactive Physics Parameters
 > `frequency`{luau} and `damping`{luau} also accept reactive nodes or functions, retuning the spring's physics on the fly.
 
 ## Velocity Control: Impulse & Set Velocity
@@ -99,11 +99,25 @@ offset:snap(100)
 offset:setCurrent(140)
 ```
 
-> [!NOTE]
+> [!NOTE] Spring-Only Methods
 > `:impulse()`{luau}, `:setVelocity()`{luau}, `:setCurrent()`{luau}, and `:snap()`{luau} are spring-only. Calling them on a [Tween](/guide/motion/tween) warns and does nothing.
 
 ## Lifecycle
 
 When created inside a [Scope](/guide/concepts/scopes) (such as a component), a spring's per-frame step registration is cleaned up automatically when the scope is destroyed. To stop and dispose a spring early, call `spring:Destroy()`{luau}.
+
+> [!CAUTION] A Bound Spring Is Not Owned by Its Instance
+> `Flux.new`{luau} and `Flux.edit`{luau} own a getter function bound to a property (`Position = function() ... end`{luau}), but a spring passed straight to a property (`Position = Flux.spring(fn)`{luau}) only gets a binding. Created outside any owner, a spring with a reactive `target`{luau}, `frequency`{luau}, or `damping`{luau} keeps its driving Effect subscribed to those sources after the instance is destroyed, and re-runs it whenever they change. Create the spring inside a [Scope](/guide/concepts/scopes) that is destroyed with the instance, or hand it to the instance's `__CLEAN`{luau}:
+>
+> ```luau
+> local _, button = Flux.scope(function(scope)
+>     return Flux.new "TextButton" {
+>         Size = Flux.spring(function()
+>             return if isHovering() then UDim2.fromScale(1.1, 1.1) else UDim2.fromScale(1, 1)
+>         end, 3, 0.75),
+>         __CLEAN = { scope }, -- destroying `button` destroys the scope, which owns the spring
+>     }
+> end)
+> ```
 
 <!--@include: ./_snippets/data-types.md-->

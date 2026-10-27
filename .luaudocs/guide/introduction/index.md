@@ -1,11 +1,11 @@
 ---
-title: What is Flux?
+title: Overview
 description: An introduction to the Flux library for Roblox and Luau.
 outline: deep
 sidebar_position: 1
 ---
 
-# What is Flux?
+# Overview
 
 Flux is a declarative Luau library for building user interfaces. It pairs fine-grained, glitch-free reactivity with strict Luau typing and terse syntax, so interfaces read like plain Luau and update native Roblox [`Instances`](https://create.roblox.com/docs/en-us/reference/engine/datatypes/Instance) directly.
 
