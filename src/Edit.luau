@@ -67,16 +67,10 @@ local function guiBase(extra: { [string]: unknown }?): { [string]: unknown }
 end
 
 local function textBase(extra: { [string]: unknown }?): { [string]: unknown }
-	local t = guiBase({
-		Font = Enum.Font.SourceSans,
-		Text = "",
-		TextColor3 = BLACK,
-	})
-	if extra then
-		for k, v in extra do
-			t[k] = v
-		end
-	end
+	local t = guiBase(extra)
+	t.Font = Enum.Font.SourceSans
+	t.Text = ""
+	t.TextColor3 = BLACK
 	return t
 end
 
@@ -117,7 +111,7 @@ local Defaults: { [string]: { [string]: unknown } } = {
 
 -- Find ----------------------------------------------------------------------------------------------------------------
 
-local FIND_SYMBOL = table.freeze({ type = "Symbol" }) :: Type.Symbol
+local FIND_SYMBOL: any = table.freeze({ type = "Symbol" })
 local rawGame: any = game
 
 local function indexParent(instance: Instance): Instance?
@@ -171,7 +165,7 @@ local function warnFind(query: string?, value: any)
 	warn(`[Flux] Instance expected for {desc}, got {compatTypeof(value)}`)
 end
 
-local function resolveFind(applied: { any }, instance: Instance, apply: (Instance, Type.Map<any>) -> ())
+local function resolveFind(applied: { any }, instance: Instance, apply: (Instance, Type.Map<any>, ...any) -> ...any)
 	local query = applied[4]
 	local result = applied[2](instance, query)
 	local properties = applied[3]
@@ -193,8 +187,6 @@ local function resolveFind(applied: { any }, instance: Instance, apply: (Instanc
 end
 
 local Find = table.freeze({
-	--- @ignore
-	Symbol = FIND_SYMBOL,
 	--[[
 	Selects the first ancestor named `name` via
 	[`Instance:FindFirstAncestor`](https://create.roblox.com/docs/reference/engine/classes/Instance#FindFirstAncestor),
@@ -299,8 +291,6 @@ local Find = table.freeze({
 	[Open Documentation](https://flux.kohl.gg/guide/roblox/hydration#instance-selectors-flux-find)
 	]]
 	QueryFirst = makeSelector(queryFirst) :: QuerySelector,
-	--- @ignore
-	resolve = resolveFind,
 })
 
 -- Split ---------------------------------------------------------------------------------------------------------------
@@ -397,24 +387,6 @@ export type Pick<T, G> = pickWhere<T, G, nil, true>
 --- @ignore
 export type Omit<T, G> = pickWhere<T, nil, G, false>
 
---[[
-Splits a props table by key into fresh tables: one per `keys` group holding just the keys that group names, then a
-final table with everything else (instance properties, numeric children, `__EVENT`-style directives), ready to forward
-to a root instance. A group is an array of key names or a table whose keys are used; a key named by several groups
-is assigned to the first group. Values move by reference and `props` itself is left untouched.
-
-With one group, it is typed as a `Pick` of the props type and the rest as its `Omit`, keeping required members
-required. That needs the names as types: pass a schema table, or annotate a name array
-(`local OWN: { "label" | "onClick" } = ...`). An unannotated array resolves to `{ string }`, and several groups are more
-than the solver can pick through, so those tables are `Partial` (every member optional).
-
-```luau
-local OWN: { "label" | "onClick" } = { "label", "onClick" }
-local own, rest = Flux.split(props, OWN) -- own.label: string, own.onClick: (() -> ())?
-```
-
-[Open Documentation](https://flux.kohl.gg/guide/concepts/components#splitting-props-with-flux-split)
-]]
 local function split(props: any, keys: any, ...: any): ...any
 	if keys == nil and select("#", ...) == 0 then
 		return if type(props) == "table" then table.clone(props) else {}
@@ -610,10 +582,12 @@ local function bindNamedTag(instance: Instance, tag: string, tagValue: any, _CLE
 		local modelNode = tagValue[2]
 		bindNamedTag(instance, tag, modelNode, _CLEAN)
 		modelNode:set(instance:HasTag(tag))
-		local disconnect = onTagChanged(instance, tag, function(hasTag)
-			modelNode:set(hasTag)
-		end)
-		modelNode:onDestroy(disconnect)
+		local disconnect = Bind.bindDestroy(
+			modelNode,
+			onTagChanged(instance, tag, function(hasTag)
+				modelNode:set(hasTag)
+			end)
+		)
 		table.insert(_CLEAN, disconnect)
 		local claims = namedTagClaims[instance]
 		local prevRelease = claims and claims[tag]
@@ -704,8 +678,14 @@ local function applyBindingOrValue(
 	end
 
 	if isModel(value) then
+		if not isAttribute and name == "LayoutOrder" then
+			Bind.pinOrder(instance)
+		end
 		bindModel(value[2], instance, name, _CLEAN, isAttribute)
 	elseif isNode(value) then
+		if not isAttribute and name == "LayoutOrder" then
+			Bind.pinOrder(instance)
+		end
 		table.insert(_CLEAN, bindTo(value, instance, name, isAttribute))
 		if made then
 			attachToBinding(instance, name, isAttribute, made)
@@ -781,7 +761,10 @@ local function applyPrefixKey(
 		return
 	end
 
-	local name: string
+	if second == nil then
+		error('property name after "_" cannot be empty', 0)
+	end
+	local name = string.sub(property, 2)
 	local isAttr = false
 	local isTag = false
 	if second == 95 then
@@ -797,14 +780,7 @@ local function applyPrefixKey(
 				error('tag name after "__tag_" cannot be empty', 0)
 			end
 			isTag = true
-		else
-			name = string.sub(property, 2)
 		end
-	else
-		if second == nil then
-			error('property name after "_" cannot be empty', 0)
-		end
-		name = string.sub(property, 2)
 	end
 	if seenProps then
 		if seenProps[property] then
@@ -854,19 +830,6 @@ local function applyDirectives(
 			end
 		end
 	end
-
-	local _REF: any = properties.__REF
-	if _REF then
-		if type(_REF) == "function" then
-			local callRef: (Instance) -> any = _REF
-			local refClean = callRef(instance)
-			if refClean ~= nil then
-				table.insert(_CLEAN, refClean)
-			end
-		elseif isNode(_REF) then
-			_REF:set(instance)
-		end
-	end
 end
 
 local function finalizeEdit(
@@ -902,9 +865,24 @@ local function finalizeEdit(
 			elseif isNode(child) then
 				table.insert(_CLEAN, Bind.children(child, instance, order))
 				order += 1
+			elseif child[1] == FIND_SYMBOL then
+				resolveFind(child, instance, applyEdit)
 			else
 				order = applyEdit(instance, child, seenAttrs, seenProps, _CLEAN, order)
 			end
+		end
+	end
+
+	local _REF: any = properties.__REF
+	if _REF then
+		if type(_REF) == "function" then
+			local callRef: (Instance) -> any = _REF
+			local refClean = callRef(instance)
+			if refClean ~= nil then
+				table.insert(_CLEAN, refClean)
+			end
+		elseif isNode(_REF) then
+			_REF:set(instance)
 		end
 	end
 
@@ -1014,11 +992,13 @@ local function edit(
 		then
 			continue
 		end
-		if type(property) == "string" and string.byte(property) == 95 then
-			applyPrefixKey(instance, property, value, seenAttrs, seenProps, _CLEAN)
-			continue
-		end
-		if type(property) == "number" and property == math.floor(property) then
+		local propType = type(property)
+		if propType == "string" then
+			if string.byte(property) == 95 then
+				applyPrefixKey(instance, property, value, seenAttrs, seenProps, _CLEAN)
+				continue
+			end
+		elseif propType == "number" and property == math.floor(property) then
 			if kindOf(value) == "Instance" then
 				childKeys = childKeys or {}
 				table.insert(childKeys :: { number }, property)
@@ -1026,10 +1006,8 @@ local function edit(
 				actions = actions or {}
 				table.insert(actions :: { any }, value)
 			elseif type(value) == "table" then
-				if value[1] == FIND_SYMBOL then
-					resolveFind(value, instance, applyEdit)
-				elseif not isModel(value) then
-					if not isNode(value) then
+				if not isModel(value) then
+					if value[1] ~= FIND_SYMBOL and not isNode(value) then
 						hasFlatten = true
 					end
 					childKeys = childKeys or {}

@@ -169,6 +169,7 @@ type Listener = {
 	count: number,
 	connections: { RBXScriptConnection }?,
 	open: () -> { RBXScriptConnection },
+	last: any?,
 }
 
 local function retain(listener: Listener)
@@ -183,6 +184,8 @@ local function release(listener: Listener)
 	local connections = listener.connections
 	if listener.count == 0 and connections ~= nil then
 		listener.connections = nil
+		listener.last = nil
+		memoToken, memoRoot, memoList = nil, nil, {}
 		dispose(connections)
 	end
 end
@@ -270,6 +273,9 @@ end
 
 local function leave(tracker: Tracker, entry: Entry)
 	if entry.root ~= nil then
+		if entry.root == memoRoot then
+			memoToken, memoRoot, memoList = nil, nil, {}
+		end
 		entry.root = nil
 		tracker.inside[entry] = nil
 		release(tracker)
@@ -299,7 +305,7 @@ local function step(tracker: Tracker)
 		if root ~= lastRoot then
 			local list = guisAt(root, x, y)
 			if list == nil then
-				return
+				continue
 			end
 			lastRoot, lastList = root, list
 		end
@@ -449,6 +455,9 @@ local function _hoverWith(object: GuiObject, env: HoverServices?, options: Hover
 		if kind ~= MOUSE_MOVEMENT and kind ~= TOUCH then
 			return
 		end
+		if kind == TOUCH and entry.touch ~= nil and entry.touch ~= input then
+			return
+		end
 		local pos = input.Position
 		local on = not menuOpen(env) and not claimedAt(env, pos.X, pos.Y, object, input, within)
 		hovering:set(on)
@@ -478,6 +487,9 @@ local function _hoverWith(object: GuiObject, env: HoverServices?, options: Hover
 				hovering:set(false)
 			end
 		elseif kind == TOUCH then
+			if entry.touch ~= nil and entry.touch ~= input then
+				return
+			end
 			if tracker ~= nil and entry.touch ~= nil then
 				settleTouch(tracker, entry)
 			end
@@ -538,7 +550,7 @@ local function useHoverServices(env: HoverServices?): HoverServices?
 	return previous
 end
 
-local function _pressWith(object: GuiObject, env: Services): Graph.Node<boolean>
+local function _pressWith(object: GuiObject, env: Services?): Graph.Node<boolean>
 	local pressed = signal(false)
 	local held: InputObject? = nil
 	local releaseListener: RBXScriptConnection? = nil
@@ -575,16 +587,24 @@ local function _pressWith(object: GuiObject, env: Services): Graph.Node<boolean>
 		end
 		held = input
 		pressed:set(true)
-		menuListener = env.GuiService:GetPropertyChangedSignal("MenuIsOpen"):Connect(function()
-			if menuOpen(env) then
-				releasePress()
-			end
-		end)
-		releaseListener = env.UserInputService.InputEnded:Connect(function(ended: InputObject)
-			if isHeld(ended) then
-				releasePress()
-			end
-		end)
+		if env ~= nil then
+			menuListener = env.GuiService:GetPropertyChangedSignal("MenuIsOpen"):Connect(function()
+				if menuOpen(env) then
+					releasePress()
+				end
+			end)
+			releaseListener = env.UserInputService.InputEnded:Connect(function(ended: InputObject)
+				if isHeld(ended) then
+					releasePress()
+				end
+			end)
+		else
+			releaseListener = object.InputEnded:Connect(function(ended: InputObject)
+				if isHeld(ended) then
+					releasePress()
+				end
+			end)
+		end
 	end
 
 	local pointer = object.InputBegan:Connect(function(input: InputObject)
@@ -596,13 +616,17 @@ local function _pressWith(object: GuiObject, env: Services): Graph.Node<boolean>
 			end
 		end
 	end)
-	local hub = registryFor(env).activate
+	local hub = if env ~= nil then registryFor(env).activate else nil
 	local holdHandler: any = hold
-	hubAdd(hub, object, holdHandler)
+	if hub ~= nil then
+		hubAdd(hub, object, holdHandler)
+	end
 
 	return expose(pressed, object, function()
 		pointer:Disconnect()
-		hubRemove(hub, object, holdHandler)
+		if hub ~= nil then
+			hubRemove(hub, object, holdHandler)
+		end
 		releasePress()
 	end)
 end
@@ -620,7 +644,10 @@ local function press(object: GuiObject): Graph.Node<boolean>
 	return _pressWith(object, engineServices())
 end
 
-local function _selectedWith(object: GuiObject, env: Services): Graph.Node<boolean>
+local function _selectedWith(object: GuiObject, env: Services?): Graph.Node<boolean>
+	if env == nil then
+		return expose(signal(false), object, function() end)
+	end
 	local guiService = env.GuiService
 	local isSelected = signal(guiService.SelectedObject == object)
 	local hub = registryFor(env).selected

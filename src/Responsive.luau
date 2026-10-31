@@ -155,11 +155,13 @@ local breakpoint: Graph.Node<Breakpoint> = breakpointOf()
 
 local RunService = getService("RunService")
 local isClient = RunService ~= nil and RunService:IsClient() and RunService:IsRunning()
-local tenFoot = isClient and getService("GuiService"):IsTenFootInterface()
+local GuiService = isClient and getService("GuiService")
+local UserInputService = isClient and getService("UserInputService")
+local VRService = isClient and getService("VRService")
+local tenFoot = isClient and GuiService:IsTenFootInterface()
 
 local function detectPlatform(): Platform
-	local UserInputService = getService("UserInputService")
-	return if getService("VRService").VREnabled
+	return if VRService.VREnabled
 		then "vr"
 		elseif tenFoot then "console"
 		elseif UserInputService.KeyboardEnabled and UserInputService.MouseEnabled then "pc"
@@ -240,9 +242,7 @@ backgrounds) to `1` (the default). Multiply translucent `BackgroundTransparency`
 local preferredTransparency: Graph.Node<number> = signal(1)
 
 if isClient then
-	local GuiService = getService("GuiService")
 	local Workspace = getService("Workspace")
-	local UserInputService = getService("UserInputService")
 
 	local viewportConnection: RBXScriptConnection?
 	local function bindCamera(camera: Camera?)
@@ -321,7 +321,7 @@ if isClient then
 	mirror(GuiService, "ViewportDisplaySize", displaySize, nameOf)
 	bindPlatform(UserInputService, "KeyboardEnabled")
 	bindPlatform(UserInputService, "MouseEnabled")
-	bindPlatform(getService("VRService"), "VREnabled")
+	bindPlatform(VRService, "VREnabled")
 	mirror(GuiService, "ReducedMotionEnabled", reducedMotion)
 	mirror(GuiService, "PreferredTransparency", preferredTransparency)
 end

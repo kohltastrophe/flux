@@ -25,6 +25,8 @@ local NOOP = function() end
 --- @ignore
 type BindData = {
 	rbx: { [Instance]: { { [string]: any }? } },
+	eff: Graph.Node<any>,
+	flushed: boolean,
 	children: {
 		cleanupConnection: RBXScriptConnection?,
 		list: { Instance },
@@ -164,38 +166,38 @@ local function setProperty(instance: Instance, prop: string, value: any)
 end
 
 local function resolveKey(name: string, isAttribute: boolean?): (string, boolean, boolean)
-	if isAttribute == nil then
-		local first = string.byte(name)
-		if first == 36 then
-			local attr = string.sub(name, 2)
+	if isAttribute ~= nil then
+		return name, isAttribute, false
+	end
+	local first = string.byte(name)
+	if first == 36 then
+		local attr = string.sub(name, 2)
+		if attr == "" then
+			error('attribute name after "$" cannot be empty', 4)
+		end
+		return attr, true, false
+	elseif first == 35 then
+		local tag = string.sub(name, 2)
+		if tag == "" then
+			error('tag name after "#" cannot be empty', 4)
+		end
+		return tag, false, true
+	elseif first == 95 then
+		if string.sub(name, 1, 6) == "_attr_" then
+			local attr = string.sub(name, 7)
 			if attr == "" then
-				error('attribute name after "$" cannot be empty', 4)
+				error('attribute name after "_attr_" cannot be empty', 4)
 			end
 			return attr, true, false
-		elseif first == 35 then
-			local tag = string.sub(name, 2)
+		elseif string.sub(name, 1, 5) == "_tag_" then
+			local tag = string.sub(name, 6)
 			if tag == "" then
-				error('tag name after "#" cannot be empty', 4)
+				error('tag name after "_tag_" cannot be empty', 4)
 			end
 			return tag, false, true
-		elseif first == 95 then
-			if string.sub(name, 1, 6) == "_attr_" then
-				local attr = string.sub(name, 7)
-				if attr == "" then
-					error('attribute name after "_attr_" cannot be empty', 4)
-				end
-				return attr, true, false
-			elseif string.sub(name, 1, 5) == "_tag_" then
-				local tag = string.sub(name, 6)
-				if tag == "" then
-					error('tag name after "_tag_" cannot be empty', 4)
-				end
-				return tag, false, true
-			end
 		end
-		return name, false, false
 	end
-	return name, isAttribute, false
+	return name, false, false
 end
 
 local function onTagChanged(instance: Instance, tag: string, fn: (hasTag: boolean) -> ()): () -> ()
@@ -286,58 +288,89 @@ end
 
 local function cleanupChildrenBind<T>(node: Graph.Node<T>, parent: Instance?)
 	local data = bindData[node]
-	if data and data.children then
-		local children = data.children
-		if children.cleanupConnection then
-			children.cleanupConnection:Disconnect()
-		end
-		for _, child in children.list do
-			local current = child and child.Parent
-			if current ~= nil and (parent == nil or current == parent) then
-				child.Parent = nil
-			end
-		end
-		table.clear(children.list)
-		table.clear(children)
-		data.children = nil
+	local children = data and data.children
+	if not children then
+		return
 	end
+	if children.cleanupConnection then
+		children.cleanupConnection:Disconnect()
+	end
+	for _, child in children.list do
+		local current = child and child.Parent
+		if current ~= nil and (parent == nil or current == parent) then
+			child.Parent = nil
+		end
+	end
+	table.clear(children.list)
+	table.clear(children)
+	data.children = nil
+end
+
+local function startBindEffect(node: Graph.Node<any>, data: any): Graph.Node<any>
+	data.flushed = false
+	-- Writing instance properties fires engine listeners (`Changed`, `GetPropertyChangedSignal`, `AncestryChanged`)
+	-- synchronously. Run the writes untracked and ownerless so those listeners neither subscribe this effect to
+	-- what they read nor hand it the instances they create (which it would destroy on its next run). Children
+	-- stay tracked: nested child nodes are read while mounting them.
+	local pending: any = nil
+	local function write()
+		local value = pending
+		pending = nil
+		writeBinds(data, value)
+	end
+	local function isolated()
+		untrack(write)
+	end
+	local eff = withOwner(NO_VALUE, function()
+		return effect(function()
+			data.flushed = true
+			local value = get(node)
+			if next(data.rbx) ~= nil then
+				pending = value
+				withOwner(NO_VALUE, isolated)
+			end
+			applyChildren(data, value)
+		end)
+	end)
+	return eff
 end
 
 local function getBindData<T>(node: Graph.Node<T>)
 	local data: any = bindData[node]
 	if data == nil then
-		data = { rbx = {}, children = nil }
+		data = { rbx = {}, children = nil, eff = nil, flushed = false }
 		bindData[node] = data
-		-- Writing instance properties fires engine listeners (`Changed`, `GetPropertyChangedSignal`, `AncestryChanged`)
-		-- synchronously. Run the writes untracked and ownerless so those listeners neither subscribe this effect to
-		-- what they read nor hand it the instances they create (which it would destroy on its next run). Children
-		-- stay tracked: nested child nodes are read while mounting them.
-		local pending: any = nil
-		local function write()
-			writeBinds(data, pending)
-		end
-		local function isolated()
-			untrack(write)
-		end
-		local eff = withOwner(NO_VALUE, function()
-			return effect(function()
-				local value = get(node)
-				if next(data.rbx) ~= nil then
-					pending = value
-					withOwner(NO_VALUE, isolated)
-					pending = nil
-				end
-				applyChildren(data, value)
-			end)
-		end)
+		data.eff = startBindEffect(node, data)
 		node:onDestroy(function()
-			eff:Destroy()
+			data.eff:Destroy()
 			table.clear(data.rbx)
 			cleanupChildrenBind(node)
 			bindData[node] = nil
 		end)
 	end
 	return data
+end
+
+local function bindDestroy(node: Graph.Node<any>, disconnect: () -> ()): () -> ()
+	local rawNode: any = node
+	local done = false
+	local function disconnectOnce()
+		if done then
+			return
+		end
+		done = true
+		local inner = rawNode[1]
+		local destroys = inner and inner.destroys
+		if destroys then
+			local idx = table.find(destroys, disconnectOnce)
+			if idx then
+				table.remove(destroys, idx)
+			end
+		end
+		disconnect()
+	end
+	node:onDestroy(disconnectOnce)
+	return disconnectOnce
 end
 
 local Bind = {
@@ -348,12 +381,6 @@ local Bind = {
 	--- @ignore
 	applyLayoutOrder = applyLayoutOrder,
 	--- @ignore
-	MODEL_SYMBOL = MODEL_SYMBOL,
-	--- @ignore
-	kindOf = kindOf,
-	--- @ignore
-	isInstance = isInstance,
-	--- @ignore
 	setAttribute = setAttribute,
 	--- @ignore
 	setProperty = setProperty,
@@ -361,6 +388,8 @@ local Bind = {
 	onChanged = onChanged,
 	--- @ignore
 	onTagChanged = onTagChanged,
+	--- @ignore
+	bindDestroy = bindDestroy,
 }
 
 --[[
@@ -409,6 +438,15 @@ function Bind.modelNode(value: unknown): Graph.Node<any>?
 	return if Bind.isModel(value) then rawValue[2] else nil
 end
 
+local pendingChildData: BindData?
+local pendingChildValue: any
+
+local function applyPendingChildren()
+	local data, value = pendingChildData :: BindData, pendingChildValue
+	pendingChildData, pendingChildValue = nil, nil
+	applyChildren(data, value)
+end
+
 --- @ignore
 function Bind.children<T>(node: Graph.Node<T>, parent: Instance, layoutOrder: number?): () -> ()
 	local data = getBindData(node)
@@ -444,10 +482,13 @@ function Bind.children<T>(node: Graph.Node<T>, parent: Instance, layoutOrder: nu
 	children.parent = parent
 	children.token = token
 
+	if data.flushed then
+		data.eff:Destroy()
+		data.eff = startBindEffect(node, data)
+	end
 	if isReactive() then
-		untrack(function()
-			applyChildren(data, raw(node))
-		end)
+		pendingChildData, pendingChildValue = data, raw(node)
+		untrack(applyPendingChildren)
 	else
 		applyChildren(data, raw(node))
 	end
@@ -467,19 +508,14 @@ function Bind.from<T>(node: Graph.Node<T>, instance: Instance, property: string,
 		end)
 	else
 		rawNode:set(if attribute then instance:GetAttribute(name) else rawInstance[name])
-		local connection = if attribute
-			then instance:GetAttributeChangedSignal(name):Connect(function()
-				rawNode:set(instance:GetAttribute(name))
-			end)
-			else instance:GetPropertyChangedSignal(name):Connect(function()
-				rawNode:set(rawInstance[name])
-			end)
+		local connection = onChanged(instance, name, attribute, function(value)
+			rawNode:set(value)
+		end)
 		disconnect = function()
 			connection:Disconnect()
 		end
 	end
-	node:onDestroy(disconnect)
-	return node, disconnect
+	return node, bindDestroy(node, disconnect)
 end
 
 local function follow(instance: Instance, property: string): Graph.Node<any>
@@ -549,6 +585,13 @@ function Bind.on<D, R>(
 	local isArray = type(deps) == "table" and not isNode(deps)
 	local count = if isArray then #(deps :: { any }) else 0
 	local prevInput: any = nil
+	local curInput: any = nil
+	local curPrevResult: any = nil
+	local function runOnFn(): R
+		local input, prevRes = curInput, curPrevResult
+		curInput, curPrevResult = nil, nil
+		return fn(input, prevInput, prevRes)
+	end
 
 	return function(prevResult: R?): R?
 		local input
@@ -567,10 +610,8 @@ function Bind.on<D, R>(
 			return prevResult
 		end
 
-		local result
-		untrack(function()
-			result = fn(input, prevInput, prevResult)
-		end)
+		curInput, curPrevResult = input, prevResult
+		local result = untrack(runOnFn)
 		prevInput = input
 		return result
 	end
@@ -583,10 +624,20 @@ function Bind.to<T>(node: Graph.Node<T>, instance: Instance, property: string, i
 	local index = if attribute then 1 else 2
 	release(instance, property, attribute)
 
-	if attribute then
-		setAttribute(instance, property, raw(node))
+	local value = raw(node)
+	local function applyInitial()
+		if attribute then
+			setAttribute(instance, property, value)
+		else
+			setProperty(instance, property, value)
+		end
+	end
+	if isReactive() or Graph.getOwner() ~= nil then
+		withOwner(NO_VALUE, function()
+			untrack(applyInitial)
+		end)
 	else
-		setProperty(instance, property, raw(node))
+		applyInitial()
 	end
 
 	local binds = data.rbx[instance]

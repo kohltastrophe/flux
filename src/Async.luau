@@ -75,16 +75,17 @@ type Data = {
 
 local function runFetcher(self: Data, input: any, currentId: number, refetching: any)
 	local ok, result = pcall(self._fetcher, input, raw(self.data), refetching)
-	if currentId == self._fetchId then
-		self.loading:set(false)
-		if ok then
-			self._resolved = true
-			self.data:set(result)
-			self.state:set("ready")
-		else
-			self.error:set(tostring(result))
-			self.state:set("errored")
-		end
+	if currentId ~= self._fetchId then
+		return
+	end
+	self.loading:set(false)
+	if ok then
+		self._resolved = true
+		self.data:set(result)
+		self.state:set("ready")
+	else
+		self.error:set(tostring(result))
+		self.state:set("errored")
 	end
 end
 
@@ -102,24 +103,6 @@ end
 local Async = {}
 Async.__index = Async
 
---[[
-Creates a non-blocking asynchronous [node](https://flux.kohl.gg/guide/concepts/signals) that runs yielding
-work off the reactive graph and exposes its progress as four nodes: `.data` (seeded with `initialValue` before
-the first fetch resolves), `.error`, `.loading`, and `.state`. `source` is a tracked input (a
-[node](https://flux.kohl.gg/guide/concepts/signals) or computation) whose value is passed to `fetcher` and
-re-runs it on every change; omit `source` and pass `fetcher` first for a one-shot fetch, or let `source`
-evaluate to `nil`/`false` to gate the fetch off until it turns truthy. `fetcher(value, previous, refetching)`
-runs untracked (where `previous` is the last resolved data and `refetching` flags a manual refetch, so reactive
-reads inside it are <strong>not</strong> tracked as dependencies), and a race guard discards stale results so
-only the latest fetch ever writes back.
-
-```luau
-local profile = Flux.async(userId, function(id) return Players:GetNameFromUserIdAsync(id) end)
-Flux.new "TextLabel" { Text = function() return profile.data() or "Loading" end }
-```
-
-[Open Documentation](https://flux.kohl.gg/guide/concepts/async#creating-an-async-node)
-]]
 local function new(source: any, fetcher: any, initialValue: any): Async<any>
 	local src: any = source
 	local fetch: any = fetcher

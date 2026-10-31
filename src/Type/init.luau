@@ -40,9 +40,6 @@ type GraphNode = setmetatable<{
 --- @within Flux
 --- @private
 export type Map<T> = { [T]: any }
---- @within Flux
---- @private
-export type Symbol = { read type: "Symbol" }
 
 type _ATTR = "__ATTR"
 type _CLEAN = "__CLEAN"
@@ -64,37 +61,44 @@ export type function Properties(instance: type?)
 	local events = types.newtable(nil, { index = types.number, readresult = types.never, writeresult = types.never })
 	local connectKey = types.singleton("Connect")
 
-	while instance do
-		for i, v in instance:properties() do
-			local connector = v.read and v.read:is("table") and v.read:readproperty(connectKey)
-			if connector then
-				local params = connector:parameters().head
-				if not params then
-					continue
-				end
-				local listener = params[2]
-				if not listener then
-					continue
-				end
-				result:setproperty(i, types.optional(listener))
-			else
-				if v.read then
-					local changedListener = types.optional(types.newfunction({ head = { v.read } }))
-					events:setproperty(i, changedListener)
-					local propName = i:value()
-					if type(propName) == "string" then
-						result:setproperty(types.singleton("_" .. propName), changedListener)
+	local classes = if instance and (instance:is("intersection") or instance:is("union"))
+		then instance:components()
+		else { instance }
+	for _, component in classes do
+		local class: type? = component
+		while class and (class:is("extern") or class:is("table")) do
+			for i, v in class:properties() do
+				local connector = v.read and v.read:is("table") and v.read:readproperty(connectKey)
+				if connector then
+					local params = connector:parameters().head
+					if not params then
+						continue
+					end
+					local listener = params[2]
+					if not listener then
+						continue
+					end
+					result:setproperty(i, types.optional(listener))
+				else
+					if v.read then
+						local changedListener = types.optional(types.newfunction({ head = { v.read } }))
+						events:setproperty(i, changedListener)
+						local propName = i:value()
+						if type(propName) == "string" then
+							result:setproperty(types.singleton("_" .. propName), changedListener)
+						end
+					end
+					if v.write then
+						local t = types.optional(
+							types.unionof(v.write, types.newfunction({}, { head = { v.write } }), GraphNode)
+						)
+						result:setproperty(i, t)
 					end
 				end
-				if v.write then
-					local t =
-						types.optional(types.unionof(v.write, types.newfunction({}, { head = { v.write } }), GraphNode))
-					result:setproperty(i, t)
-				end
 			end
-		end
 
-		instance = instance:readparent()
+			class = if class:is("extern") then class:readparent() else nil
+		end
 	end
 
 	local attrListener = types.newfunction({ head = { types.any } })
@@ -124,7 +128,7 @@ export type function Properties(instance: type?)
 		types.optional(types.newtable(nil, { index = types.number, readresult = types.any, writeresult = types.any }))
 	)
 	result:setproperty(_EVENT, types.optional(events))
-	result:setproperty(_REF, types.optional(types.unionof(Consumer, GraphNode))) -- Consumer or Flux.State type
+	result:setproperty(_REF, types.optional(types.unionof(Consumer, GraphNode)))
 
 	return result
 end
@@ -191,7 +195,7 @@ export type function PropertyType(instance: type, key: type)
 		end
 	end
 
-	local classes = if instance:is("intersection") then instance:components() else { instance }
+	local classes = if instance:is("intersection") or instance:is("union") then instance:components() else { instance }
 	for _, component in classes do
 		local class: type? = component
 		while class and class:is("extern") do
@@ -219,6 +223,6 @@ export type Editable = Instances.Editable
 
 --- @within Flux
 --- @private
-export type Resolve<Name> = index<Creatable, Name>
+export type Resolve<Name> = index<Creatable & { [string]: Instance }, Name>
 
 return nil

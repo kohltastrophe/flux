@@ -64,16 +64,15 @@ local function bindLifetime(output: Node<any>)
 end
 
 local function mountBranch(fn: any, a: any, b: any): (boolean, any, any)
-	local branch, result
-	local ok, err = pcall(withOwner, NO_VALUE, function()
-		branch, result = scope(function(): any
+	local ok, branch, result = pcall(withOwner, NO_VALUE, function()
+		return scope(function(): any
 			return fn(a, b)
 		end)
 	end)
 	if ok then
 		return true, branch, result
 	end
-	return false, err, nil
+	return false, branch, nil
 end
 
 local function mount(
@@ -154,19 +153,6 @@ local function switchSelect(value: any, map: { [any]: any }): (any, any)
 	return value, factory
 end
 
---[[
-Mounts `component` while `condition` is truthy, swapping to `fallback` (if given) when it
-turns falsy. Re-evaluates only when `condition`'s truthiness flips, not on every value change.
-The chosen factory runs once per mount in its own branch
-[scope](https://flux.kohl.gg/guide/concepts/scopes) (the effects and cleanups it registers are
-torn down automatically on the next swap) and receives a `value` accessor for the live
-`condition` value. Returns a
-[node](https://flux.kohl.gg/guide/concepts/signals) usable at a numeric
-index of [`Flux.new`](https://flux.kohl.gg/guide/roblox/creation#the-flux-new-function) /
-[`Flux.edit`](https://flux.kohl.gg/guide/roblox/hydration#the-flux-edit-function).
-
-[Open Documentation](https://flux.kohl.gg/guide/concepts/conditionals#showing-one-of-two-branches)
-]]
 local function show<T, F>(
 	condition: unknown,
 	component: (value: () -> any) -> T,
@@ -175,16 +161,6 @@ local function show<T, F>(
 	return mount(condition, showSelect, component, fallback, false)
 end
 
---[[
-Identity-keyed variant of [`Flux.show`](https://flux.kohl.gg/guide/concepts/conditionals#keyed-show): instead
-of rebuilding only when `condition`'s truthiness flips, it rebuilds whenever the value's <em>identity</em>
-changes, so swapping one truthy value for another remounts `component` (or `fallback` when falsy) with fresh
-state. The chosen factory runs in its own branch [scope](https://flux.kohl.gg/guide/concepts/scopes) and
-receives a `value` accessor; since the value is fixed for the branch's lifetime, reading `value()` in the
-factory body yields it directly. Mirrors SolidJS's <code>&lt;Show keyed&gt;</code>.
-
-[Open Documentation](https://flux.kohl.gg/guide/concepts/conditionals#keyed-show)
-]]
 local function showKeyed<T, F>(
 	condition: unknown,
 	component: (value: () -> any) -> T,
@@ -295,7 +271,7 @@ end
 --[[
 Derives a [node](https://flux.kohl.gg/guide/concepts/signals) that is `whenTrue` while `condition` is truthy and
 `whenFalse` otherwise (`nil` when omitted): the terse form of
-`Flux.computed(function() return if cond:get() then a:get() else b:get() end)`{luau}. Every argument may be a plain
+`Flux.computed(function() return if Flux.read(cond) then Flux.read(a) else Flux.read(b) end)`{luau}. Every argument may be a plain
 value, a node, or a `() -> T`{luau} getter, and <strong>only the branch actually taken is read</strong>, so the
 untaken side never becomes a dependency and never re-runs the derivation.
 - Unlike [`Flux.show`](https://flux.kohl.gg/guide/concepts/conditionals#showing-one-of-two-branches) this picks a

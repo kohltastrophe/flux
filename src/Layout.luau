@@ -304,11 +304,11 @@ local function setSide(props: Props, prop: string, value: any)
 	end
 end
 
-local function paddingSide(source: any, field: string): () -> UDim
+local function paddingSide(source: any, field: string, axis: string): () -> UDim
 	return function()
 		local value = read(source)
 		if typeof(value) == "table" then
-			return toUDim(value[field] or 0)
+			return toUDim(value[field] or value[axis] or 0)
 		elseif value == nil then
 			return ZERO_UDIM
 		end
@@ -352,9 +352,18 @@ local function listAlign(cfg: ListConfig, direction: any, axis: Direction, map: 
 		return nil, nil
 	end
 
-	local reactive = if pinned ~= nil
-		then isDynamic(pinned)
-		else isDynamic(direction) or isDynamic(align) or isDynamic(justify)
+	local reactive: boolean
+	if pinned ~= nil then
+		reactive = isDynamic(pinned)
+	elseif isDynamic(direction) then
+		reactive = true
+	else
+		local active = if (axis == "x") == (direction == FILL_DIRECTION.x) then justify else align
+		if active == nil then
+			return nil, nil
+		end
+		reactive = isDynamic(active)
+	end
 	if reactive then
 		return function()
 			local v, source = readListAlign(pinned, direction, align, justify, axis, label)
@@ -391,10 +400,10 @@ function Layout.padding(value: Length | PaddingSides | Graph.Node<any> | (() -> 
 	if isDynamic(value) then
 		local rawValue: any = value
 		local source: any = new(rawValue)
-		props.PaddingTop = paddingSide(source, "top")
-		props.PaddingBottom = paddingSide(source, "bottom")
-		props.PaddingLeft = paddingSide(source, "left")
-		props.PaddingRight = paddingSide(source, "right")
+		props.PaddingTop = paddingSide(source, "top", "y")
+		props.PaddingBottom = paddingSide(source, "bottom", "y")
+		props.PaddingLeft = paddingSide(source, "left", "x")
+		props.PaddingRight = paddingSide(source, "right", "x")
 		if source ~= value then
 			props.__CLEAN = { source }
 		end

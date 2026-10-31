@@ -80,7 +80,7 @@ local editInstance = Edit.edit
 local Constructors = setmetatable({}, {
 	__index = function(self: any, class: string)
 		if type(class) ~= "string" then
-			error(`String expected, got {typeof(class)}`)
+			error(`String expected, got {typeof(class)}`, 3)
 		end
 		self[class] = function(properties: Type.Map<any>): Instance
 			return construct(class, properties)
@@ -332,9 +332,9 @@ end
 if game then
 	local RunService = game:GetService("RunService")
 	local frame = if RunService:IsClient() then RunService.PreRender else RunService.Heartbeat
-	local _frameConnection = frame:Connect(function()
+	local _frameConnection = frame:Connect(function(dt: number)
 		if not Clock.isManual() then
-			Motion.step()
+			Motion.step(dt)
 			Graph.flush()
 		end
 	end)

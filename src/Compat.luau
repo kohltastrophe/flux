@@ -149,7 +149,6 @@ local function datatype(
 	end
 end
 
--- Color3
 local newColor3: (fields: { [string]: any }) -> any
 local _, buildColor3 = datatype("Color3", function(s: any)
 	return `{s.R}, {s.G}, {s.B}`
@@ -196,7 +195,6 @@ local Color3Stub = {
 	end,
 }
 
--- UDim & UDim2
 local function int32(v: number): number
 	return if v >= 0 then math.floor(v) else math.ceil(v)
 end
@@ -246,7 +244,6 @@ local UDim2Stub = {
 	end,
 }
 
--- Vector2 & Vector3
 local vector2: (x: number?, y: number?) -> any
 local _, newVector2 = datatype("Vector2", function(s: any)
 	return `{s.X}, {s.Y}`
@@ -323,7 +320,6 @@ end
 
 local Vector3Stub = { new = vector3, zero = vector3(0, 0, 0) }
 
--- Enum
 local ENUM_VALUES: { [string]: { [string]: number } } = {
 	FontWeight = {
 		Thin = 100,
@@ -388,7 +384,6 @@ local EnumStub = setmetatable({}, {
 	end,
 })
 
--- Font & TweenInfo
 local _, newFont = datatype("Font", function(s: any)
 	return `{s.Family}, {s.Weight.Name}, {s.Style.Name}`
 end)
@@ -437,7 +432,6 @@ local TweenInfoStub = {
 	end,
 }
 
--- Sequences
 local _, newColorKeypoint = datatype("ColorSequenceKeypoint", function(s: any)
 	return `{s.Time}, {s.Value}`
 end)

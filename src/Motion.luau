@@ -85,10 +85,14 @@ end
 
 local GAMUT_SLACK = 1e-5
 
+local function cbrt(x: number): number
+	return if x >= 0 then x ^ (1 / 3) else -((-x) ^ (1 / 3))
+end
+
 local function linearToOklab(R: number, G: number, B: number): (number, number, number)
-	local l_ = (R * 0.4122214708 + G * 0.5363325363 + B * 0.0514459929) ^ (1 / 3)
-	local m_ = (R * 0.2119034982 + G * 0.6806995451 + B * 0.1073969566) ^ (1 / 3)
-	local s_ = (R * 0.0883024619 + G * 0.2817188376 + B * 0.6299787005) ^ (1 / 3)
+	local l_ = cbrt(R * 0.4122214708 + G * 0.5363325363 + B * 0.0514459929)
+	local m_ = cbrt(R * 0.2119034982 + G * 0.6806995451 + B * 0.1073969566)
+	local s_ = cbrt(R * 0.0883024619 + G * 0.2817188376 + B * 0.6299787005)
 	return l_ * 0.2104542553 + m_ * 0.7936177850 - s_ * 0.0040720468,
 		l_ * 1.9779984951 - m_ * 2.4285922050 + s_ * 0.4505937099,
 		l_ * 0.0259040371 + m_ * 0.7827717662 - s_ * 0.8086757660
@@ -132,6 +136,21 @@ local function oklabToSRGB(L: number, A: number, B: number, clamped: boolean?): 
 	return Color3.new(fromLinear(r), fromLinear(g), fromLinear(b))
 end
 
+local function saturateAB(a: number, b: number, amount: number): (number, number)
+	local c = math.sqrt(a * a + b * b)
+	if c < 1e-6 then
+		return a, b
+	end
+	local scale = math.max(c + amount, 0) / c
+	return a * scale, b * scale
+end
+
+local function rotateAB(a: number, b: number, degrees: number): (number, number)
+	local r = math.rad(degrees)
+	local cos, sin = math.cos(r), math.sin(r)
+	return a * cos - b * sin, a * sin + b * cos
+end
+
 local Oklab = table.freeze({
 	--- Converts a Color3 in linear sRGB space to a Vector3 in Oklab space
 	fromLinear = function(color: Color3): Vector3
@@ -155,20 +174,13 @@ local Oklab = table.freeze({
 	end,
 	--- Raises chroma by `amount`, preserving hue and lightness; a negative `amount` desaturates
 	saturate = function(lab: Vector3, amount: number): Vector3
-		local a, b = lab.Y, lab.Z
-		local c = math.sqrt(a * a + b * b)
-		if c < 1e-6 then
-			return lab
-		end
-		local scale = math.max(c + amount, 0) / c
-		return Vector3.new(lab.X, a * scale, b * scale)
+		local a, b = saturateAB(lab.Y, lab.Z, amount)
+		return if a == lab.Y and b == lab.Z then lab else Vector3.new(lab.X, a, b)
 	end,
 	--- Rotates hue by `degrees`, preserving chroma and lightness.
 	rotateHue = function(lab: Vector3, degrees: number): Vector3
-		local r = math.rad(degrees)
-		local cos, sin = math.cos(r), math.sin(r)
-		local a, b = lab.Y, lab.Z
-		return Vector3.new(lab.X, a * cos - b * sin, a * sin + b * cos)
+		local a, b = rotateAB(lab.Y, lab.Z, degrees)
+		return Vector3.new(lab.X, a, b)
 	end,
 	--- Removes all chroma, preserving Oklab lightness.
 	grayscale = function(lab: Vector3): Vector3
@@ -205,12 +217,8 @@ no hue to grow along and pass through unchanged. A negative `amount` desaturates
 ]]
 function Color.saturate(c: Color3, amount: number): Color3
 	local L, a, b = rgbToOklab(c)
-	local ch = math.sqrt(a * a + b * b)
-	if ch < 1e-6 then
-		return oklabToSRGB(L, a, b)
-	end
-	local scale = math.max(ch + amount, 0) / ch
-	return oklabToSRGB(L, a * scale, b * scale)
+	a, b = saturateAB(a, b, amount)
+	return oklabToSRGB(L, a, b)
 end
 
 --[[
@@ -222,9 +230,8 @@ around the Oklab color wheel, preserving chroma and lightness. `degrees` is in <
 ]]
 function Color.rotateHue(c: Color3, degrees: number): Color3
 	local L, a, b = rgbToOklab(c)
-	local r = math.rad(degrees)
-	local cos, sin = math.cos(r), math.sin(r)
-	return oklabToSRGB(L, a * cos - b * sin, a * sin + b * cos)
+	a, b = rotateAB(a, b, degrees)
+	return oklabToSRGB(L, a, b)
 end
 
 --[[
@@ -303,19 +310,19 @@ table.freeze(Color)
 --- @ignore
 export type Animatable =
 	number
-	& vector
-	& CFrame
-	& Color3
-	& ColorSequence
-	& ColorSequenceKeypoint
-	& NumberRange
-	& NumberSequence
-	& NumberSequenceKeypoint
-	& Rect
-	& UDim
-	& UDim2
-	& Vector2
-	& Vector3
+	| vector
+	| CFrame
+	| Color3
+	| ColorSequence
+	| ColorSequenceKeypoint
+	| NumberRange
+	| NumberSequence
+	| NumberSequenceKeypoint
+	| Rect
+	| UDim
+	| UDim2
+	| Vector2
+	| Vector3
 
 local round = math.round
 local math_max = math.max
@@ -389,26 +396,32 @@ local unpackers: { [string]: ({ number }) -> any } = {
 	ColorSequence = function(t): ColorSequence
 		local n = #t // 4
 		local k = table.create(n) :: { ColorSequenceKeypoint }
+		local prevTime = 0
 		for idx = 1, n do
 			local base = (idx - 1) * 4
-			k[idx] = ColorSequenceKeypoint_new(t[base + 1], Oklab_toRGB(t[base + 2], t[base + 3], t[base + 4], true))
+			local time = if idx == 1 then 0 elseif idx == n then 1 else math.clamp(t[base + 1], prevTime, 1)
+			prevTime = time
+			k[idx] = ColorSequenceKeypoint_new(time, Oklab_toRGB(t[base + 2], t[base + 3], t[base + 4], true))
 		end
 		return ColorSequence_new(k)
 	end,
 	ColorSequenceKeypoint = function(t): ColorSequenceKeypoint
-		return ColorSequenceKeypoint_new(t[1], Oklab_toRGB(t[2], t[3], t[4], false))
+		return ColorSequenceKeypoint_new(math.clamp(t[1], 0, 1), Oklab_toRGB(t[2], t[3], t[4], false))
 	end,
 	NumberSequence = function(t): NumberSequence
 		local n = #t // 3
 		local k = table.create(n) :: { NumberSequenceKeypoint }
+		local prevTime = 0
 		for idx = 1, n do
 			local base = (idx - 1) * 3
-			k[idx] = NumberSequenceKeypoint_new(t[base + 1], t[base + 2], t[base + 3])
+			local time = if idx == 1 then 0 elseif idx == n then 1 else math.clamp(t[base + 1], prevTime, 1)
+			prevTime = time
+			k[idx] = NumberSequenceKeypoint_new(time, t[base + 2], math_max(t[base + 3], 0))
 		end
 		return NumberSequence_new(k)
 	end,
 	NumberSequenceKeypoint = function(t): NumberSequenceKeypoint
-		return NumberSequenceKeypoint_new(t[1], t[2], t[3])
+		return NumberSequenceKeypoint_new(math.clamp(t[1], 0, 1), t[2], math_max(t[3], 0))
 	end,
 	UDim = function(t): UDim
 		return UDim_new(t[1], round(t[2]))
@@ -432,7 +445,7 @@ if IS_ROBLOX then
 
 	packers.CFrame = function(t, v: CFrame)
 		local p, a = v:ToAxisAngle()
-		t[1], t[2], t[3], t[4], t[5], t[6], t[7] = v.X, v.Y, v.Z, p.X, p.Y, p.Z, a
+		t[1], t[2], t[3], t[4], t[5], t[6] = v.X, v.Y, v.Z, p.X * a, p.Y * a, p.Z * a
 	end
 	packers.NumberRange = function(t, v: NumberRange)
 		t[1], t[2] = v.Min, v.Max
@@ -442,12 +455,14 @@ if IS_ROBLOX then
 	end
 
 	unpackers.CFrame = function(t): CFrame
-		local p, a = CFrame_new(t[1], t[2], t[3]), Vector3_new(t[4], t[5], t[6])
-		return if a.Magnitude < 1e-6 then p else p * CFrame_fromAxisAngle(a, t[7])
+		local p = CFrame_new(t[1], t[2], t[3])
+		local rx, ry, rz = t[4], t[5], t[6]
+		local a = math.sqrt(rx * rx + ry * ry + rz * rz)
+		return if a < 1e-6 then p else p * CFrame_fromAxisAngle(Vector3_new(rx / a, ry / a, rz / a), a)
 	end
 	unpackers.NumberRange = function(t): NumberRange
 		local min, max = t[1], t[2]
-		return NumberRange_new(min, max)
+		return NumberRange_new(min, math_max(min, max))
 	end
 	unpackers.Rect = function(t): Rect
 		local minX, minY, maxX, maxY = t[1], t[2], t[3], t[4]
@@ -455,19 +470,14 @@ if IS_ROBLOX then
 	end
 end
 
-local DataType = table.freeze({
-	unpacker = function(t: string): ({ number }) -> any
-		return unpackers[t]
-	end,
-	pack = function(arr: { number }, value: Animatable, t: string)
-		table.clear(arr)
-		local pack = packers[t]
-		if pack then
-			pack(arr, value)
-		end
-		return arr
-	end,
-})
+local function pack(arr: { number }, value: Animatable, t: string)
+	table.clear(arr)
+	local packer = packers[t]
+	if packer then
+		packer(arr, value)
+	end
+	return arr
+end
 
 -- Easing --------------------------------------------------------------------------------------------------------------
 
@@ -608,16 +618,17 @@ local function inOut(easeIn: Curve, easeOut: Curve): Curve
 end
 
 local styles: { [any]: { [any]: Curve } } = {}
+local easingDirection: any = if Enum then Enum.EasingDirection else nil
+local easingStyle: any = if Enum then Enum.EasingStyle else nil
+local DIRECTIONS = { "In", "Out", "InOut" }
 for name, set in curves do
 	local byDirection: { [any]: Curve } = {
 		In = set.In,
 		Out = set.Out,
 		InOut = set.InOut or inOut(set.In, set.Out),
 	}
-	if Enum then
-		local easingDirection: any = Enum.EasingDirection
-		local easingStyle: any = Enum.EasingStyle
-		for _, direction in { "In", "Out", "InOut" } do
+	if easingDirection then
+		for _, direction in DIRECTIONS do
 			byDirection[easingDirection[direction]] = byDirection[direction]
 		end
 		styles[easingStyle[name]] = byDirection
@@ -690,8 +701,6 @@ local activeTweens: { [Motion]: any } = {}
 
 local Engine = {
 	now = 0,
-	TYPE_TWEEN = TYPE_TWEEN,
-	TYPE_SPRING = TYPE_SPRING,
 	DEFAULT_TWEEN_INFO = TweenInfo.new(0.3, Enum.EasingStyle.Cubic, Enum.EasingDirection.InOut),
 	isActive = function(motion: EngineSpring | Tween): boolean
 		return activeSprings[motion] ~= nil or activeTweens[motion] ~= nil
@@ -710,7 +719,7 @@ function Engine.newSpring(
 		count = count,
 		node = node,
 		typeString = typeString,
-		unpack = DataType.unpacker(typeString),
+		unpack = unpackers[typeString],
 		target = table.create(count, 0),
 		value = table.create(count, 0),
 		vel = table.create(count, 0),
@@ -726,7 +735,7 @@ function Engine.newTween(count: number, typeString: string, node: any, tweenInfo
 		count = count,
 		node = node,
 		typeString = typeString,
-		unpack = DataType.unpacker(typeString),
+		unpack = unpackers[typeString],
 		start = table.create(count, 0),
 		target = table.create(count, 0),
 		value = table.create(count, 0),
@@ -757,42 +766,38 @@ function Engine.setupTween(tween: Tween, tweenInfo: TweenInfo?)
 	tween.startTime = Engine.now + info.DelayTime
 	tween.repeatsLeft = info.RepeatCount
 	tween.reversing = false
-	local start = tween.start
-	for i, v in tween.value do
-		start[i] = v
-	end
+	local start, value = tween.start, tween.value
+	table.move(value, 1, #value, 1, start)
 	activeTweens[tween] = tween.node
 end
 
 function Engine.snap(motion: EngineSpring | Tween, arr: { number })
+	local n = #arr
 	local target, value = motion.target, motion.value
 	table.clear(target)
 	table.clear(value)
-	for i, v in arr do
-		target[i] = v
-		value[i] = v
-	end
+	table.move(arr, 1, n, 1, target)
+	table.move(arr, 1, n, 1, value)
 	if motion.type == TYPE_TWEEN then
 		local start = (motion :: Tween).start
 		table.clear(start)
-		for i, v in arr do
-			start[i] = v
-		end
+		table.move(arr, 1, n, 1, start)
 	else
 		local vel = (motion :: EngineSpring).vel
 		table.clear(vel)
-		for i = 1, #arr do
+		for i = 1, n do
 			vel[i] = 0
 		end
 	end
-	motion.count = #arr
+	motion.count = n
 	activeSprings[motion] = nil
 	activeTweens[motion] = nil
 end
 
 function Engine.setTarget(motion: EngineSpring | Tween, arr: { number })
 	local activeMap = if motion.type == TYPE_TWEEN then activeTweens else activeSprings
-	if #arr ~= motion.count then
+	local n = #arr
+	if n ~= motion.count then
 		Engine.snap(motion, arr)
 		activeMap[motion] = motion.node
 		return
@@ -812,10 +817,7 @@ function Engine.setTarget(motion: EngineSpring | Tween, arr: { number })
 
 	if motion.type == TYPE_TWEEN then
 		motion = motion :: Tween
-		local start, value = motion.start, motion.value
-		for i = 1, #arr do
-			start[i] = value[i]
-		end
+		table.move(motion.value, 1, n, 1, motion.start)
 		motion.startTime = Engine.now
 		motion.repeatsLeft = motion.info.RepeatCount
 		motion.reversing = false
@@ -969,7 +971,7 @@ end
 
 function Engine.step(dt: number?)
 	local time = clock()
-	local elapsed = dt or math.max(0, time - lastClock)
+	local elapsed = math_max(0, dt or (time - lastClock))
 	local now = Engine.now + elapsed
 	lastClock = time
 	Engine.now = now
@@ -980,7 +982,6 @@ end
 
 -- Motion Nodes (spring & tween) ---------------------------------------------------------------------------------------
 
-local PACK = DataType.pack
 local tempArray = { 0, 0, 0, 0, 0, 0, 0 }
 local NodeToMotion: { [Graph.Node<any>]: EngineSpring | Tween } = setmetatable({}, { __mode = "k" })
 
@@ -1004,7 +1005,7 @@ local function packSpring(self: Graph.Node<any>, method: string, value: any): En
 			else `Cannot snap a {spring.typeString} spring to a {typeString} value`
 		error(msg, 3)
 	end
-	PACK(tempArray, val, typeString)
+	pack(tempArray, val, typeString)
 	return spring :: EngineSpring
 end
 
@@ -1044,7 +1045,7 @@ function MotionStateMetatable.set<T>(self: Graph.Node<T>, value: T)
 	if typeString ~= motion.typeString then
 		error(`Cannot retarget a {motion.typeString} motion with a {typeString} value`, 2)
 	end
-	Engine.setTarget(motion, PACK(tempArray, goal, typeString))
+	Engine.setTarget(motion, pack(tempArray, goal, typeString))
 end
 
 --[[
@@ -1085,9 +1086,7 @@ function MotionStateMetatable.setCurrent<T>(self: Graph.Node<T>, value: T)
 		return
 	end
 	local val = spring.value
-	for i = 1, math.min(#tempArray, spring.count) do
-		val[i] = tempArray[i]
-	end
+	table.move(tempArray, 1, math.min(#tempArray, spring.count), 1, val)
 	setNode(spring.node, spring.unpack(val))
 	activeSprings[spring] = spring.node
 end
@@ -1128,13 +1127,17 @@ local function register(stateNode: Graph.Node<any>, motion: EngineSpring | Tween
 end
 
 local function packOrFallback(target: any, initialVal: any, typeStr: string): any
-	PACK(tempArray, initialVal, typeStr)
+	pack(tempArray, initialVal, typeStr)
 	if #tempArray ~= 0 then
 		return nil
 	end
 	if typeStr == "nil" then
 		warn("[Flux] Animating a nil value; following the goal without animation")
-		local stateNode = Graph.signal(initialVal)
+		local stateNode: any = Graph.signal(initialVal)
+		stateNode.snap = setNode
+		stateNode.setCurrent = setNode
+		stateNode.impulse = MotionStateMetatable.impulse
+		stateNode.setVelocity = MotionStateMetatable.setVelocity
 		if isDynamic(target) then
 			attachEffect(stateNode, function()
 				stateNode:set(read(target))
@@ -1147,8 +1150,6 @@ end
 
 local MotionModule = {
 	Color = Color,
-	--- @ignore
-	DataType = DataType,
 	--- @ignore
 	Easing = Easing,
 	--- @ignore
@@ -1201,17 +1202,16 @@ function MotionModule.spring<A>(
 	local spring = Engine.newSpring(#tempArray, typeStr, stateNode, raw(frequency), raw(damping))
 	register(stateNode, spring)
 	Engine.snap(spring, tempArray)
-	Engine.setupSpring(spring, raw(frequency), raw(damping))
-	activeSprings[spring] = nil
 	if initialVelocity ~= nil then
 		local initVel: any = raw(initialVelocity)
-		if initVel ~= nil then
-			Engine.setVelocity(spring, PACK(tempArray, initVel, typeStr))
+		if typeof(initVel) == typeStr then
+			Engine.setVelocity(spring, pack(tempArray, initVel, typeStr))
 		end
 	end
 
-	if isDynamic(target) or isDynamic(frequency) or isDynamic(damping) then
-		local reactiveSetup = isDynamic(frequency) or isDynamic(damping)
+	local dynamicTarget = isDynamic(target)
+	local reactiveSetup = isDynamic(frequency) or isDynamic(damping)
+	if dynamicTarget or reactiveSetup then
 		attachEffect(stateNode, function()
 			if reactiveSetup then
 				local wasActive = activeSprings[spring] ~= nil
@@ -1220,7 +1220,12 @@ function MotionModule.spring<A>(
 					activeSprings[spring] = nil
 				end
 			end
-			Engine.setTarget(spring, PACK(tempArray, read(target), typeStr))
+			if dynamicTarget then
+				local goal = read(target)
+				if typeof(goal) == typeStr then
+					Engine.setTarget(spring, pack(tempArray, goal, typeStr))
+				end
+			end
 		end)
 	end
 
@@ -1251,22 +1256,29 @@ function MotionModule.tween<A>(target: A, tweenInfo: Reactive<TweenInfo>?): Grap
 	local tween = Engine.newTween(#tempArray, typeStr, stateNode, raw(tweenInfo))
 	register(stateNode, tween)
 	Engine.snap(tween, tempArray)
-	Engine.setupTween(tween, raw(tweenInfo))
-	activeTweens[tween] = nil
 
-	if isDynamic(target) or isDynamic(tweenInfo) then
+	local dynamicTarget = isDynamic(target)
+	local dynamicInfo = isDynamic(tweenInfo)
+	if dynamicTarget or dynamicInfo then
 		attachEffect(stateNode, function()
-			local i = read(tweenInfo) or Engine.DEFAULT_TWEEN_INFO
-			if tween.info ~= i then
-				local wasActive = activeTweens[tween] ~= nil
-				Engine.setupTween(tween, i)
-				if wasActive then
-					tween.startTime = Engine.now
-				else
-					activeTweens[tween] = nil
+			if dynamicInfo then
+				local i = read(tweenInfo) or Engine.DEFAULT_TWEEN_INFO
+				if tween.info ~= i then
+					local wasActive = activeTweens[tween] ~= nil
+					Engine.setupTween(tween, i)
+					if wasActive then
+						tween.startTime = Engine.now
+					else
+						activeTweens[tween] = nil
+					end
 				end
 			end
-			Engine.setTarget(tween, PACK(tempArray, read(target), typeStr))
+			if dynamicTarget then
+				local goal = read(target)
+				if typeof(goal) == typeStr then
+					Engine.setTarget(tween, pack(tempArray, goal, typeStr))
+				end
+			end
 		end)
 	end
 

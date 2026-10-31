@@ -199,26 +199,26 @@ function newindex(proxy: any, key: any, newVal: any)
 	local target = meta.target
 	local rawValue = toRaw(newVal)
 	local oldValue = rawget(target, key)
-
-	if oldValue ~= rawValue or type(rawValue) == "table" then
-		rawset(target, key, rawValue)
-
-		if type(oldValue) == "table" and oldValue ~= rawValue then
-			teardownDisplaced(target, oldValue)
-		end
-
-		local nodes = meta.nodes
-		local node = nodes[key]
-		if node ~= nil then
-			setValue(node, rawValue)
-			if rawValue == nil and not isReactive() and getOwner() == nil and not isObserved(node) then
-				nodes[key] = nil
-				destroyNode(node)
-			end
-		end
-
-		fireTracker(nodes, target)
+	if oldValue == rawValue and type(rawValue) ~= "table" then
+		return
 	end
+
+	rawset(target, key, rawValue)
+	if type(oldValue) == "table" and oldValue ~= rawValue then
+		teardownDisplaced(target, oldValue)
+	end
+
+	local nodes = meta.nodes
+	local node = nodes[key]
+	if node ~= nil then
+		setValue(node, rawValue)
+		if rawValue == nil and not isReactive() and getOwner() == nil and not isObserved(node) then
+			nodes[key] = nil
+			destroyNode(node)
+		end
+	end
+
+	fireTracker(nodes, target)
 end
 
 local function nextProxy(meta: Meta, k: any): (any, any)
