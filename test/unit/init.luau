@@ -53,6 +53,7 @@ else
 	sert.loaded(require("./unit/Responsive.spec"))
 	sert.loaded(require("./unit/Layout.spec"))
 	sert.loaded(require("./unit/Interact.spec"))
+	sert.loaded(require("./unit/Sync.spec"))
 	sert.loaded(require("./unit/Init.spec"))
 end
 

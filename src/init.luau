@@ -25,6 +25,7 @@ local Layout = require("@self/Layout")
 local Motion = require("@self/Motion")
 local Responsive = require("@self/Responsive")
 local Store = require("@self/Store")
+local Sync = require("@self/Sync")
 local Type = require("@self/Type")
 
 export type Node<T> = Graph.Node<T>
@@ -49,6 +50,8 @@ export type AsyncState = Async.AsyncState
 export type Context<T> = Graph.Context<T>
 export type Selector<K> = Conditional.Selector<K>
 export type Spring<T> = Motion.Spring<T>
+export type SyncSignal<T = any> = Sync.SyncSignal<T>
+export type SyncValidator<T> = Sync.Validator<T>
 export type HoverOptions = Interact.HoverOptions
 
 export type Breakpoint = Responsive.Breakpoint
@@ -205,6 +208,13 @@ local Flux = {
 		unwrap = Store.unwrap,
 		Destroy = Store.Destroy,
 	}),
+	--[[
+	Network-synchronized signals replicated from the server to clients once per frame.
+	Use `sig:of(player)` for per-player values and pass a `validate` callback to allow client writes.
+
+	[Open Documentation](https://flux.kohl.gg/guide/concepts/sync)
+	]]
+	Sync = Sync :: Sync.Namespace,
 
 	-- The reactive graph
 	signal = Graph.signal,
@@ -329,20 +339,23 @@ function Flux.new<T>(className: T | keyof<Type.Creatable>)
 	return Constructors[className] :: (Type.Properties<Type.Resolve<T>>) -> Type.Resolve<T>
 end
 
+local syncStep = Sync._internal.flushAll
+local function stepFrame(dt: number)
+	Motion.step(dt)
+	Graph.flush()
+	syncStep()
+end
+
 if game then
 	local RunService = game:GetService("RunService")
 	local frame = if RunService:IsClient() then RunService.PreRender else RunService.Heartbeat
 	local _frameConnection = frame:Connect(function(dt: number)
 		if not Clock.isManual() then
-			Motion.step(dt)
-			Graph.flush()
+			stepFrame(dt)
 		end
 	end)
 end
 
-Clock._internal.setFrame(function(dt: number)
-	Motion.step(dt)
-	Graph.flush()
-end)
+Clock._internal.setFrame(stepFrame)
 
 return table.freeze(setmetatable(Flux, FluxMT))
