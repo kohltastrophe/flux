@@ -192,82 +192,10 @@ local Oklab = table.freeze({
 	end,
 })
 
-local Color = {
-	Oklab = Oklab,
-	sRGB = sRGB,
-}
+local BLACK = Color3.new(0, 0, 0)
+local WHITE = Color3.new(1, 1, 1)
 
---[[
-Raises the perceptual lightness of a [`Color3`](https://create.roblox.com/docs/reference/engine/datatypes/Color3)
-by `amount`, working in Oklab so the shift looks uniform across hues. A negative `amount` darkens.
-
-[Open Documentation](https://flux.kohl.gg/guide/motion/color#manipulation)
-]]
-function Color.lighten(c: Color3, amount: number): Color3
-	local L, a, b = rgbToOklab(c)
-	return oklabToSRGB(math.clamp(L + amount, 0, 1), a, b)
-end
-
---[[
-Raises the chroma of a [`Color3`](https://create.roblox.com/docs/reference/engine/datatypes/Color3) by `amount`
-(making it more vivid) while preserving its perceptual hue and lightness in Oklab. Achromatic colors have
-no hue to grow along and pass through unchanged. A negative `amount` desaturates (washes it out), stopping at gray.
-
-[Open Documentation](https://flux.kohl.gg/guide/motion/color#manipulation)
-]]
-function Color.saturate(c: Color3, amount: number): Color3
-	local L, a, b = rgbToOklab(c)
-	a, b = saturateAB(a, b, amount)
-	return oklabToSRGB(L, a, b)
-end
-
---[[
-Rotates the hue of a [`Color3`](https://create.roblox.com/docs/reference/engine/datatypes/Color3) by `degrees`
-around the Oklab color wheel, preserving chroma and lightness. `degrees` is in <strong>degrees</strong>
-(not turns); `360` is a full revolution and negative values rotate the other way.
-
-[Open Documentation](https://flux.kohl.gg/guide/motion/color#manipulation)
-]]
-function Color.rotateHue(c: Color3, degrees: number): Color3
-	local L, a, b = rgbToOklab(c)
-	a, b = rotateAB(a, b, degrees)
-	return oklabToSRGB(L, a, b)
-end
-
---[[
-Strips all chroma from a [`Color3`](https://create.roblox.com/docs/reference/engine/datatypes/Color3),
-returning the neutral gray of the same perceptual lightness in Oklab. A truer gray than averaging RGB channels.
-
-[Open Documentation](https://flux.kohl.gg/guide/motion/color#manipulation)
-]]
-function Color.grayscale(c: Color3): Color3
-	local L = rgbToOklab(c)
-	return oklabToSRGB(L, 0, 0)
-end
-
---[[
-Perceptually blends two [`Color3`](https://create.roblox.com/docs/reference/engine/datatypes/Color3)s in
-Oklab, where `t` is the fraction from `a` (`0`) to `b` (`1`). Mixing through Oklab avoids the muddy midpoints
-of a raw RGB lerp. `t` is unclamped: values outside <code>[0, 1]</code> extrapolate, matching how
-[`Flux.spring`](https://flux.kohl.gg/guide/motion/spring) and [`Flux.tween`](https://flux.kohl.gg/guide/motion/tween)
-animate color.
-
-[Open Documentation](https://flux.kohl.gg/guide/motion/color#blending)
-]]
-function Color.mix(a: Color3, b: Color3, t: number): Color3
-	local L1, a1, b1 = rgbToOklab(a)
-	local L2, a2, b2 = rgbToOklab(b)
-	return oklabToSRGB(L1 + (L2 - L1) * t, a1 + (a2 - a1) * t, b1 + (b2 - b1) * t)
-end
-
---[[
-The WCAG relative luminance of a [`Color3`](https://create.roblox.com/docs/reference/engine/datatypes/Color3),
-from `0` (black) to `1` (white). This is the perceived brightness used to compute `Color.contrast`, weighting
-green most and blue least.
-
-[Open Documentation](https://flux.kohl.gg/guide/motion/color#accessibility)
-]]
-function Color.luminance(c: Color3): number
+local function luminance(c: Color3): number
 	return 0.2126 * toLinear(c.R) + 0.7152 * toLinear(c.G) + 0.0722 * toLinear(c.B)
 end
 
@@ -275,35 +203,99 @@ local function contrastLuminance(la: number, lb: number): number
 	return (math.max(la, lb) + 0.05) / (math.min(la, lb) + 0.05)
 end
 
---[[
-The WCAG contrast ratio between two [`Color3`](https://create.roblox.com/docs/reference/engine/datatypes/Color3)s,
-from `1` (identical) to `21` (black on white). The result is order-independent. WCAG asks for at least
-<code>4.5</code> for body text and <code>3</code> for large text.
+local Color = table.freeze({
+	Oklab = Oklab,
+	sRGB = sRGB,
+	--[[
+	Raises the perceptual lightness of a [`Color3`](https://create.roblox.com/docs/reference/engine/datatypes/Color3)
+	by `amount`, working in Oklab so the shift looks uniform across hues. A negative `amount` darkens.
 
-[Open Documentation](https://flux.kohl.gg/guide/motion/color#accessibility)
-]]
-function Color.contrast(a: Color3, b: Color3): number
-	return contrastLuminance(Color.luminance(a), Color.luminance(b))
-end
+	[Open Documentation](https://flux.kohl.gg/guide/motion/color#manipulation)
+	]]
+	lighten = function(c: Color3, amount: number): Color3
+		local L, a, b = rgbToOklab(c)
+		return oklabToSRGB(math.clamp(L + amount, 0, 1), a, b)
+	end,
+	--[[
+	Raises the chroma of a [`Color3`](https://create.roblox.com/docs/reference/engine/datatypes/Color3) by `amount`
+	(making it more vivid) while preserving its perceptual hue and lightness in Oklab. Achromatic colors have
+	no hue to grow along and pass through unchanged. A negative `amount` desaturates (washes it out), stopping at gray.
 
-local BLACK = Color3.new(0, 0, 0)
-local WHITE = Color3.new(1, 1, 1)
+	[Open Documentation](https://flux.kohl.gg/guide/motion/color#manipulation)
+	]]
+	saturate = function(c: Color3, amount: number): Color3
+		local L, a, b = rgbToOklab(c)
+		a, b = saturateAB(a, b, amount)
+		return oklabToSRGB(L, a, b)
+	end,
+	--[[
+	Rotates the hue of a [`Color3`](https://create.roblox.com/docs/reference/engine/datatypes/Color3) by `degrees`
+	around the Oklab color wheel, preserving chroma and lightness. `degrees` is in <strong>degrees</strong>
+	(not turns); `360` is a full revolution and negative values rotate the other way.
 
---[[
-Picks whichever foreground [`Color3`](https://create.roblox.com/docs/reference/engine/datatypes/Color3) reads
-more legibly on `bg`: the one with the higher WCAG contrast ratio. `dark` and `light` default to black
-and white; pass your own brand tints to keep on-brand text readable over any background.
+	[Open Documentation](https://flux.kohl.gg/guide/motion/color#manipulation)
+	]]
+	rotateHue = function(c: Color3, degrees: number): Color3
+		local L, a, b = rgbToOklab(c)
+		a, b = rotateAB(a, b, degrees)
+		return oklabToSRGB(L, a, b)
+	end,
+	--[[
+	Strips all chroma from a [`Color3`](https://create.roblox.com/docs/reference/engine/datatypes/Color3),
+	returning the neutral gray of the same perceptual lightness in Oklab. A truer gray than averaging RGB channels.
 
-[Open Documentation](https://flux.kohl.gg/guide/motion/color#accessibility)
-]]
-function Color.readable(bg: Color3, dark: Color3?, light: Color3?): Color3
-	local d = dark or BLACK
-	local l = light or WHITE
-	local lBg = Color.luminance(bg)
-	return if contrastLuminance(lBg, Color.luminance(d)) >= contrastLuminance(lBg, Color.luminance(l)) then d else l
-end
+	[Open Documentation](https://flux.kohl.gg/guide/motion/color#manipulation)
+	]]
+	grayscale = function(c: Color3): Color3
+		local L = rgbToOklab(c)
+		return oklabToSRGB(L, 0, 0)
+	end,
+	--[[
+	Perceptually blends two [`Color3`](https://create.roblox.com/docs/reference/engine/datatypes/Color3)s in
+	Oklab, where `t` is the fraction from `a` (`0`) to `b` (`1`). Mixing through Oklab avoids the muddy midpoints
+	of a raw RGB lerp. `t` is unclamped: values outside <code>[0, 1]</code> extrapolate, matching how
+	[`Flux.spring`](https://flux.kohl.gg/guide/motion/spring) and [`Flux.tween`](https://flux.kohl.gg/guide/motion/tween)
+	animate color.
 
-table.freeze(Color)
+	[Open Documentation](https://flux.kohl.gg/guide/motion/color#blending)
+	]]
+	mix = function(a: Color3, b: Color3, t: number): Color3
+		local L1, a1, b1 = rgbToOklab(a)
+		local L2, a2, b2 = rgbToOklab(b)
+		return oklabToSRGB(L1 + (L2 - L1) * t, a1 + (a2 - a1) * t, b1 + (b2 - b1) * t)
+	end,
+	--[[
+	The WCAG relative luminance of a [`Color3`](https://create.roblox.com/docs/reference/engine/datatypes/Color3),
+	from `0` (black) to `1` (white). This is the perceived brightness used to compute `Color.contrast`, weighting
+	green most and blue least.
+
+	[Open Documentation](https://flux.kohl.gg/guide/motion/color#accessibility)
+	]]
+	luminance = luminance,
+	--[[
+	The WCAG contrast ratio between two [`Color3`](https://create.roblox.com/docs/reference/engine/datatypes/Color3)s,
+	from `1` (identical) to `21` (black on white). The result is order-independent. WCAG asks for at least
+	<code>4.5</code> for body text and <code>3</code> for large text.
+
+	[Open Documentation](https://flux.kohl.gg/guide/motion/color#accessibility)
+	]]
+	contrast = function(a: Color3, b: Color3): number
+		return contrastLuminance(luminance(a), luminance(b))
+	end,
+	--[[
+	Picks whichever foreground [`Color3`](https://create.roblox.com/docs/reference/engine/datatypes/Color3) reads
+	more legibly on `bg`: the one with the higher WCAG contrast ratio. `dark` and `light` default to black
+	and white; pass your own brand tints to keep on-brand text readable over any background.
+
+	[Open Documentation](https://flux.kohl.gg/guide/motion/color#accessibility)
+	]]
+	readable = function(bg: Color3, dark: Color3?, light: Color3?): Color3
+		local d = dark or BLACK
+		local l = light or WHITE
+		local lBg = luminance(bg)
+		return if contrastLuminance(lBg, luminance(d)) >= contrastLuminance(lBg, luminance(l)) then d else l
+	end,
+})
 
 -- DataType ------------------------------------------------------------------------------------------------------------
 

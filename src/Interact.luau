@@ -285,7 +285,7 @@ local function leave(tracker: Tracker, entry: Entry)
 	end
 end
 
-local function step(tracker: Tracker)
+local function stepTracker(tracker: Tracker)
 	if menuOpen(tracker.env) then
 		for entry in tracker.inside do
 			entry.state:set(false)
@@ -329,7 +329,7 @@ local function connectTracker(tracker: Tracker): { RBXScriptConnection }
 		memoToken, memoRoot, memoList = nil, nil, {}
 	end
 	local onHeartbeat = env.RunService.Heartbeat:Connect(function()
-		step(tracker)
+		stepTracker(tracker)
 	end)
 	local onChanged = input.InputChanged:Connect(function(changed: InputObject)
 		if changed.UserInputType == MOUSE_MOVEMENT then

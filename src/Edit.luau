@@ -6,7 +6,7 @@ local Type = require("./Type")
 
 local IS_ROBLOX = Compat.isRoblox
 local Color3 = Compat.Color3
-local Enum = if IS_ROBLOX then Enum else Compat.Enum
+local Enum = Compat.Enum
 local compatTypeof = Compat.typeof
 local task = Compat.task
 local warn = Compat.warn
@@ -165,18 +165,22 @@ local function warnFind(query: string?, value: any)
 	warn(`[Flux] Instance expected for {desc}, got {compatTypeof(value)}`)
 end
 
-local function resolveFind(applied: { any }, instance: Instance, apply: (Instance, Type.Map<any>, ...any) -> ...any)
+local function resolveFind(
+	applied: { any },
+	instance: Instance,
+	applyProps: (Instance, Type.Map<any>, ...any) -> ...any
+)
 	local query = applied[4]
 	local result = applied[2](instance, query)
 	local properties = applied[3]
 	local kind = kindOf(result)
 
 	if kind == "Instance" then
-		apply(result, properties)
+		applyProps(result, properties)
 	elseif kind == "table" then
 		for _, item in result do
 			if kindOf(item) == "Instance" then
-				apply(item, properties)
+				applyProps(item, properties)
 			else
 				warnFind(query, item)
 			end

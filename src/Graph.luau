@@ -561,110 +561,95 @@ function goDead(node: any)
 end
 
 local function reconcile(node: any, nslot: number, last: number, idx: number, newList: any, live: boolean)
-	if newList then
-		local nNew = newList[2]
-		if not live then
-			local k = idx
-			for i = 3, nNew do
-				node[k] = newList[i]
-				newList[i] = nil
-				node[k + 1] = 0
-				k += 2
+	if not newList then
+		if idx > last then
+			if live then
+				for i = last, idx - 2, 2 do
+					node[i + 1] = subscribe(node[i], node)
+				end
 			end
-			freeNew = newList
-			for i = k, last - 1 do
-				node[i] = nil
+		else
+			for i = last - 2, idx, -2 do
+				local s = node[i]
+				if live then
+					unsubscribe(s, node, node[i + 1])
+					if s[CHILDREN] == false then
+						s[CHILDREN] = nil
+					end
+				end
+				node[i], node[i + 1] = nil, nil
 			end
-			node[nslot] = k
-			return
 		end
-		local nOld = last - idx
-		if nOld == 2 and nNew == 3 then
-			local oldS = node[idx]
-			local oldBack = node[idx + 1]
-			local s = newList[3]
-			newList[3] = nil
-			freeNew = newList
-			node[idx] = s
-			node[idx + 1] = subscribe(s, node)
-			unsubscribe(oldS, node, oldBack)
-			if oldS[CHILDREN] == false then
-				oldS[CHILDREN] = nil
-			end
-			return
-		end
-		local tail: { any } = if tailBusy then {} else oldTail
-		local wasBusy = tailBusy
-		tailBusy = true
-		table.move(node, idx, last - 1, 1, tail)
+		node[nslot] = idx
+		return
+	end
+	local nNew = newList[2]
+	if not live then
 		local k = idx
-		local prevJ = 1
 		for i = 3, nNew do
-			local s = newList[i]
-			newList[i] = nil
-			node[k] = s
-			local back = 0
-			local hint = prevJ + 2
-			if hint <= nOld and tail[hint] == s then
-				back = tail[hint + 1]
-				tail[hint] = false
-				prevJ = hint
-			else
-				for j = 1, nOld, 2 do
-					if tail[j] == s then
-						back = tail[j + 1]
-						tail[j] = false
-						prevJ = j
-						break
-					end
-				end
-				if back == 0 then
-					back = subscribe(s, node)
-					if prevJ == 1 then
-						prevJ = -1
-					end
-				end
-			end
-			node[k + 1] = back
+			node[k], node[k + 1], newList[i] = newList[i], 0, nil
 			k += 2
 		end
-		freeNew = newList
-		node[nslot] = k
+		freeNew, node[nslot] = newList, k
 		for i = k, last - 1 do
 			node[i] = nil
 		end
-		for j = nOld - 1, 1, -2 do
-			local s = tail[j]
-			if s then
-				tail[j] = false
-				unsubscribe(s, node, tail[j + 1])
-				if s[CHILDREN] == false then
-					s[CHILDREN] = nil
-				end
-			end
-		end
-		tailBusy = wasBusy
-	elseif idx > last then
-		if live then
-			for i = last, idx - 2, 2 do
-				node[i + 1] = subscribe(node[i], node)
-			end
-		end
-		node[nslot] = idx
-	else
-		for i = last - 2, idx, -2 do
-			local s = node[i]
-			if live then
-				unsubscribe(s, node, node[i + 1])
-				if s[CHILDREN] == false then
-					s[CHILDREN] = nil
-				end
-			end
-			node[i] = nil
-			node[i + 1] = nil
-		end
-		node[nslot] = idx
+		return
 	end
+	local nOld = last - idx
+	if nOld == 2 and nNew == 3 then
+		local oldS, oldBack, s = node[idx], node[idx + 1], newList[3]
+		newList[3], freeNew = nil, newList
+		node[idx], node[idx + 1] = s, subscribe(s, node)
+		unsubscribe(oldS, node, oldBack)
+		if oldS[CHILDREN] == false then
+			oldS[CHILDREN] = nil
+		end
+		return
+	end
+	local tail: { any } = if tailBusy then {} else oldTail
+	local wasBusy = tailBusy
+	tailBusy = true
+	table.move(node, idx, last - 1, 1, tail)
+	local k, prevJ = idx, 1
+	for i = 3, nNew do
+		local s = newList[i]
+		newList[i], node[k] = nil, s
+		local back, hint = 0, prevJ + 2
+		if hint <= nOld and tail[hint] == s then
+			back, tail[hint], prevJ = tail[hint + 1], false, hint
+		else
+			for j = 1, nOld, 2 do
+				if tail[j] == s then
+					back, tail[j], prevJ = tail[j + 1], false, j
+					break
+				end
+			end
+			if back == 0 then
+				back = subscribe(s, node)
+				if prevJ == 1 then
+					prevJ = -1
+				end
+			end
+		end
+		node[k + 1] = back
+		k += 2
+	end
+	freeNew, node[nslot] = newList, k
+	for i = k, last - 1 do
+		node[i] = nil
+	end
+	for j = nOld - 1, 1, -2 do
+		local s = tail[j]
+		if s then
+			tail[j] = false
+			unsubscribe(s, node, tail[j + 1])
+			if s[CHILDREN] == false then
+				s[CHILDREN] = nil
+			end
+		end
+	end
+	tailBusy = wasBusy
 end
 
 local TOMB = {}
@@ -2616,33 +2601,32 @@ local function bindContext<A..., R...>(fn: (A...) -> R...): (A...) -> R...
 	end
 end
 
+local function attach(o: any, node: any)
+	if o then
+		local slot = if o[HEIGHT] == INF then E_CHILDREN else CHILDREN
+		local c = o[slot]
+		if c then
+			local n = c[1] + 1
+			c[1] = n
+			c[n] = node
+		else
+			o[slot] = { 2, node }
+		end
+	end
+end
+
+local function enqueue(node: any)
+	local qt = queueTail + 1
+	queueTail = qt
+	queue[qt] = node
+end
+
 local function scope<T>(fn: (scope: Node<any>) -> T): (Node<any>, T)
 	local inner = { nil, true, false, false, SCOPE, INF, true, false, false, false }
 	if ownExtra then
 		ownSlow(inner)
 	else
-		local o = curNode or curOwner
-		if o then
-			if o[HEIGHT] == INF then
-				local c = o[E_CHILDREN]
-				if c then
-					local n = c[1] + 1
-					c[1] = n
-					c[n] = inner
-				else
-					o[E_CHILDREN] = { 2, inner }
-				end
-			else
-				local c = o[CHILDREN]
-				if c then
-					local n = c[1] + 1
-					c[1] = n
-					c[n] = inner
-				else
-					o[CHILDREN] = { 2, inner }
-				end
-			end
-		end
+		attach(curNode or curOwner, inner)
 	end
 	local node: any = setmetatable({ inner }, Node)
 	local pNode, pOwner, pSet, pSusp, pIdx, pNew = curNode, curOwner, ownerSet, susp, curIdx, curNew
@@ -2690,28 +2674,7 @@ local function computed(fn: any, equals: any): any
 	if ownExtra then
 		ownSlow(node)
 	else
-		local o = curNode or curOwner
-		if o then
-			if o[HEIGHT] == INF then
-				local c = o[E_CHILDREN]
-				if c then
-					local n = c[1] + 1
-					c[1] = n
-					c[n] = node
-				else
-					o[E_CHILDREN] = { 2, node }
-				end
-			else
-				local c = o[CHILDREN]
-				if c then
-					local n = c[1] + 1
-					c[1] = n
-					c[n] = node
-				else
-					o[CHILDREN] = { 2, node }
-				end
-			end
-		end
+		attach(curNode or curOwner, node)
 	end
 	return setmetatable({ node }, ComputedMT)
 end
@@ -2721,32 +2684,9 @@ local function createEffect(fn: (...any) -> ...any)
 	if ownExtra then
 		ownSlow(node)
 	else
-		local o = curNode or curOwner
-		if o then
-			if o[HEIGHT] == INF then
-				local c = o[E_CHILDREN]
-				if c then
-					local n = c[1] + 1
-					c[1] = n
-					c[n] = node
-				else
-					o[E_CHILDREN] = { 2, node }
-				end
-			else
-				local c = o[CHILDREN]
-				if c then
-					local n = c[1] + 1
-					c[1] = n
-					c[n] = node
-				else
-					o[CHILDREN] = { 2, node }
-				end
-			end
-		end
+		attach(curNode or curOwner, node)
 	end
-	local qt = queueTail + 1
-	queueTail = qt
-	queue[qt] = node
+	enqueue(node)
 end
 
 local function effect(fn: (...any) -> ...any): any
@@ -2754,32 +2694,9 @@ local function effect(fn: (...any) -> ...any): any
 	if ownExtra then
 		ownSlow(node)
 	else
-		local o = curNode or curOwner
-		if o then
-			if o[HEIGHT] == INF then
-				local c = o[E_CHILDREN]
-				if c then
-					local n = c[1] + 1
-					c[1] = n
-					c[n] = node
-				else
-					o[E_CHILDREN] = { 2, node }
-				end
-			else
-				local c = o[CHILDREN]
-				if c then
-					local n = c[1] + 1
-					c[1] = n
-					c[n] = node
-				else
-					o[CHILDREN] = { 2, node }
-				end
-			end
-		end
+		attach(curNode or curOwner, node)
 	end
-	local qt = queueTail + 1
-	queueTail = qt
-	queue[qt] = node
+	enqueue(node)
 	return setmetatable({ node }, Node)
 end
 
@@ -2841,28 +2758,7 @@ local function createMemo<T>(fn: () -> T, equals: ((T, T) -> boolean)?): () -> T
 	if ownExtra then
 		ownSlow(node)
 	else
-		local o = curNode or curOwner
-		if o then
-			if o[HEIGHT] == INF then
-				local c = o[E_CHILDREN]
-				if c then
-					local n = c[1] + 1
-					c[1] = n
-					c[n] = node
-				else
-					o[E_CHILDREN] = { 2, node }
-				end
-			else
-				local c = o[CHILDREN]
-				if c then
-					local n = c[1] + 1
-					c[1] = n
-					c[n] = node
-				else
-					o[CHILDREN] = { 2, node }
-				end
-			end
-		end
+		attach(curNode or curOwner, node)
 	end
 	return function(): any
 		return getMemo(node)
