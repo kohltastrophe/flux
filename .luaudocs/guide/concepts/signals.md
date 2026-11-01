@@ -31,8 +31,7 @@ local isVisible = Flux.signal(true)
 local score = Flux(0)
 ```
 
-> [!TIP] Zero-Wrapper Fast Path (`Flux.createSignal`)
-> In hot code where you don't need node methods or operator overloading, `local count, setCount = Flux.createSignal(0)` returns a plain `(getter, setter)` function pair with no table wrapper overhead. See [Optimization](/guide/tips/optimization#zero-wrapper-primitives).
+In hot code where you don't need node methods or operator overloading, `local count, setCount = Flux.createSignal(0)` returns a plain `(getter, setter)` function pair with no table wrapper overhead. See [Optimization](/guide/tips/optimization#zero-wrapper-primitives).
 
 ## Reading a Signal
 
@@ -190,4 +189,4 @@ end)
 count:Destroy()
 ```
 
-A plain signal is **not** owned by an enclosing [Scope](/guide/concepts/scopes); once nothing references it, Luau's garbage collector reclaims it automatically. `onDestroy` on a signal fires only when you call `:Destroy()` explicitly (whereas Computeds and Effects also fire `onDestroy` when their owning Scope is destroyed).
+A plain signal is **not** owned by an enclosing [Scope](/guide/concepts/scopes). Once nothing references it, Luau's garbage collector reclaims it automatically. `onDestroy` on a signal fires only when you call `:Destroy()` explicitly (whereas Computeds and Effects also fire `onDestroy` when their owning Scope is destroyed).

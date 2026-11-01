@@ -7,7 +7,7 @@ sidebar_position: 11
 
 # Selectors
 
-In a 500-row list where one row is highlighted, having every row read `selectedId() == row.id` wakes all 500 bindings on every selection change. **`Flux.selector(source, equals?)`** reduces single-item selection to **O(1)**: only the row losing selection and the row gaining it re-evaluate.
+In a 500-row list where one row is highlighted, having every row read `selectedId() == row.id` wakes all 500 bindings on every selection change. **`Flux.selector(source, equals?)`** reduces single-item selection to **O(1)** so only the row losing selection and the row gaining it re-run.
 
 ```luau
 local rows = Flux.signal({
@@ -64,8 +64,7 @@ local inRange = Flux.selector(range, function(value, key: number)
 end)
 ```
 
-> [!NOTE] Complexity of Custom Matchers
-> The default `==` path updates at most **two** per-key nodes per change (**O(1)**). Because a custom comparator can match any subset of keys, it re-tests every currently observed key on each source change (**O(observed keys)**).
+The default `==` path updates at most **two** per-key nodes per change (**O(1)**). Because a custom comparator can match any subset of keys, it re-tests every currently observed key on each source change (**O(observed keys)**).
 
 ## Cleaning Up
 

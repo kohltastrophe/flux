@@ -36,14 +36,14 @@ end)
 
 ## Creating a Context
 
-Call `Flux.context(default)` with a fallback value returned whenever no `provide` is active. The context value is opaque; it can be a plain table, a primitive, a [Signal](/guide/concepts/signals), or a [Store](/guide/concepts/stores).
+Call `Flux.context(default)` with a fallback value returned whenever no `provide` is active. The context value can be a plain table, a primitive, a [Signal](/guide/concepts/signals), or a [Store](/guide/concepts/stores).
 
 ## Providing and Reading
 
 - **`context:provide(value, fn)`** runs `fn` with this context set to `value`, then restores the previous value when `fn` returns (or throws).
 - **`context:get()`** returns the value from the innermost active `provide`, or `context.default` if none is active.
 
- Every [Computed](/guide/concepts/computeds), [Effect](/guide/concepts/effects), [Scope](/guide/concepts/scopes), property binding, and event handler in `Flux.new` / `Flux.edit` **remembers the context values active where it was created**, so later re-runs continue reading the provided value:
+Every [Computed](/guide/concepts/computeds), [Effect](/guide/concepts/effects), [Scope](/guide/concepts/scopes), property binding, and event handler in `Flux.new` / `Flux.edit` **remembers the context values active where it was created**, so later re-runs keep reading the provided value:
 
 ```luau
 local Theme = Flux.context("dark")
@@ -61,7 +61,7 @@ end)
 
 ## Reactive State in Context
 
-A context slot itself is not a reactive node; `provide` sets which value a subtree receives at construction time. When the provided value needs to change dynamically over time, provide a [Signal](/guide/concepts/signals) or [Store](/guide/concepts/stores) as the context value:
+A context slot itself isn't a reactive node. Calling `provide` sets which value a subtree receives when it mounts. When the provided value needs to change over time, pass a [Signal](/guide/concepts/signals) or [Store](/guide/concepts/stores) as the context value:
 
 ```luau
 local AccentContext = Flux.context(Flux.signal(Color3.fromRGB(120, 170, 255)))

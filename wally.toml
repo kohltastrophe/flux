@@ -1,6 +1,6 @@
 [package]
 name = "kohltastrophe/flux"
-description = "Lazy fine-grained reactivity for Luau."
+description = "Reactive UI library for Luau."
 authors = ["Kohl <hi@kohl.gg>"]
 version = "0.3.1"
 license = "MIT"

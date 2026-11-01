@@ -44,7 +44,7 @@ end)
 
 ## `corner` {#corner}
 
-`Flux.corner(radius?)`{luau} returns a [`UICorner`](https://create.roblox.com/docs/en-us/reference/engine/classes/UICorner). Pass offset pixels, a `UDim`{luau}, or a per-corner table `{ topLeft, topRight, bottomLeft, bottomRight, top, bottom, left, right, radius }`{luau}; omit the argument for the engine default (`8`{luau} px):
+`Flux.corner(radius?)`{luau} returns a [`UICorner`](https://create.roblox.com/docs/en-us/reference/engine/classes/UICorner). Pass offset pixels, a `UDim`{luau}, or a per-corner table `{ topLeft, topRight, bottomLeft, bottomRight, top, bottom, left, right, radius }`{luau}. Omit the argument for the engine default (`8`{luau} px):
 
 ```luau
 Flux.corner()                        -- default 8 px rounding

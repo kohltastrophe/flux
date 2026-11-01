@@ -11,13 +11,13 @@ Flux's fine-grained reactive core skips Virtual DOM diffing and updates only the
 
 ## 1. Granular State & Stores
 
-Split distinct values into individual [Signals](/guide/concepts/signals) so each binding wakes only for the value it reads. For nested tables or player data schemas, use a [Store](/guide/concepts/stores): each nested key has its own lazy leaf Signal, and [`Flux.Store.reconcile`](/guide/concepts/stores#reconciling-snapshots) diffs incoming server snapshots so unchanged fields never trigger downstream work.
+Split distinct values into individual [Signals](/guide/concepts/signals) so each binding wakes only for the value it reads. For nested tables or player data schemas, use a [Store](/guide/concepts/stores). Each nested key gets its own lazy leaf Signal, and [`Flux.Store.reconcile`](/guide/concepts/stores#reconciling-snapshots) diffs incoming server snapshots so unchanged fields never trigger downstream work.
 
 ## 2. Smart List & Conditional Rendering
 
 Creating and destroying Roblox [`Instances`](https://create.roblox.com/docs/en-us/reference/engine/classes/Instance) is one of the most expensive operations in the engine:
 
-- **Lists:** Always render dynamic arrays with [`Flux.forValue` or `Flux.forIndex`](/guide/concepts/mapping) instead of rebuilding children in a plain loop. `forValue`{luau} caches instances by item identity and repositions them in place; `forIndex`{luau} caches slots by index and updates a reactive `value`{luau} Signal per slot.
+- **Lists:** Always render dynamic arrays with [`Flux.forValue` or `Flux.forIndex`](/guide/concepts/mapping) instead of rebuilding children in a plain loop. `forValue`{luau} caches instances by item identity and repositions them in place. `forIndex`{luau} caches slots by index and updates a reactive `value`{luau} Signal per slot.
 - **Conditionals:** Prefer [`Flux.show`](/guide/concepts/conditionals#showing-one-of-two-branches) over [`Flux.showKeyed`](/guide/concepts/conditionals#keyed-show) unless you specifically need to tear down and recreate the subtree when a truthy value changes identity.
 - **Selection:** Use [`Flux.selector`](/guide/concepts/selectors) for active-row highlighting in large lists so changing selection is $O(1)$ (waking only the old and new rows) instead of $O(N)$.
 
@@ -62,8 +62,7 @@ end)
 setCount(10)
 ```
 
-> [!NOTE] Reactive Compatibility of Fast-Path Closures
-> `createSignal`{luau} and `createMemo`{luau} closures are valid `Flux.Reactive<T>`{luau} sources; you can pass `getCount`{luau} or `getDoubled`{luau} directly to property bindings, `Flux.spring`{luau}, or `Flux.show`{luau}.
+`createSignal`{luau} and `createMemo`{luau} closures are valid `Flux.Reactive<T>`{luau} sources. You can pass `getCount`{luau} or `getDoubled`{luau} directly to property bindings, `Flux.spring`{luau}, or `Flux.show`{luau}.
 
 ## 5. How the Reactive Graph Minimizes Work
 
@@ -71,9 +70,9 @@ setCount(10)
 
 When a [Computed](/guide/concepts/computeds) has active downstream observers (such as an Effect or UI binding), Flux maintains its topological height in the dependency graph:
 
-1. **Glitch-free ordering:** Upstream Computeds always settle before deeper Computeds or Effects that read them, so diamond dependency graphs never evaluate a node twice or expose transient half-updated values.
-2. **Early cutoff:** If an upstream Computed re-evaluates and produces an equal value (`==`{luau} or custom `equals`{luau}), propagation stops immediately; downstream Computeds and Effects are never woken.
-3. **Zero cost when unobserved:** A Computed with no downstream observers unsubscribes from its sources and stays completely dormant until read.
+1. **Glitch-free ordering:** Upstream Computeds always settle before deeper Computeds or Effects that read them. Diamond dependency graphs never evaluate a node twice or expose transient half-updated values.
+2. **Early cutoff:** If an upstream Computed re-evaluates and produces an equal value (`==`{luau} or custom `equals`{luau}), propagation stops immediately. Downstream Computeds and Effects aren't woken.
+3. **Zero cost when unobserved:** A Computed with no downstream observers unsubscribes from its sources and stays dormant until read.
 
 ### Custom Equality Short-Circuiting {#equality-short-circuiting}
 

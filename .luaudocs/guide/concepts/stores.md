@@ -31,7 +31,7 @@ state.settings.volume = 0.8 -- Does NOT wake the health effect
 
 ## Creating a Store
 
-Call `Flux.store(initialTable)` with a plain Luau table. Per-key signal nodes and nested proxies are allocated lazily on first access; values that already have metatables (such as Flux nodes or class instances) are left untouched.
+Call `Flux.store(initialTable)` with a plain Luau table. Per-key signal nodes and nested proxies are allocated lazily on first access. Values that already have metatables (such as Flux nodes or class instances) are left untouched.
 
 ## Arrays and Iteration
 
@@ -57,7 +57,7 @@ local last = Store.remove(state.player.inventory)
 When a fresh snapshot arrives from a `RemoteEvent` or `DataStore`, assigning the whole table would fire every key. `Flux.Store.reconcile(target, snapshot, key?)` diffs `snapshot` into `target` in place, firing **only** the leaf nodes whose values changed and reusing unchanged nested proxies:
 
 ```luau
--- Only `health` changed; `name` and `settings.volume` observers stay asleep
+-- Only `health` changed, so `name` and `settings.volume` observers stay asleep
 Flux.Store.reconcile(state, {
 	player = { name = "Guest", health = 80, inventory = { "Sword", "Shield" } },
 	settings = { volume = 0.5 },

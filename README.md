@@ -13,7 +13,7 @@
 
 # Be lazy. Do more. Go fast.
 
-_Flux is a declarative Luau library for creating user interfaces. It runs on fine-grained, glitch-free reactions, is strictly typed for accurate IntelliSense, and keeps the syntax terse enough that interfaces read almost like plain Luau._
+_Flux is a reactive UI library for Luau. It's strictly typed for accurate autocomplete, batches updates once per frame, and keeps syntax terse enough to read like plain Luau._
 
 [![CI](https://img.shields.io/github/actions/workflow/status/kohltastrophe/flux/ci.yml?style=for-the-badge)](https://github.com/kohltastrophe/flux/actions/workflows/ci.yml) [![Coverage](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/kohltastrophe/a15338bf8bb30072e690acf47a8e0266/raw/flux-coverage.json&style=for-the-badge)](https://github.com/kohltastrophe/flux/actions/workflows/ci.yml) [![License](https://img.shields.io/github/license/kohltastrophe/flux?style=for-the-badge)](LICENSE.md) ![GitHub Release](https://img.shields.io/github/v/release/kohltastrophe/flux?style=for-the-badge)
 
@@ -25,7 +25,7 @@ _Flux is a declarative Luau library for creating user interfaces. It runs on fin
 
 </div>
 
-Flux exploits Luau's type checker to its absolute limit: if you're going to be lazy, your editor should do the heavy lifting. The moment you declare an instance like a `TextLabel` or a `Frame`, you get zero-guesswork autocomplete for every valid property, event, and expected type.
+Flux leans on Luau's type checker so your editor does the heavy lifting. When you declare a `TextLabel` or `Frame`, you get autocomplete for every valid property, event, and expected type.
 
 ---
 
@@ -53,7 +53,7 @@ new "ScreenGui" {
 }
 ```
 
-Flux cuts boilerplate with `__call` metamethods and full <b>operator overloading</b> on every reactive node, so reading and writing state takes zero ceremony. Forget `:get()` and `:set(1)`; just use `count()` to read and `count(1)` to write. Arithmetic, comparison, and concatenation operators automatically subscribe, so reactive expressions read like the plain Luau around them.
+Every reactive node supports `__call` and <b>operator overloading</b>, so reading and writing state takes no extra ceremony. Call `count()` to read and `count(1)` to write. Arithmetic, comparison, and string interpolation track dependencies automatically, so reactive expressions read like normal Luau.
 
 </div>
 
@@ -65,31 +65,32 @@ Flux cuts boilerplate with `__call` metamethods and full <b>operator overloading
 
 </div>
 
-Virtual DOM libraries rebuild and diff component trees; naive reactive graphs re-run downstream bindings on every intermediate write. Flux does neither: dormant computations sleep with zero subscriptions until something observes them, and active bindings batch updates to the frame, settling in dependency order and stopping early the moment a derived value is unchanged. No virtual DOM diffing, no intermediate glitches, and no wasted CPU cycles.
+Dormant computations sleep with zero subscriptions until something observes them. Active bindings batch updates once per frame and run in dependency order. If a computed value doesn't change, downstream bindings don't re-run.
 
 ---
 
 ## Batteries Included
 
-Fine-grained reactivity is the engine. On top of it, Flux ships the rest of what you need to build interfaces, all strictly typed:
+Flux includes the building blocks you need for Roblox interfaces:
 
-- **Reactive primitives** - [`signal`](https://flux.kohl.gg/guide/concepts/signals), [`computed`](https://flux.kohl.gg/guide/concepts/computeds), and [`effect`](https://flux.kohl.gg/guide/concepts/effects), plus [stores](https://flux.kohl.gg/guide/concepts/stores) and [context](https://flux.kohl.gg/guide/concepts/context) for shared state, and [`split`](https://flux.kohl.gg/guide/concepts/components#splitting-props-with-flux-split) for typed component props.
-- **Declarative instances** - [`new`](https://flux.kohl.gg/guide/roblox/creation) to build and [`edit`](https://flux.kohl.gg/guide/roblox/hydration) to hydrate existing Instances, with two-way [`model`](https://flux.kohl.gg/guide/roblox/creation#flux-model-two-way-binding-in-one-key) bindings and [`Find`](https://flux.kohl.gg/guide/roblox/hydration#instance-selectors-flux-find) selectors.
-- **Lifecycle & cleanup** - [`scope`](https://flux.kohl.gg/guide/concepts/scopes) tracks every node, instance, and effect it creates and tears them all down with a single `Destroy`, including nested child scopes.
-- **Control flow** - [`show`](https://flux.kohl.gg/guide/concepts/conditionals), [`switch`](https://flux.kohl.gg/guide/concepts/conditionals#switching-between-many-branches), and exit-animated [`presence`](https://flux.kohl.gg/guide/concepts/conditionals#animating-exits-with-presence) for conditional subtrees, [`forValue` / `forIndex`](https://flux.kohl.gg/guide/concepts/mapping) for keyed mapping, and [`selector`](https://flux.kohl.gg/guide/concepts/selectors) for O(1) selection in large lists.
-- **Motion** - physics [springs](https://flux.kohl.gg/guide/motion/spring), [tweens](https://flux.kohl.gg/guide/motion/tween), and perceptual [color](https://flux.kohl.gg/guide/motion/color) interpolation in Oklab, all stepped once per frame.
-- **Responsive, layout & input** - [`viewport`, `scale`, `breakpoint`, and accessibility](https://flux.kohl.gg/guide/utilities/responsive) nodes, [`Interact`](https://flux.kohl.gg/guide/utilities/interact) state (`hover`, `press`, `focused`), and [`padding`, `list`, `grid`, and `flex`](https://flux.kohl.gg/guide/utilities/layout) helpers.
-- **Async, safety & testing** - [`async`](https://flux.kohl.gg/guide/concepts/async) tasks, [`safe`](https://flux.kohl.gg/guide/tips/errors) error boundaries, and a virtual [`Clock`](https://flux.kohl.gg/guide/tips/testing) for deterministic frame and timer stepping in tests.
+- **Reactive State:** Track values with [`signal`](https://flux.kohl.gg/guide/concepts/signals), [`computed`](https://flux.kohl.gg/guide/concepts/computeds), [`effect`](https://flux.kohl.gg/guide/concepts/effects), and nested [`store`](https://flux.kohl.gg/guide/concepts/stores) proxies.
+- **Networked State:** Replicate server-authoritative and per-player signals to clients with [`Flux.Sync`](https://flux.kohl.gg/guide/concepts/sync).
+- **Declarative Instances:** Build trees with [`new`](https://flux.kohl.gg/guide/roblox/creation) or wire up existing templates with [`edit`](https://flux.kohl.gg/guide/roblox/hydration).
+- **Scoped Cleanup:** Wrap a tree in [`scope`](https://flux.kohl.gg/guide/concepts/scopes) to tear down all of its instances and reactions with one `Destroy` call.
+- **Control Flow & Lists:** Render conditional branches with [`show`](https://flux.kohl.gg/guide/concepts/conditionals) and [`switch`](https://flux.kohl.gg/guide/concepts/conditionals#switching-between-many-branches), or map dynamic lists with [`forValue`](https://flux.kohl.gg/guide/concepts/mapping).
+- **Built-in Motion:** Animate any state with physics [springs](https://flux.kohl.gg/guide/motion/spring), [tweens](https://flux.kohl.gg/guide/motion/tween), or perceptual [color](https://flux.kohl.gg/guide/motion/color) blending.
+- **UI Utilities:** Read screen [breakpoints](https://flux.kohl.gg/guide/utilities/responsive), track [pointer and gamepad interactions](https://flux.kohl.gg/guide/utilities/interact), and drop in terse [layout constraints](https://flux.kohl.gg/guide/utilities/layout).
+- **Async & Testing:** Run cancellable [`async`](https://flux.kohl.gg/guide/concepts/async) tasks, catch failures with [`safe`](https://flux.kohl.gg/guide/tips/errors), and step a virtual [`Clock`](https://flux.kohl.gg/guide/tips/testing) in tests.
 
 ## Installation
 
 Download the latest `Flux.rbxm` from [Releases](https://github.com/kohltastrophe/flux/releases), drop it into Roblox Studio, and place the module in `ReplicatedStorage`. Rojo users can sync the `src` directory directly.
 
-From there, the **[Getting Started](https://flux.kohl.gg/guide/introduction/getting-started)** guide covers the core concepts and your first reactive components.
+Read the **[Getting Started](https://flux.kohl.gg/guide/introduction/getting-started)** guide to build your first component.
 
 ## Acknowledgments
 
-Flux is heavily inspired by:
+Flux is inspired by:
 
 - **[Vide](https://github.com/centau/vide)**
 - **[SolidJS](https://github.com/solidjs/solid)**
@@ -98,7 +99,7 @@ Flux is heavily inspired by:
 
 ## Sponsors
 
-Flux is free and MIT-licensed. Its ongoing development is made possible by its sponsors; if Flux is useful to you or your team, you can support it through [GitHub Sponsors](https://github.com/sponsors/kohltastrophe).
+Flux is free and MIT-licensed. If Flux is useful to you or your team, you can support its development through [GitHub Sponsors](https://github.com/sponsors/kohltastrophe).
 
 ## License
 

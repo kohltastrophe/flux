@@ -33,9 +33,9 @@ xPosition(200)
    - **`1`{luau} (Critically Damped):** Quickly approaches the target and stops without overshoot.
    - **`< 1`{luau} (Underdamped):** Overshoots the target and bounces before settling.
    - **`> 1`{luau} (Overdamped):** Eases sluggishly into the target without bouncing.
-4. **`initialVelocity`{luau}** _(optional)_: Starting velocity in the target's type (for example, a `Vector2`{luau} for a `Vector2`{luau} spring); omit to start at rest.
+4. **`initialVelocity`{luau}** _(optional)_: Starting velocity in the target's type (for example, a `Vector2`{luau} for a `Vector2`{luau} spring). Omit to start at rest.
 
-A spring acts like a standard [Signal](/guide/concepts/signals): read it with `spring()`{luau} or `:get()`{luau}, retarget it with `spring(newGoal)`{luau} or `:set(newGoal)`{luau}, and bind it directly to Instance properties.
+A spring acts like a standard [Signal](/guide/concepts/signals). Read it with `spring()`{luau} or `:get()`{luau}, retarget it with `spring(newGoal)`{luau} or `:set(newGoal)`{luau}, and bind it directly to Instance properties.
 
 ## Reactive Targets
 
@@ -56,8 +56,7 @@ local myButton = Flux.new "TextButton" {
 }
 ```
 
-> [!NOTE] Reactive Physics Parameters
-> `frequency`{luau} and `damping`{luau} also accept reactive nodes or functions, retuning the spring's physics on the fly.
+`frequency`{luau} and `damping`{luau} also accept reactive nodes or functions, so you can retune the spring's physics on the fly.
 
 ## Velocity Control: Impulse & Set Velocity
 
@@ -71,7 +70,7 @@ Both take a value of the spring's datatype and wake a settled spring immediately
 ```luau
 local y = Flux.spring(0, 4, 0.6)
 
--- Kick upward at 800 px/s; the spring settles back to 0 on its own
+-- Kick upward at 800 px/s, then let the spring settle back to 0
 local function onHit()
     y:impulse(-800)
 end
@@ -95,12 +94,11 @@ local offset = Flux.spring(0, 3, 0.85)
 -- Jump directly to 100 at rest (no animation)
 offset:snap(100)
 
--- Displace the current position to 140; it springs back toward 100
+-- Displace the current position to 140 so it springs back toward 100
 offset:setCurrent(140)
 ```
 
-> [!NOTE] Spring-Only Methods
-> `:impulse()`{luau}, `:setVelocity()`{luau}, `:setCurrent()`{luau}, and `:snap()`{luau} are spring-only. Calling them on a [Tween](/guide/motion/tween) warns and does nothing.
+`:impulse()`{luau}, `:setVelocity()`{luau}, `:setCurrent()`{luau}, and `:snap()`{luau} are spring-only. Calling them on a [Tween](/guide/motion/tween) warns and does nothing.
 
 ## Lifecycle
 

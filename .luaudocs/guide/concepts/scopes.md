@@ -31,10 +31,9 @@ scope:Destroy()
 
 ## Creating a Scope
 
-`Flux.scope(fn)` runs `fn(scope)` inside a new owner scope and returns `(scope, result)`. You use the exact same `Flux.signal`, `Flux.computed`, `Flux.effect`, and `Flux.new` calls inside a scope as outside; ownership is tracked automatically.
+`Flux.scope(fn)` runs `fn(scope)` inside a new owner scope and returns `(scope, result)`. You use the same `Flux.signal`, `Flux.computed`, `Flux.effect`, and `Flux.new` calls inside a scope as outside. Ownership is tracked automatically.
 
-> [!TIP] Coming from SolidJS or Maid/Trove?
-> `Flux.scope` combines a reactive root (like SolidJS's `createRoot`) with a resource cleanup container (like Roblox's Maid or Trove patterns).
+`Flux.scope` combines a reactive root (like SolidJS's `createRoot`) with a resource cleanup container (like Roblox's Maid or Trove patterns).
 
 ## What a Scope Owns
 
@@ -46,8 +45,7 @@ Everything created while a scope is active that holds a subscription or resource
 - **Interaction & motion nodes:** [`Flux.Interact`](/guide/utilities/interact) state nodes (`hover`, `press`, `selected`, `focused`), [`Flux.spring`](/guide/motion/spring), and [`Flux.tween`](/guide/motion/tween)
 - **Custom teardown items** registered with [`Flux.cleanup`](/guide/concepts/effects#cleanup-with-flux-cleanup)
 
-> [!NOTE] Plain Signals Are Garbage-Collected
-> Plain signals (`Flux.signal(v)`, `Flux(v)`) hold no upstream subscriptions or external resources, so scopes do not own them; Luau's garbage collector reclaims them once unreferenced.
+Plain signals (`Flux.signal(v)`, `Flux(v)`) hold no upstream subscriptions or external resources, so scopes don't own them. Luau's garbage collector reclaims them once nothing references them.
 
 ## Nesting Scopes
 
@@ -99,7 +97,7 @@ local connections = {
 Flux.dispose(connections) -- disconnects both immediately
 ```
 
-`Flux.dispose` runs [untracked](/guide/concepts/tracking) and isolates errors via `warn` so one failing cleanup never aborts the rest. Use `Flux.dispose` to tear something down **now**; use `Flux.cleanup` to attach teardown to the active owner.
+`Flux.dispose` runs [untracked](/guide/concepts/tracking) and isolates errors via `warn` so one failing cleanup never aborts the rest. Use `Flux.dispose` to tear something down right now, and `Flux.cleanup` to attach teardown to the active owner.
 
 ## Connecting a Scope to an Instance Lifetime
 
@@ -123,4 +121,4 @@ local function Toast(message: string): Frame
 end
 ```
 
-The scope matters here: the instance owns getter functions bound to its properties, but not a [spring](/guide/motion/spring#lifecycle) or [tween](/guide/motion/tween#lifecycle) node bound to one. Without an owner, `opacity` would outlive `frame`.
+The instance owns getter functions bound to its properties, but not a [spring](/guide/motion/spring#lifecycle) or [tween](/guide/motion/tween#lifecycle) node bound to one. Without the scope on `__CLEAN`, `opacity` would outlive `frame`.

@@ -7,7 +7,7 @@ sidebar_position: 3
 
 # Sharing State
 
-In Flux, **reactivity is independent of the UI tree**. A [Signal](/guide/concepts/signals) or [Store](/guide/concepts/stores) is a standalone value; it does not care where it was created or which component reads it.
+In Flux, **reactivity is independent of the UI tree**. A [Signal](/guide/concepts/signals) or [Store](/guide/concepts/stores) is a standalone value. It doesn't care where it was created or which component reads it.
 
 ## 1. Lifting State Up (Props)
 
@@ -94,7 +94,7 @@ local function MuteButton()
 end
 ```
 
-To sync server state into a client Store over a `RemoteEvent`{luau}, pass each incoming table snapshot to [`Flux.Store.reconcile(store, snapshot)`](/guide/concepts/stores#reconciling-snapshots) so only changed leaves fire.
+To sync server state into a client Store over a `RemoteEvent`{luau}, pass each incoming table snapshot to [`Flux.Store.reconcile(store, snapshot)`](/guide/concepts/stores#reconciling-snapshots) so only changed leaves fire. For reactive signals replicated directly between the server and clients (including per-player state and client-to-server validation), use [`Flux.Sync`](/guide/concepts/sync).
 
 ## 4. Scoped Feature State (`Flux.scope`{luau})
 
@@ -136,5 +136,6 @@ end))
 | **Props**             | Passing state from a parent to direct or shallow children              |
 | **`Flux.context`**    | Ambient values shared across a deep UI subtree (themes, locales)       |
 | **`ModuleScript`s**   | Client-wide singletons (player settings, session data, round state)    |
+| **`Flux.Sync`**       | Server-to-client synced state (shared, per-player, or validated writes) |
 | **`Flux.scope`**      | Multi-component features with a bounded lifetime (windows, minigames)  |
 | **`Flux.effect` + `Flux.on`** | Bridging reactive changes out to external imperative systems   |

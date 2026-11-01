@@ -25,7 +25,7 @@ local function PrimaryButton(props: ButtonProps): TextButton
 end
 ```
 
-When state changes, `PrimaryButton` itself never re-executes; only the bound `Text` property updates.
+When state changes, `PrimaryButton` itself doesn't re-run. Only the bound `Text` property updates.
 
 ## Consuming Components
 
@@ -59,7 +59,7 @@ Callers may pass a static value (`"Submit"`), a reactive [Node](/guide/concepts/
 ```luau
 local function StatusLabel(props: { status: Flux.Reactive<string> })
 	return Flux.new "TextLabel" {
-		Text = props.status, -- static string assigned once; node or getter bound reactively
+		Text = props.status, -- static strings assign once, nodes and getters bind reactively
 	}
 end
 ```
@@ -107,7 +107,7 @@ end
 ```
 
 - **Typed `Pick` and `Omit`:** With a single typed key group (either an annotated literal array like `local OWN: { "label" | "accent" }` or a schema table), `own` is typed as `Flux.Pick<Props, Keys>` and `rest` as `Flux.Omit<Props, Keys>`, keeping required props required.
-- **Multiple groups:** You can pass multiple key groups (`local a, b, rest = Flux.split(props, KEYS_A, KEYS_B)`); each group receives its matching keys and the final return holds everything else (including numeric children and `__ATTR`/`__EVENT`/`__TAG`/`__CLEAN` directives).
+- **Multiple groups:** You can pass multiple key groups (`local a, b, rest = Flux.split(props, KEYS_A, KEYS_B)`). Each group receives its matching keys, and the final return holds everything else (including numeric children and `__ATTR`/`__EVENT`/`__TAG`/`__CLEAN` directives).
 - **Non-mutating:** `props` itself is never mutated.
 
 ## Accepting Children

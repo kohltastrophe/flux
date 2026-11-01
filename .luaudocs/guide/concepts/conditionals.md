@@ -42,7 +42,7 @@ local screen = Flux.new "Frame" {
 
 - **Keyed on truthiness:** Changing between two truthy values (e.g. `{ name = "Ada" }` to `{ name = "Grace" }`) keeps the mounted branch alive without rebuilding its Instances.
 - **Live `value` accessor:** The truthy branch function receives a `value` getter (`() -> T`) that reads the current truthy condition reactively inside bindings.
-- **Branch scope:** Every branch runs inside its own child [Scope](/guide/concepts/scopes); when the condition flips, the outgoing branch's instances, effects, and cleanups are destroyed automatically.
+- **Branch scope:** Every branch runs inside its own child [Scope](/guide/concepts/scopes). When the condition flips, the outgoing branch's instances, effects, and cleanups are destroyed automatically.
 
 ### Remounting on Identity Change {#keyed-show}
 
@@ -135,7 +135,7 @@ local bgColor = Flux.pick(
 )
 ```
 
-All three arguments may be plain values, nodes, or getters; only the chosen branch is read.
+All three arguments can be plain values, nodes, or getters. Only the chosen branch is read.
 
 ## Defaulting a `nil` Value
 

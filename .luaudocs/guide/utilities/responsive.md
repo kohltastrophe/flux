@@ -20,8 +20,7 @@ Flux.new "ScreenGui" {
 }
 ```
 
-> [!TIP] Screen Insets and Safe Areas
-> For safe areas (the Roblox topbar, device notches, and rounded corners), configure Roblox's built-in [`ScreenGui.ScreenInsets`](https://create.roblox.com/docs/en-us/reference/engine/classes/ScreenGui#ScreenInsets) (`CoreUISafeInsets`{luau} or `DeviceSafeInsets`{luau}) and `ScreenGui.SafeAreaCompatibility`{luau}.
+For safe areas (the Roblox topbar, device notches, and rounded corners), configure Roblox's built-in [`ScreenGui.ScreenInsets`](https://create.roblox.com/docs/en-us/reference/engine/classes/ScreenGui#ScreenInsets) (`CoreUISafeInsets`{luau} or `DeviceSafeInsets`{luau}) and `ScreenGui.SafeAreaCompatibility`{luau}.
 
 ## Screen & Layout Nodes
 
@@ -90,7 +89,7 @@ end)
 
 ### Text Size {#text-size}
 
-`Flux.Responsive.textSize`{luau} (`Node<"Medium" | "Large" | "Larger" | "Largest">`{luau}) tracks [`GuiService.PreferredTextSize`](https://create.roblox.com/docs/en-us/reference/engine/classes/GuiService#PreferredTextSize). Roblox automatically scales text rendering for this setting; use `textSize`{luau} to give surrounding containers extra breathing room, not to multiply `TextSize`{luau} a second time.
+`Flux.Responsive.textSize`{luau} (`Node<"Medium" | "Large" | "Larger" | "Largest">`{luau}) tracks [`GuiService.PreferredTextSize`](https://create.roblox.com/docs/en-us/reference/engine/classes/GuiService#PreferredTextSize). Roblox automatically scales text rendering for this setting. Use `textSize`{luau} to give surrounding containers extra breathing room, not to multiply `TextSize`{luau} a second time.
 
 ### Reduced Motion {#reduced-motion}
 

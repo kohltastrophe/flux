@@ -30,7 +30,7 @@ loadingProgress(1)
 1. **`target`{luau}**: The value (or reactive source) the tween animates toward.
 2. **`tweenInfo`{luau}** _(optional)_: A Roblox [`TweenInfo`](https://create.roblox.com/docs/en-us/reference/engine/datatypes/TweenInfo) controlling duration, easing style, direction, repeat count, reverses, and delay. Defaults to `0.3`{luau} seconds with `Cubic`{luau} `InOut`{luau} easing.
 
-The returned node works just like a [Signal](/guide/concepts/signals): read it with `tween()`{luau}, retarget it with `tween(newGoal)`{luau} or `:set(newGoal)`{luau}, and bind it directly to properties.
+The returned node works just like a [Signal](/guide/concepts/signals). Read it with `tween()`{luau}, retarget it with `tween(newGoal)`{luau} or `:set(newGoal)`{luau}, and bind it directly to properties.
 
 ## Reactive Targets
 

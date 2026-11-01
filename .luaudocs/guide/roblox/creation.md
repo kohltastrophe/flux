@@ -71,7 +71,7 @@ Both `Flux.new` and [`Flux.edit`](/guide/roblox/hydration) accept bare `_`-prefi
 | Prefix / Key | Purpose | Example |
 | :--- | :--- | :--- |
 | **`_attr_Name`** / **`__ATTR`** | Sets static, reactive, or [`Flux.model`](#flux-model-two-way-binding-in-one-key) Instance attributes | `_attr_Health = healthNode` |
-| **`_tag_Name`** / **`__TAG`** | Adds/removes [`CollectionService`](https://create.roblox.com/docs/en-us/reference/engine/classes/CollectionService) tags (`_tag_Name` toggles a named tag by truthiness; `__TAG` accepts dynamic tag names or arrays) | `_tag_Enemy = isAlive` |
+| **`_tag_Name`** / **`__TAG`** | Adds/removes [`CollectionService`](https://create.roblox.com/docs/en-us/reference/engine/classes/CollectionService) tags (`_tag_Name` toggles a named tag by truthiness, while `__TAG` accepts dynamic tag names or arrays) | `_tag_Enemy = isAlive` |
 | **`_Prop`** / **`__EVENT`** | Connects a typed `GetPropertyChangedSignal("Prop")` listener receiving the new value | `_Text = function(text) ... end` |
 | **`__attr_Name`** / **`__EVENT.__ATTR`** | Connects a `GetAttributeChangedSignal("Name")` listener receiving the new value | `__attr_Health = function(hp) ... end` |
 | **`__tag_Name`** / **`__EVENT.__TAG`** | Connects a [`CollectionService`](https://create.roblox.com/docs/en-us/reference/engine/classes/CollectionService) tag-changed listener receiving `hasTag: boolean` | `__tag_Enemy = function(has) ... end` |

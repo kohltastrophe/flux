@@ -38,18 +38,17 @@ local tripled = Flux(function()
 end)
 ```
 
-Pass an optional `equals(old, new)` comparator as the second argument to stop downstream propagation when a recomputed result is logically unchanged (see [Custom Equality](/guide/concepts/signals#custom-equality)).
+Pass an optional `equals(old, new)` comparator as the second argument to stop downstream updates when a recomputed result hasn't logically changed (see [Custom Equality](/guide/concepts/signals#custom-equality)).
 
-> [!TIP] Zero-Wrapper Fast Path (`Flux.createMemo`)
-> When you only need a tracked getter function `() -> T` without node methods or operators, `Flux.createMemo(fn, equals?)` skips the node table wrapper. See [Optimization](/guide/tips/optimization#zero-wrapper-primitives).
+If you only need a tracked getter function `() -> T` without node methods or operators, `Flux.createMemo(fn, equals?)` skips the node table wrapper. See [Optimization](/guide/tips/optimization#zero-wrapper-primitives).
 
 ## How Computeds Evaluate
 
-A Computed adapts its evaluation strategy depending on whether an [Effect](/guide/concepts/effects) or UI binding is actively watching it:
+A Computed changes how it evaluates based on whether an [Effect](/guide/concepts/effects) or UI binding is watching it:
 
-1. **Dormant when unobserved:** While no Effect or UI binding depends on a Computed, it holds zero upstream subscriptions and does not run until you read `computed()`. Once read, it caches the result and only recalculates on a future read if an upstream source changed.
-2. **Stabilized in order when observed:** While watched by an Effect or UI property, the Computed subscribes to its sources. When a signal changes, Flux stabilizes dirty observed Computeds in **dependency height order** (shallowest to deepest) during the frame flush (before any Effect runs), so no node ever evaluates twice or sees a half-updated "diamond" state.
-3. **Early cutoff:** If a Computed re-evaluates to the same value (`==` or `equals`), propagation stops immediately and downstream Computeds and UI bindings do not wake up.
+1. **Dormant when unobserved:** While no Effect or UI binding depends on a Computed, it holds zero upstream subscriptions and doesn't run until you read `computed()`. Once read, it caches the result and only recalculates on a future read if an upstream source changed.
+2. **Stabilized in order when observed:** While watched by an Effect or UI property, the Computed subscribes to its sources. When a signal changes, Flux updates dirty observed Computeds in **dependency height order** (shallowest to deepest) during the frame flush before any Effect runs. No node runs twice in the same flush or sees a half-updated state.
+3. **Early cutoff:** If a Computed produces the same value (`==` or `equals`), propagation stops there and downstream Computeds and UI bindings don't re-run.
 
 ```luau
 local count = Flux.signal(1)

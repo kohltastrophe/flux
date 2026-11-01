@@ -11,7 +11,7 @@ Unhandled errors inside reactive computations or async tasks can interrupt UI up
 
 ## Structured Error Handling (`Flux.safe`{luau}) {#structured-error-handling-flux-safe}
 
-`Flux.safe(tryFn, fallback, equals?)`{luau} wraps a computation in a self-healing reactive error boundary. It returns a [Computed](/guide/concepts/computeds) node that evaluates `tryFn`{luau}; if `tryFn`{luau} throws, it returns `fallback`{luau} (either a static value or a `function(err)`{luau} handler):
+`Flux.safe(tryFn, fallback, equals?)`{luau} wraps a computation in a self-healing reactive error boundary. It returns a [Computed](/guide/concepts/computeds) node that evaluates `tryFn`{luau}. If `tryFn`{luau} throws, it returns `fallback`{luau} (either a static value or a `function(err)`{luau} handler):
 
 ```luau
 local HttpService = game:GetService("HttpService")
@@ -31,10 +31,7 @@ rawJson('{"ok": true}')
 print(parsed().ok) -- true
 ```
 
-Any reactive dependencies read before `tryFn`{luau} threw are still tracked, so updating `rawJson`{luau} automatically re-runs `parsed`{luau} and recovers cleanly.
-
-> [!NOTE] Untracked Fallback Execution
-> The `fallback`{luau} handler itself runs **untracked** so fallback logging or recovery reads never subscribe the computation to unintended dependencies.
+Any reactive dependencies read before `tryFn`{luau} threw are still tracked, so updating `rawJson`{luau} automatically re-runs `parsed`{luau} and recovers cleanly. The `fallback`{luau} handler itself runs **untracked** so fallback logging or recovery reads never subscribe the computation to unintended dependencies.
 
 ## Asynchronous Errors
 
@@ -71,4 +68,4 @@ Flux isolates failures across the graph so one broken node never corrupts the re
 
 ## Scope Safety
 
-Calling `:Destroy()`{luau} on a [Scope](/guide/concepts/scopes) (or passing items to [`Flux.dispose`](/guide/concepts/scopes#disposing-by-hand-with-flux-dispose)) is resilient to errors: even if one cleanup callback throws, Flux logs a warning and finishes tearing down every remaining instance, connection, and child scope.
+Calling `:Destroy()`{luau} on a [Scope](/guide/concepts/scopes) (or passing items to [`Flux.dispose`](/guide/concepts/scopes#disposing-by-hand-with-flux-dispose)) is resilient to errors. Even if one cleanup callback throws, Flux logs a warning and finishes tearing down every remaining instance, connection, and child scope.

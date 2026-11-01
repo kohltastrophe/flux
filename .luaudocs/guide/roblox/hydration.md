@@ -26,7 +26,7 @@ Flux.edit(existingButton) {
 
 ## The `Flux.edit`{lua} Function
 
-`Flux.edit(instance)` returns a function that applies a properties table to `instance` and returns `instance`. Unlike `Flux.new`, `Flux.edit` never applies class [defaults](/guide/roblox/defaults); it only touches the properties, events, and children you specify.
+`Flux.edit(instance)` returns a function that applies a properties table to `instance` and returns `instance`. Unlike `Flux.new`, `Flux.edit` never applies class [defaults](/guide/roblox/defaults). It only touches the properties, events, and children you specify.
 
 - All bindings and event connections are automatically cleaned up when `instance.Destroying` fires.
 - If `Flux.edit` is called inside a [`Flux.scope`](/guide/concepts/scopes), the bindings are also owned by that scope and disconnect when `scope:Destroy()` is called (without destroying `instance` itself).
@@ -80,7 +80,7 @@ Prefix a property name with `_` (or an attribute name with `__attr_` / a tag nam
 
 ```luau
 Flux.edit(existingTextBox) {
-	-- Connects to GetPropertyChangedSignal("Text"); `newText` is typed as `string`:
+	-- Connects to GetPropertyChangedSignal("Text") (`newText` is typed as `string`):
 	_Text = function(newText)
 		print("Text changed to:", newText)
 	end,
@@ -90,7 +90,7 @@ Flux.edit(existingTextBox) {
 		print("Stunned:", stunning)
 	end,
 
-	-- Connects to CollectionService tag signals for "Focused"; `hasTag` is `boolean`:
+	-- Connects to CollectionService tag signals for "Focused" (`hasTag` is `boolean`):
 	__tag_Focused = function(hasTag)
 		print("Focused tag:", hasTag)
 	end,
@@ -114,8 +114,7 @@ Flux.edit(existingTextBox) {
 }
 ```
 
-> [!TIP] Two-Way Binding vs. Read-Only Mirroring
-> To two-way bind a property, attribute, or tag to a signal node, use [`Flux.model(node)`](/guide/roblox/creation#flux-model-two-way-binding-in-one-key) (`Text = Flux.model(textNode)`, `_attr_Score = Flux.model(scoreNode)`, or `_tag_Selected = Flux.model(selectedNode)`). To follow an instance property, attribute, or tag as a read-only node, use [`Flux.property(instance, key)`](/guide/concepts/signals#binding-from-an-instance-property).
+To two-way bind a property, attribute, or tag to a signal node, use [`Flux.model(node)`](/guide/roblox/creation#flux-model-two-way-binding-in-one-key) (`Text = Flux.model(textNode)`, `_attr_Score = Flux.model(scoreNode)`, or `_tag_Selected = Flux.model(selectedNode)`). To follow an instance property, attribute, or tag as a read-only node, use [`Flux.property(instance, key)`](/guide/concepts/signals#binding-from-an-instance-property).
 
 ### `__REF` (Instance Reference)
 

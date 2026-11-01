@@ -51,8 +51,7 @@ count(3)
 
 In tests (or when you need synchronous execution), call [`Flux.flush()`](/guide/tips/testing#deterministic-effects-with-flux-flush) or step [`Flux.Clock`](/guide/tips/testing) to drain pending effects immediately.
 
-> [!NOTE] Runaway Loop Protection
-> If an Effect writes to a signal that it also read during the same run, Flux re-queues it. If a single Effect re-triggers itself more than **100 times** in one flush, Flux warns with its `source:line` and disposes the Effect automatically so it cannot freeze the client.
+If an Effect writes to a signal that it also read during the same run, Flux re-queues it. If a single Effect re-triggers itself more than **100 times** in one flush, Flux warns with its `source:line` and disposes the Effect automatically so it can't freeze the client.
 
 ## Cleanup with `Flux.cleanup`{lua}
 
@@ -91,7 +90,7 @@ end)
 | **Purpose** | Derive a new value from state | Synchronize state with an external system |
 | **Return value** | Cached and read via `node()` | Ignored |
 | **Purity** | Must be pure (no side effects) | Built for side effects and resource setup |
-| **When it runs** | On demand when unobserved; before effects on flush when observed | Once per frame flush after upstream computeds settle |
+| **When it runs** | On demand when unobserved, or before effects on flush when observed | Once per frame flush after upstream computeds settle |
 
 ## Bridging to External Systems with `Flux.on`{lua}
 

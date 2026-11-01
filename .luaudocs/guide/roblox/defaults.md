@@ -7,7 +7,7 @@ sidebar_position: 3
 
 # Defaults
 
-`Flux.new` applies a curated set of default property overrides immediately after creating an [`Instance`](https://create.roblox.com/docs/en-us/reference/engine/datatypes/Instance), before your own properties table is applied: parts start anchored in `SmoothPlastic`, GUI objects have `BorderSizePixel = 0`, buttons disable `AutoButtonColor`, and layouts sort by `LayoutOrder`.
+`Flux.new` applies default property overrides right after creating an [`Instance`](https://create.roblox.com/docs/en-us/reference/engine/datatypes/Instance) and before applying your properties table. Parts start anchored in `SmoothPlastic`, GUI objects have `BorderSizePixel = 0`, buttons disable `AutoButtonColor`, and layouts sort by `LayoutOrder`.
 
 Your own properties always override these defaults, and [`Flux.edit`](/guide/roblox/hydration) never applies defaults to existing instances.
 

@@ -1,5 +1,5 @@
 title = "Flux"
-description = "Documentation"
+description = "Reactive UI library for Luau."
 
 [source]
 entries = ["src"]

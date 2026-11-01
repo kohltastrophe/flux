@@ -28,7 +28,7 @@ hero:
 
 <h1 align="center">Be lazy <text style="opacity: 0.26">yet effective</text></h1>
 
-Flux exploits Luau's type checker to its absolute limit: if you're going to be lazy, your editor should do the heavy lifting. The moment you declare an instance like a `TextLabel` or a `Frame`, you get zero-guesswork autocomplete for every valid property, event, and expected type.
+Flux leans on Luau's type checker so your editor does the heavy lifting. When you declare a `TextLabel` or `Frame`, you get autocomplete for every valid property, event, and expected type.
 
 <img src="/autocomplete.min.svg" alt="Editor autocomplete for Flux: choosing the Frame class, completing the inherited Name property, and a red squiggle on an invalid property." style="display:block;width:100%;max-width:560px;margin:1.5rem auto;" />
 
@@ -37,7 +37,7 @@ Flux exploits Luau's type checker to its absolute limit: if you're going to be l
 
 <h1 align="center">Do more <text style="opacity: 0.26">with less</text></h1>
 
-Flux cuts boilerplate with `__call` metamethods and full <b>operator overloading</b> on every reactive node, so reading and writing state takes zero ceremony. Forget `:get()` and `:set(1)`; just use `count()` to read and `count(1)` to write. Arithmetic, comparison, and concatenation operators automatically subscribe, so reactive expressions read like the plain Luau around them.
+Every reactive node supports `__call` and <b>operator overloading</b>, so reading and writing state takes no extra ceremony. Call `count()` to read and `count(1)` to write. Arithmetic, comparison, and string interpolation track dependencies automatically, so reactive expressions read like normal Luau.
 
 ```luau
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -59,7 +59,7 @@ new "ScreenGui" {
 
 <h1 align="center">Go fast <text style="opacity: 0.26">waste nothing</text></h1>
 
-Virtual DOM libraries rebuild and diff component trees; naive reactive graphs re-run downstream bindings on every intermediate write. Flux does neither: dormant computations sleep with zero subscriptions until something observes them, and active bindings batch updates to the frame, settling in dependency order and stopping early the moment a derived value is unchanged. No virtual DOM diffing, no intermediate glitches, and no wasted CPU cycles.
+Dormant computations sleep with zero subscriptions until something observes them. Active bindings batch updates once per frame and run in dependency order. If a computed value doesn't change, downstream bindings don't re-run.
 
 <a href="https://github.com/kohltastrophe/luau-reactivity-benchmark"><img src="https://raw.githubusercontent.com/kohltastrophe/luau-reactivity-benchmark/assets/chart-small.svg" width="100%" alt="Luau reactivity benchmark"></a>
 

@@ -23,7 +23,7 @@ Whenever a [Computed](/guide/concepts/computeds), [Effect](/guide/concepts/effec
 
 ## `Flux.read`{lua}
 
-Reads a `Flux.Reactive<T>` **with** tracking: returns `node()` for a Node, calls `fn()` for a getter, and returns plain values unchanged. Its return type is `Flux.Unwrap<T>`:
+Reads a `Flux.Reactive<T>` **with** tracking. It returns `node()` for a Node, calls `fn()` for a getter, and returns plain values unchanged. Its return type is `Flux.Unwrap<T>`:
 
 ```luau
 local function StatusLabel(props: { text: Flux.Reactive<string> })
@@ -37,7 +37,7 @@ end
 
 ## `Flux.raw`{lua}
 
-Reads a `Flux.Reactive<T>` **without** tracking: returns `node:peek()` for a Node, runs a getter with tracking suspended, and returns plain values unchanged:
+Reads a `Flux.Reactive<T>` **without** tracking. It returns `node:peek()` for a Node, runs a getter with tracking suspended, and returns plain values unchanged:
 
 ```luau
 local health = Flux.signal(100)
@@ -86,13 +86,13 @@ end)
 
 ## `Flux.on`{lua}
 
-`Flux.on(deps, fn, defer?)` wraps `fn` so only `deps` (a single Node/getter or an array of them) are tracked, while `fn` itself runs untracked. `fn` receives `(input, previousInput, previousResult)`; for an array of `deps`, `input` and `previousInput` are arrays of their values:
+`Flux.on(deps, fn, defer?)` wraps `fn` so only `deps` (a single Node/getter or an array of them) are tracked, while `fn` itself runs untracked. `fn` receives `(input, previousInput, previousResult)`. When `deps` is an array, `input` and `previousInput` are arrays of their values:
 
 ```luau
 local trigger = Flux.signal(1)
 local multiplier = Flux.signal(10)
 
--- Re-runs ONLY when `trigger` changes; `multiplier` is read untracked
+-- Re-runs ONLY when `trigger` changes (`multiplier` is read untracked)
 local total = Flux.computed(Flux.on(trigger, function(value, previousValue)
 	return value * multiplier()
 end))

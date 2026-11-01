@@ -33,7 +33,7 @@ Flux's reactive graph and [`Flux.Clock`](/guide/tips/testing) run under the stan
 
 ## UI Previewing (Storybooks)
 
-Roblox storybook plugins mount a component into a `target` container and return a cleanup callback: a direct match for [`Flux.scope`](/guide/concepts/scopes).
+Roblox storybook plugins mount a component into a `target` container and return a cleanup callback. You can wrap the component in [`Flux.scope`](/guide/concepts/scopes) and return `scope:Destroy()`.
 
 Given a reusable `Counter` component:
 

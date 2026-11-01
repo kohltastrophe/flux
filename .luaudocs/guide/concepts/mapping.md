@@ -39,8 +39,7 @@ local list = Flux.new "Frame" {
 }
 ```
 
-> [!IMPORTANT] Bind `LayoutOrder = index` When Sorting
-> Values in `forValue` must be **unique** (duplicate values share one entry). Bind `LayoutOrder = index` on the returned `GuiObject` so Roblox's layout container reorders existing instances visually when their array position changes.
+Values in `forValue` must be **unique** (duplicate values share one entry). Bind `LayoutOrder = index` on the returned `GuiObject` so Roblox's layout container reorders existing instances visually when their array position changes.
 
 ## `Flux.forIndex`{lua} (Keyed by Index)
 
@@ -62,5 +61,4 @@ local tagList = Flux.new "Frame" {
 }
 ```
 
-> [!NOTE] Mapper Functions Run Untracked
-> Both `forValue` and `forIndex` run their mapper callback untracked once per entry and destroy that entry's child scope when the item or slot leaves the array. For O(1) single-item selection across a mapped list, pair mapping with [`Flux.selector`](/guide/concepts/selectors).
+Both `forValue` and `forIndex` run their mapper callback untracked once per entry and destroy that entry's child scope when the item or slot leaves the array. For O(1) single-item selection across a mapped list, pair mapping with [`Flux.selector`](/guide/concepts/selectors).

@@ -11,8 +11,7 @@ Supported types include:
 - [`NumberRange`](https://create.roblox.com/docs/en-us/reference/engine/datatypes/NumberRange), [`NumberSequence`](https://create.roblox.com/docs/en-us/reference/engine/datatypes/NumberSequence) & [`NumberSequenceKeypoint`](https://create.roblox.com/docs/en-us/reference/engine/datatypes/NumberSequenceKeypoint)
 - [`CFrame`](https://create.roblox.com/docs/en-us/reference/engine/datatypes/CFrame) & [`Rect`](https://create.roblox.com/docs/en-us/reference/engine/datatypes/Rect)
 
-> [!NOTE] Unsupported Types Raise Errors
-> Passing an unsupported type, such as a `boolean`{luau}, `string`{luau}, or `EnumItem`{luau}, raises an error. The one exception is `nil`{luau}: a motion that starts at `nil`{luau} warns and then simply follows its target without animating.
+Passing an unsupported type, such as a `boolean`{luau}, `string`{luau}, or `EnumItem`{luau}, raises an error. The one exception is `nil`{luau}: a motion that starts at `nil`{luau} warns and then follows its target without animating.
 
 ### Oklab Color Interpolation {#oklab-color-interpolation}
 
