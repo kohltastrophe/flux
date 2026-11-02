@@ -88,6 +88,21 @@ function env.frames(done: () -> boolean, count: number?): boolean
 	return sert.frames(done, count, nil, env.frame)
 end
 
+function env.mountUi(parent: any, viewport: Vector2): (any, () -> ())
+	if not IS_ROBLOX then
+		return parent, function() end
+	end
+	local screen = Instance.new("ScreenGui")
+	local host = Instance.new("Frame")
+	host.Name = "ViewportHost"
+	host.Size = UDim2.fromOffset(viewport.X, viewport.Y)
+	host.BackgroundTransparency = 1
+	host.Parent = screen
+	return host, function()
+		screen:Destroy()
+	end
+end
+
 function env.warnings(fn: () -> ()): { string }
 	assert(type(fn) == "function", "env.warnings expects a function")
 	local messages = {}

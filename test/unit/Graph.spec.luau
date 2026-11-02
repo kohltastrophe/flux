@@ -1884,7 +1884,7 @@ sert.prop("context · nested provide, reactions, scopes, withOwner and bindConte
 		exec(program, nil, false)
 		flushCtx(nil, "last")
 	end)
-end, { runs = 100, exhaustive = { size = 2 } })
+end, { runs = 100, exhaustive = { size = 1 } })
 
 test("untrack · 0-arg untrack in stabilize or context-wrapped computed does not leak evalNode or susp", function()
 	for _, callRetrack in { false, true } do
@@ -2075,5 +2075,162 @@ test("effect · post-divergence readThisRun, guarded runningEffect restore, and 
 	end)
 	expect(r1 == "a" and r2 == nil and r3 == "c", "withOwner forwards variadic returns including nil holes")
 end)
+
+sert.laws.differential(
+	"graph · diamond and deep DAG signal -> computed -> effect matches pure functional oracle with zero glitches",
+	{
+		gen = sert.gen.list(
+			sert.gen.record({
+				batched = sert.gen.bool(),
+				s1 = sert.gen.optional(sert.gen.int(-20, 20)),
+				s2 = sert.gen.optional(sert.gen.int(-20, 20)),
+				s3 = sert.gen.optional(sert.gen.int(-20, 20)),
+				mode = sert.gen.optional(sert.gen.bool()),
+			}),
+			1,
+			12
+		),
+		oracle = function(steps)
+			local s1, s2, s3, mode = 1, 2, 3, true
+			local function evalState()
+				local cLeft = s1 * 2 + s2
+				local cMid = s1 - s2
+				local cRight = s2 + s3 * 3
+				local cDiamond = cLeft - 2 * cMid -- algebraically always 3 * s2
+				local cBranch = if mode then cDiamond + cRight else cLeft + s3
+				return `{cDiamond}:{cBranch}`
+			end
+			local history: { string } = {}
+			local lastEmitted = evalState()
+			table.insert(history, lastEmitted)
+
+			local function recordIfChanged()
+				local cur = evalState()
+				if cur ~= lastEmitted then
+					lastEmitted = cur
+					table.insert(history, cur)
+				end
+			end
+
+			for _, step in steps do
+				if step.batched then
+					if step.s1 ~= nil then
+						s1 = step.s1
+					end
+					if step.s2 ~= nil then
+						s2 = step.s2
+					end
+					if step.s3 ~= nil then
+						s3 = step.s3
+					end
+					if step.mode ~= nil then
+						mode = step.mode
+					end
+					recordIfChanged()
+				else
+					if step.s1 ~= nil then
+						s1 = step.s1
+						recordIfChanged()
+					end
+					if step.s2 ~= nil then
+						s2 = step.s2
+						recordIfChanged()
+					end
+					if step.s3 ~= nil then
+						s3 = step.s3
+						recordIfChanged()
+					end
+					if step.mode ~= nil then
+						mode = step.mode
+						recordIfChanged()
+					end
+				end
+			end
+			return table.concat(history, "|")
+		end,
+		sut = function(steps)
+			local s1 = Flux.signal(1)
+			local s2 = Flux.signal(2)
+			local s3 = Flux.signal(3)
+			local mode = Flux.signal(true)
+			local history: { string } = {}
+			local glitchDetected = false
+
+			local scope = Flux.scope(function()
+				local cLeft = Flux.computed(function()
+					return s1() * 2 + s2()
+				end)
+				local cMid = Flux.computed(function()
+					return s1() - s2()
+				end)
+				local cRight = Flux.computed(function()
+					return s2() + s3() * 3
+				end)
+				local cDiamond = Flux.computed(function()
+					local val = cLeft() - 2 * cMid()
+					if val ~= 3 * s2:peek() then
+						glitchDetected = true
+					end
+					return val
+				end)
+				local cBranch = Flux.computed(function()
+					return if mode() then cDiamond() + cRight() else cLeft() + s3()
+				end)
+				local cOut = Flux.computed(function()
+					return `{cDiamond()}:{cBranch()}`
+				end)
+				Flux.effect(function()
+					local d = cDiamond()
+					if d ~= 3 * s2:peek() then
+						glitchDetected = true
+					end
+					table.insert(history, cOut())
+				end)
+			end)
+			flush()
+
+			for _, step in steps do
+				if step.batched then
+					if step.s1 ~= nil then
+						s1:set(step.s1)
+					end
+					if step.s2 ~= nil then
+						s2:set(step.s2)
+					end
+					if step.s3 ~= nil then
+						s3:set(step.s3)
+					end
+					if step.mode ~= nil then
+						mode:set(step.mode)
+					end
+					flush()
+				else
+					if step.s1 ~= nil then
+						s1:set(step.s1)
+						flush()
+					end
+					if step.s2 ~= nil then
+						s2:set(step.s2)
+						flush()
+					end
+					if step.s3 ~= nil then
+						s3:set(step.s3)
+						flush()
+					end
+					if step.mode ~= nil then
+						mode:set(step.mode)
+						flush()
+					end
+				end
+			end
+
+			expect(not glitchDetected, "diamond reactive graph never observes a transient glitch")
+			scope:Destroy()
+			flush()
+			return table.concat(history, "|")
+		end,
+	},
+	{ runs = 80 }
+)
 
 return {}

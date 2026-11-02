@@ -39,7 +39,7 @@ function Model.reader(owner: any, effect: boolean, read: () -> any): any
 end
 
 function Model.float(g: any, lo: number, hi: number): number
-	return lo + (hi - lo) * g:int(0, 10000) / 10000
+	return g:float(lo, hi)
 end
 
 return table.freeze(Model)
