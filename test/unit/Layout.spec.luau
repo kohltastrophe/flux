@@ -408,4 +408,420 @@ test("layout · reactive padding supports x and y axis shorthands", function()
 	s:Destroy()
 end)
 
+test("layout · sert.roblox.Layout geometry, visibility, clipping and settle on Flux layout tree", function()
+	local RobloxLayout = sert.roblox.Layout
+	local width = Flux(180)
+	local gap = Flux(8)
+	local screen, panel, rowA, rowB, listConstraint, padConstraint
+	local s = Flux.scope(function()
+		rowA = Flux.new("Frame")({
+			Name = "RowA",
+			LayoutOrder = 1,
+			Position = UDim2.fromOffset(0, 0),
+			Size = function()
+				return UDim2.fromOffset(width(), 32)
+			end,
+		})
+		rowB = Flux.new("Frame")({
+			Name = "RowB",
+			LayoutOrder = 2,
+			Position = UDim2.fromOffset(0, 40),
+			Size = UDim2.fromOffset(260, 32),
+		})
+		listConstraint = Flux.list({ direction = "y", gap = gap })
+		padConstraint = Flux.padding(12)
+		panel = Flux.new("Frame")({
+			Name = "Panel",
+			ClipsDescendants = true,
+			Position = UDim2.fromOffset(20, 30),
+			Size = UDim2.fromOffset(200, 120),
+			padConstraint,
+			listConstraint,
+			rowA,
+			rowB,
+		})
+		screen = Flux.new("ScreenGui")({
+			Enabled = true,
+			panel,
+		})
+	end)
+	flush()
+
+	local settled = RobloxLayout.settle(panel, {
+		maxFrames = 10,
+		stable = 2,
+		step = function()
+			env.frame(1 / 60)
+		end,
+	})
+	expect(settled, "Flux layout tree settles within frame budget")
+	expect.eq(RobloxLayout.visible(panel), true, "panel is visible under enabled ScreenGui")
+	expect.eq(RobloxLayout.visible(rowA), true, "rowA is visible inside panel")
+
+	local rA = RobloxLayout.geometry.rect(rowA)
+	expect.eq(rA.width, 180, "rowA initial width matches reactive signal")
+	expect.eq(rA.height, 32, "rowA height matches UDim2")
+	expect.eq(
+		RobloxLayout.geometry.sameRect(rA, { x = 32, y = 42, width = 180, height = 32 }),
+		true,
+		"sameRect matches"
+	)
+
+	width(140)
+	gap(16)
+	flush()
+	expect.eq(RobloxLayout.geometry.rect(rowA).width, 140, "rowA width updates reactively")
+	expect.eq(listConstraint.Padding, UDim.new(0, 16), "list gap updates reactively")
+	expect.eq(RobloxLayout.geometry.rect(rowB).y, 42 + 32 + 16, "rowB Y position reflects updated list gap")
+
+	local low, high = RobloxLayout.clippedBounds(rowB)
+	expect.eq(low.X, 32, "clippedBounds low.X starts at padded child left edge")
+	expect.eq(high.X - low.X, 188, "ClipsDescendants clamps wider child width to panel right edge")
+
+	screen.Enabled = false
+	expect.eq(RobloxLayout.visible(rowA), false, "disabling ancestor ScreenGui hides descendant")
+
+	s:Destroy()
+	screen:Destroy()
+end)
+
+sert.laws.ui("layout · vstack and hstack with padding, flex, sizeConstraint and aspectRatio", {
+	noTextOverflow = not env.IS_ROBLOX,
+	mount = function(_uiEnv, parent, viewport)
+		local hostParent, cleanHost = env.mountUi(parent, viewport)
+		local cardW = math.min(viewport.X - 24, 480)
+		local cardH = math.min(viewport.Y - 24, 320)
+		local root: Frame
+		local scope = Flux.scope(function()
+			root = Flux.new("Frame")({
+				Name = "Card",
+				Parent = hostParent,
+				Position = UDim2.fromOffset(12, 12),
+				Size = UDim2.fromOffset(cardW, cardH),
+				Flux.padding(12),
+				Flux.sizeConstraint({ min = Vector2.new(200, 160), max = Vector2.new(600, 480) }),
+				Flux.list({ direction = "y", gap = 8 }),
+				Flux.new("Frame")({
+					Name = "Header",
+					LayoutOrder = 1,
+					Size = UDim2.new(1, 0, 0, 32),
+					Flux.list({ direction = "x", gap = 8, align = "center" }),
+					Flux.new("Frame")({
+						Name = "Icon",
+						LayoutOrder = 1,
+						Size = UDim2.fromOffset(28, 28),
+						Flux.aspectRatio(1, "fit", "height"),
+					}),
+					Flux.new("TextLabel")({
+						Name = "Title",
+						LayoutOrder = 2,
+						Size = UDim2.fromOffset(120, 24),
+						Text = "Inventory",
+						TextSize = 14,
+						TextScaled = true,
+					}),
+					Flux.new("Frame")({
+						Name = "Spacer",
+						LayoutOrder = 3,
+						Size = UDim2.fromOffset(16, 8),
+						Flux.flex("fill"),
+					}),
+					Flux.new("TextLabel")({
+						Name = "Badge",
+						LayoutOrder = 4,
+						Size = UDim2.fromOffset(48, 22),
+						Text = "PRO",
+						TextSize = 12,
+						TextScaled = true,
+					}),
+				}),
+				Flux.new("Frame")({
+					Name = "BodyRow1",
+					LayoutOrder = 2,
+					Size = UDim2.new(1, 0, 0, 36),
+					Flux.padding({ x = 8, y = 4 }),
+					Flux.new("TextLabel")({
+						Name = "Label1",
+						Size = UDim2.fromScale(1, 1),
+						Text = "Primary slot configured",
+						TextSize = 14,
+						TextScaled = true,
+					}),
+				}),
+				Flux.new("Frame")({
+					Name = "BodyRow2",
+					LayoutOrder = 3,
+					Size = UDim2.new(1, 0, 0, 36),
+					Flux.padding({ x = 8, y = 4 }),
+					Flux.new("TextLabel")({
+						Name = "Label2",
+						Size = UDim2.fromScale(1, 1),
+						Text = "Secondary slot ready",
+						TextSize = 14,
+						TextScaled = true,
+					}),
+				}),
+			})
+		end)
+		flush()
+		sert.defer(function()
+			scope:Destroy()
+			root:Destroy()
+			cleanHost()
+			flush()
+		end)
+		return root
+	end,
+	check = function(_uiEnv, root, vp)
+		local RobloxLayout = sert.roblox.Layout
+		RobloxLayout.audit(root, { viewport = vp.size, fitsParent = true, noTextOverflow = not env.IS_ROBLOX })
+		local header = root:FindFirstChild("Header") :: Frame
+		local row1 = root:FindFirstChild("BodyRow1") :: Frame
+		local row2 = root:FindFirstChild("BodyRow2") :: Frame
+		local icon = header:FindFirstChild("Icon") :: Frame
+		local title = header:FindFirstChild("Title") :: TextLabel
+		local spacer = header:FindFirstChild("Spacer") :: Frame
+		local badge = header:FindFirstChild("Badge") :: TextLabel
+
+		RobloxLayout.aligned({ header, row1, row2 }, "Left")
+		RobloxLayout.spacing({ header, row1, row2 }, "Y", 8)
+		RobloxLayout.aligned({ icon, title, spacer, badge }, "CenterY")
+		RobloxLayout.spacing({ icon, title, spacer, badge }, "X", 8)
+		RobloxLayout.aspectRatio(icon, 1)
+		RobloxLayout.within(icon, header)
+		RobloxLayout.nonZero(title)
+	end,
+})
+
+local lastGridState: {
+	gapSig: any,
+	cellSig: any,
+	gridInst: UIGridLayout,
+} = nil :: any
+
+sert.laws.ui("layout · grid and scrolling frame with AutomaticCanvasSize and reactive gap", {
+	noTextOverflow = not env.IS_ROBLOX,
+	mount = function(_uiEnv, parent, viewport)
+		local hostParent, cleanHost = env.mountUi(parent, viewport)
+		local gapSig = Flux.signal(6)
+		local cellSig = Flux.signal(Vector2.new(72, 44))
+		local scroll: ScrollingFrame
+		local gridInst: UIGridLayout
+		local scope = Flux.scope(function()
+			gridInst = Flux.grid({ cell = cellSig, gap = gapSig, fill = "x" })
+			local cells: { any } = {
+				Name = "GridScroll",
+				Parent = hostParent,
+				Position = UDim2.fromOffset(10, 10),
+				Size = UDim2.fromOffset(math.min(viewport.X - 20, 420), math.min(viewport.Y - 20, 260)),
+				CanvasSize = UDim2.fromScale(0, 0),
+				AutomaticCanvasSize = Enum.AutomaticSize.Y,
+				ScrollingDirection = Enum.ScrollingDirection.Y,
+				ClipsDescendants = true,
+				Flux.padding(8),
+				gridInst,
+			}
+			for i = 1, 8 do
+				table.insert(
+					cells,
+					Flux.new("Frame")({
+						Name = `Cell_{i}`,
+						LayoutOrder = i,
+						Flux.new("TextLabel")({
+							Name = "Caption",
+							Size = UDim2.fromScale(1, 1),
+							Text = `Item {i}`,
+							TextSize = 12,
+							TextScaled = true,
+						}),
+					})
+				)
+			end
+			scroll = Flux.new("ScrollingFrame")(cells)
+		end)
+		flush()
+		lastGridState = {
+			gapSig = gapSig,
+			cellSig = cellSig,
+			gridInst = gridInst,
+		}
+		sert.defer(function()
+			scope:Destroy()
+			scroll:Destroy()
+			cleanHost()
+			flush()
+		end)
+		return scroll
+	end,
+	check = function(_uiEnv, root, vp)
+		local RobloxLayout = sert.roblox.Layout
+		local checkText = not env.IS_ROBLOX
+		RobloxLayout.audit(root, { viewport = vp.size, fitsParent = true, noTextOverflow = checkText })
+		local gridInst = lastGridState.gridInst
+		expect(gridInst.AbsoluteContentSize.Y > 0, "UIGridLayout computes non-zero AbsoluteContentSize.Y")
+		if not env.IS_ROBLOX or root.AbsoluteCanvasSize.Y > 0 then
+			expect(
+				root.AbsoluteCanvasSize.Y >= gridInst.AbsoluteContentSize.Y + 16 - 0.5,
+				"AutomaticCanvasSize.Y expands to fit UIGridLayout content plus padding"
+			)
+		end
+
+		local gapSig = lastGridState.gapSig
+		local cellSig = lastGridState.cellSig
+		gapSig:set(10)
+		cellSig:set(Vector2.new(80, 52))
+		flush()
+		RobloxLayout.audit(root, { viewport = vp.size, fitsParent = true, noTextOverflow = checkText })
+	end,
+})
+
+test("layout · AutomaticSize, UIScale, TextBounds and RobloxLayout.audit checks", function()
+	local RobloxLayout = sert.roblox.Layout
+	local screen, rootFrame, badge, autoBox, scaledPanel, scaledChild
+	local labelText = Flux.signal("Ready")
+	local scaleFactor = Flux.signal(1)
+	local s = Flux.scope(function()
+		badge = Flux.new("TextLabel")({
+			Name = "Badge",
+			LayoutOrder = 1,
+			Size = UDim2.fromOffset(120, 24),
+			Text = labelText,
+			TextSize = 14,
+			TextWrapped = true,
+		})
+		autoBox = Flux.new("Frame")({
+			Name = "AutoBox",
+			Position = UDim2.fromOffset(16, 16),
+			Size = UDim2.fromOffset(0, 0),
+			AutomaticSize = Enum.AutomaticSize.XY,
+			Flux.padding(8),
+			Flux.list({ direction = "y", gap = 6 }),
+			badge,
+			Flux.new("Frame")({
+				Name = "Swatch",
+				LayoutOrder = 2,
+				Size = UDim2.fromOffset(120, 20),
+			}),
+		})
+		scaledChild = Flux.new("Frame")({
+			Name = "ScaledChild",
+			Size = UDim2.fromScale(0.5, 0.4),
+		})
+		scaledPanel = Flux.new("Frame")({
+			Name = "ScaledPanel",
+			Position = UDim2.fromOffset(200, 16),
+			Size = UDim2.fromOffset(160, 100),
+			Flux.new("UIScale")({
+				Scale = scaleFactor,
+			}),
+			scaledChild,
+		})
+		rootFrame = Flux.new("Frame")({
+			Name = "RootSurface",
+			Size = UDim2.fromOffset(800, 600),
+			autoBox,
+			scaledPanel,
+		})
+		screen = Flux.new("ScreenGui")({
+			Name = "AutoSizeGui",
+			rootFrame,
+		})
+	end)
+	flush()
+
+	-- AutoBox has padding 8 on each side (16 total) + children (width 120, heights 24 + 6 + 20 = 50) -> 136 x 66
+	sert.near(autoBox.AbsoluteSize.X, 136, 1, "AutomaticSize.XY computes width from children + padding")
+	sert.near(autoBox.AbsoluteSize.Y, 66, 1, "AutomaticSize.XY computes height from UIListLayout + padding")
+	local hasTextMetrics = not env.IS_ROBLOX or badge.TextBounds.X > 0
+	if hasTextMetrics then
+		expect.eq(badge.TextFits, true, "short text fits inside 120x24 TextLabel")
+		expect(badge.TextBounds.X > 0 and badge.TextBounds.Y > 0, "TextBounds are non-zero for non-empty text")
+		RobloxLayout.noTextOverflow(autoBox)
+	end
+
+	RobloxLayout.noOverlap(autoBox)
+	RobloxLayout.fitsParent(badge)
+	RobloxLayout.fitsViewport(autoBox, { viewport = Vector2.new(800, 600) })
+	RobloxLayout.audit(rootFrame, {
+		viewport = Vector2.new(800, 600),
+		fitsParent = true,
+		noTextOverflow = hasTextMetrics,
+	})
+
+	scaleFactor:set(0.5)
+	flush()
+	sert.near(scaledPanel.AbsoluteSize.X, 80, 1, "UIScale scales container AbsoluteSize.X")
+	sert.near(scaledPanel.AbsoluteSize.Y, 50, 1, "UIScale scales container AbsoluteSize.Y")
+	sert.near(scaledChild.AbsoluteSize.X, 40, 1, "UIScale propagates to descendant AbsoluteSize.X")
+	sert.near(scaledChild.AbsoluteSize.Y, 20, 1, "UIScale propagates to descendant AbsoluteSize.Y")
+
+	s:Destroy()
+	screen:Destroy()
+	flush()
+end)
+
+local ctest = if env.IS_ROBLOX and game:GetService("Players").LocalPlayer ~= nil then sert.rtest else sert.skip
+ctest("layout · sert.roblox.Layout.settle, geometry and Flicker.around verify non-flickering list layout", function()
+	local RobloxLayout = sert.roblox.Layout
+	local Flicker = sert.roblox.Flicker
+	local gap = Flux(8)
+	local gui, container, first, second, third
+	local s = Flux.scope(function()
+		first = Flux.new("Frame")({
+			Name = "First",
+			LayoutOrder = 1,
+			Size = UDim2.fromOffset(120, 28),
+		})
+		second = Flux.new("Frame")({
+			Name = "Second",
+			LayoutOrder = 2,
+			Size = UDim2.fromOffset(120, 28),
+			Flux.flex("fill"),
+		})
+		third = Flux.new("Frame")({
+			Name = "Third",
+			LayoutOrder = 3,
+			Size = UDim2.fromOffset(120, 28),
+		})
+		container = Flux.new("Frame")({
+			Name = "Container",
+			Position = UDim2.fromOffset(24, 24),
+			Size = UDim2.fromOffset(200, 180),
+			Flux.padding(10),
+			Flux.list({ direction = "y", gap = gap, align = "center" }),
+			third,
+			first,
+			second,
+		})
+		local player = game:GetService("Players").LocalPlayer
+		gui = Flux.new("ScreenGui")({
+			Parent = if player then player:WaitForChild("PlayerGui") else workspace,
+			DisplayOrder = 1000,
+			container,
+		})
+	end)
+	flush()
+
+	expect(RobloxLayout.settle(container), "Studio UIListLayout + UIPadding settles")
+	expect.eq(RobloxLayout.visible(first), true, "first item is visible")
+	expect.eq(RobloxLayout.visible(second), true, "second item is visible")
+	expect.eq(RobloxLayout.visible(third), true, "third item is visible")
+
+	local r1 = RobloxLayout.geometry.rect(first)
+	local r2 = RobloxLayout.geometry.rect(second)
+	local r3 = RobloxLayout.geometry.rect(third)
+	expect(r1.y < r2.y and r2.y < r3.y and r1.width == 120, "children lay out in LayoutOrder vertically")
+
+	local report = Flicker.around(function()
+		return second
+	end, function()
+		gap(14)
+		flush()
+	end, { motion = 12, stable = 2 })
+	Flicker.expect(report)
+
+	s:Destroy()
+	gui:Destroy()
+end)
+
 return {}

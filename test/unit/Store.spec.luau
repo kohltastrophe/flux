@@ -333,15 +333,6 @@ local READ_SPECS = {
 	{ path = { "list", 1, "v" } },
 	{ path = { "list", 3, "v" } },
 }
-local MOVES_TABLES = {
-	alias = true,
-	insert = true,
-	remove = true,
-	move = true,
-	aliasRow = true,
-	reconcileList = true,
-	reconcileRoot = true,
-}
 
 local function plain(value: any): any
 	if type(value) ~= "table" then
@@ -467,429 +458,739 @@ local function genList(g, current: { any }?, nextId: () -> number): { any }
 	return out
 end
 
-sert.prop("store · random writes, array ops and reconciles match a plain-table mirror", function(g)
-	Model.isolated(function(owners)
-		local small = g.size <= 3
-		local idCounter = 0
-		local function nextId(): number
-			idCounter += 1
-			return idCounter
-		end
+local function nextStateId(state: any): number
+	state.idCounter += 1
+	return state.idCounter
+end
 
+local function captureProxy(sut: any, value: any)
+	if type(value) == "table" and getmetatable(value) ~= nil then
+		local raw = Store.unwrap(value)
+		local known = sut.proxies[raw]
+		sert(known == nil or known == value, "a reachable raw table kept its proxy")
+		sut.proxies[raw] = value
+	end
+end
+
+local function walkStore(sut: any, path: { any }): any
+	local value = sut.store
+	for _, key in path do
+		if type(value) ~= "table" then
+			return nil
+		end
+		value = value[key]
+		captureProxy(sut, value)
+	end
+	return value
+end
+
+local function leafWrite(state: any, t: any, key: any, new: any)
+	if t[key] ~= new then
+		table.insert(state.touched, { t, key })
+	end
+	t[key] = new
+end
+
+local function checkReaders(state: any, sut: any, where: string)
+	for _, reader in sut.readers do
+		local seen = if reader.effect then reader.value else reader.node:get()
+		sert.eq(
+			seen,
+			readSpec(state.mirror, reader.spec),
+			`{where}: reader of {show(reader.spec)} (effect: {reader.effect})`
+		)
+		local set = reader.set
+		if set and not state.dirtyAll then
+			local hit = false
+			for _, write in state.touched do
+				local keys = set[write[1]]
+				hit = hit or (keys ~= nil and (keys[write[2]] or keys["*"]) ~= nil)
+			end
+			if not hit then
+				sert.eq(reader.runs, reader.checkedRuns, `{where}: no write reached {show(reader.spec)}, no re-run`)
+			end
+		end
+	end
+	for _, reader in sut.readers do
+		reader.set, reader.checkedRuns = readSet(state.mirror, reader.spec), reader.runs
+	end
+	table.clear(state.touched)
+	state.dirtyAll = false
+end
+
+local function settleReaders(sut: any): { number }
+	Flux.flush()
+	local counts = {}
+	for index, reader in sut.readers do
+		if not reader.effect then
+			reader.node:get()
+		end
+		counts[index] = reader.runs
+	end
+	return counts
+end
+
+local function listOf(state: any, sut: any): ({ any }?, any)
+	local list = state.mirror.list
+	if type(list) == "table" then
+		return list, walkStore(sut, { "list" })
+	end
+	return nil, nil
+end
+
+local function runReconcileStep(op: string, state: any, sut: any, arg: { keyed: boolean, snapshot: any })
+	local keyed = arg.keyed
+	local list = listOf(state, sut)
+	if hasAlias(state.mirror) or (op == "reconcileList" and not list) then
+		return
+	end
+	local snapshot = if op == "reconcileSame" then plain(state.mirror) else plain(arg.snapshot)
+	local before, rows, counts = {}, {}, nil
+	local function remember(path: { any })
+		local value = walkStore(sut, path)
+		if type(value) == "table" then
+			before[show(path)] = value
+		end
+	end
+	if op == "reconcileSame" then
+		counts = settleReaders(sut)
+	else
+		if op == "reconcileRoot" then
+			for _, key in ROOT_KEYS do
+				remember({ key })
+			end
+			remember({ "list" })
+		end
+		for index, row in list or {} do
+			rows[row.id] = walkStore(sut, { "list", index })
+			remember({ "list", index })
+		end
+	end
+
+	local target = if op == "reconcileList" then walkStore(sut, { "list" }) else sut.store
+	local result = Store.reconcile(target, plain(snapshot), if keyed then "id" else nil)
+	sert(result == target, "returns proxy")
+	if op == "reconcileList" then
+		state.mirror.list = snapshot
+	elseif op == "reconcileRoot" then
+		state.mirror = snapshot
+	end
+
+	if op == "reconcileRoot" then
+		for _, key in ROOT_KEYS do
+			local old = before[show({ key })]
+			if old and type(state.mirror[key]) == "table" then
+				sert(walkStore(sut, { key }) == old, `store[{show(key)}] kept its proxy across the reconcile`)
+			end
+		end
+	end
+	local newList = state.mirror.list
+	if type(newList) == "table" and (op == "reconcileList" or before[show({ "list" })]) then
+		for index, row in newList do
+			local old = if keyed then rows[row.id] else before[show({ "list", index })]
+			if old then
+				sert(walkStore(sut, { "list", index }) == old, `list[{index}] kept its proxy (keyed: {keyed})`)
+			end
+		end
+	end
+	if counts then
+		sert.eq(settleReaders(sut), counts, "a reconcile that changes nothing runs no reader")
+	end
+end
+
+local storeModelSpec = {
+	init = function()
+		local state: any = {
+			idCounter = 0,
+			mirror = nil,
+			touched = {},
+			dirtyAll = false,
+			teardownHow = "Store.Destroy",
+		}
 		local initial: { [any]: any } = {
 			a = { x = 1 },
 			[1] = "s",
-			list = { { id = nextId(), v = 1 }, { id = nextId(), v = 2 }, { id = nextId(), v = 1 } },
+			list = {
+				{ id = nextStateId(state), v = 1 },
+				{ id = nextStateId(state), v = 2 },
+				{ id = nextStateId(state), v = 1 },
+			},
 		}
-		local mirror = plain(initial)
+		state.mirror = plain(initial)
 		local store
-		local inScope = g:bool()
-		if inScope then
-			table.insert(owners, (Flux.scope(function()
-				store = Flux.store(plain(initial))
-			end)))
-		else
+		local storeScope = Flux.scope(function()
 			store = Flux.store(plain(initial))
-		end
+		end)
 		local rawRoot = Store.unwrap(store)
 		local readerScope = Flux.scope(function() end)
-		table.insert(owners, readerScope)
-
-		local proxies: { [any]: any } = {}
-		local function capture(value: any)
-			if type(value) == "table" and getmetatable(value) ~= nil then
-				local raw = Store.unwrap(value)
-				local known = proxies[raw]
-				sert(known == nil or known == value, "a reachable raw table kept its proxy")
-				proxies[raw] = value
-			end
-		end
-		local function walkStore(path: { any }): any
-			local value = store
-			for _, key in path do
-				if type(value) ~= "table" then
-					return nil
-				end
-				value = value[key]
-				capture(value)
-			end
-			return value
-		end
-
-		local readers = {}
-		local function checkState(where: string)
-			sert.eq(Store.unwrap(store), mirror, `{where}: raw table matches the mirror`)
-			local live = reachable(rawRoot)
-			for raw, proxy in proxies do
-				if live[raw] then
-					sert(getmetatable(proxy) ~= nil, `{where}: a reachable table's proxy is live ({show(raw)})`)
-				else
-					sert(getmetatable(proxy) == nil, `{where}: a displaced table's proxy is torn down ({show(raw)})`)
-					proxies[raw] = nil
-				end
-			end
-		end
-		local touched: { { any } } = {}
-		local dirtyAll = false
-		local function leafWrite(t: any, key: any, new: any)
-			if t[key] ~= new then
-				table.insert(touched, { t, key })
-			end
-			t[key] = new
-		end
-		local function checkReaders(where: string)
-			for _, reader in readers do
-				local seen = if reader.effect then reader.value else reader.node:get()
-				sert.eq(
-					seen,
-					readSpec(mirror, reader.spec),
-					`{where}: reader of {show(reader.spec)} (effect: {reader.effect})`
-				)
-				local set = reader.set
-				if set and not dirtyAll then
-					local hit = false
-					for _, write in touched do
-						local keys = set[write[1]]
-						hit = hit or (keys ~= nil and (keys[write[2]] or keys["*"]) ~= nil)
-					end
-					if not hit then
-						sert.eq(
-							reader.runs,
-							reader.checkedRuns,
-							`{where}: no write reached {show(reader.spec)}, no re-run`
-						)
-					end
-				end
-			end
-			for _, reader in readers do
-				reader.set, reader.checkedRuns = readSet(mirror, reader.spec), reader.runs
-			end
-			table.clear(touched)
-			dirtyAll = false
-		end
-		local function settle(): { number }
+		local sut = {
+			store = store,
+			storeScope = storeScope,
+			rawRoot = rawRoot,
+			readerScope = readerScope,
+			proxies = {} :: { [any]: any },
+			readers = {},
+		}
+		return state, sut
+	end,
+	teardown = function(sut, state)
+		local checkOk, checkErr = pcall(function()
 			Flux.flush()
-			local counts = {}
-			for index, reader in readers do
-				if not reader.effect then
-					reader.node:get()
-				end
-				counts[index] = reader.runs
-			end
-			return counts
+			checkReaders(state, sut, "at the end")
+		end)
+		local how = state.teardownHow
+		if how == "scope" then
+			sut.storeScope:Destroy()
+		elseif how == "Flux.dispose" then
+			Flux.dispose(sut.store)
+		else
+			Store.Destroy(sut.store)
 		end
-		local function listOf(): ({ any }?, any)
-			local list = mirror.list
-			if type(list) == "table" then
-				return list, walkStore({ "list" })
-			end
-			return nil, nil
+		sut.readerScope:Destroy()
+		sut.storeScope:Destroy()
+		Flux.flush()
+		if not checkOk then
+			error(checkErr, 0)
 		end
-
-		for _, op in
-			Model.ops(g, {
-				{ 3, "setRoot" },
-				{ 3, "setField" },
-				{ 1, "alias" },
-				{ 3, "insert" },
-				{ 3, "remove" },
-				{ 2, "move" },
-				{ 2, "setRow" },
-				{ 1, "aliasRow" },
-				{ 1, "badPos" },
-				{ 2, "reconcileList" },
-				{ if small then 0 else 2, "reconcileRoot" },
-				{ 1, "reconcileSame" },
-				{ 2, "reconcileLeaf" },
-				{ 3, "reader" },
-				{ 1, "dropReader" },
-				{ 5, "flush" },
-			})
-		do
-			dirtyAll = dirtyAll or MOVES_TABLES[op] == true
-			if op == "setRoot" then
+		sert(getmetatable(sut.store) == nil, "the root proxy is stripped")
+		for raw, proxy in sut.proxies do
+			sert(getmetatable(proxy) == nil, `every nested proxy is torn down ({show(raw)})`)
+		end
+		sert.eq(sut.rawRoot, state.mirror, "teardown leaves the raw table intact")
+	end,
+	actions = {
+		setRoot = {
+			weight = 3,
+			gen = function(g, state)
 				local key = g:pick({ "a", "b", 1, 2, 5, "list" })
 				local value = if key == "list"
-					then (if g:bool(0.8) then genList(g, nil, nextId) else nil)
+					then (if g:bool(0.8)
+						then genList(g, nil, function()
+							return nextStateId(state)
+						end)
+						else nil)
 					else genRootValue(g)
-				g:note("store[%s] = %s", show(key), show(value))
-				store[key] = plain(value)
-				if type(value) == "table" or type(mirror[key]) == "table" then
-					dirtyAll = true
-					mirror[key] = plain(value)
+				return { key = key, value = value }
+			end,
+			run = function(sut, arg)
+				sut.store[arg.key] = plain(arg.value)
+			end,
+			next = function(state, arg)
+				state.teardownHow = arg.teardownHow or state.teardownHow
+				if type(arg.value) == "table" or type(state.mirror[arg.key]) == "table" then
+					state.dirtyAll = true
+					state.mirror[arg.key] = plain(arg.value)
 				else
-					leafWrite(mirror, key, value)
+					leafWrite(state, state.mirror, arg.key, arg.value)
 				end
-			elseif op == "setField" then
-				local key = g:pick(ROOT_KEYS)
-				local field, value = g:pick({ "x", "y" }), genField(g)
-				local viaIteration = g:bool()
-				if type(mirror[key]) == "table" then
-					g:note(
-						"store[%s].%s = %s%s",
-						show(key),
-						field,
-						show(value),
-						if viaIteration then " (iterated)" else ""
-					)
+			end,
+		},
+		setField = {
+			weight = 3,
+			gen = function(g)
+				return {
+					key = g:pick(ROOT_KEYS),
+					field = g:pick({ "x", "y" }),
+					value = genField(g),
+					viaIteration = g:bool(),
+				}
+			end,
+			run = function(sut, arg, state)
+				if type(state.mirror[arg.key]) == "table" then
 					local proxy
-					if viaIteration then
-						for k, item in store do
-							if k == key then
+					if arg.viaIteration then
+						for k, item in sut.store do
+							if k == arg.key then
 								proxy = item
 							end
 						end
 					else
-						proxy = store[key]
+						proxy = sut.store[arg.key]
 					end
-					capture(proxy)
-					proxy[field] = value
-					leafWrite(mirror[key], field, value)
+					captureProxy(sut, proxy)
+					proxy[arg.field] = arg.value
 				end
-			elseif op == "alias" then
-				local from, to = g:pick(ROOT_KEYS), g:pick(ROOT_KEYS)
-				if from ~= to and type(mirror[from]) == "table" then
-					g:note("store[%s] = store[%s]", show(to), show(from))
-					store[to] = walkStore({ from })
-					mirror[to] = mirror[from]
+			end,
+			next = function(state, arg)
+				if type(state.mirror[arg.key]) == "table" then
+					leafWrite(state, state.mirror[arg.key], arg.field, arg.value)
 				end
-			elseif op == "insert" then
-				local list, proxy = listOf()
+			end,
+		},
+		alias = {
+			weight = 1,
+			gen = function(g)
+				return { from = g:pick(ROOT_KEYS), to = g:pick(ROOT_KEYS) }
+			end,
+			run = function(sut, arg, state)
+				if arg.from ~= arg.to and type(state.mirror[arg.from]) == "table" then
+					sut.store[arg.to] = walkStore(sut, { arg.from })
+				end
+			end,
+			next = function(state, arg)
+				state.dirtyAll = true
+				if arg.from ~= arg.to and type(state.mirror[arg.from]) == "table" then
+					state.mirror[arg.to] = state.mirror[arg.from]
+				end
+			end,
+		},
+		insert = {
+			weight = 3,
+			gen = function(g, state)
+				local list = if type(state.mirror.list) == "table" then state.mirror.list else nil
+				local how = g:pick({ "append", "past the end", "at" })
+				local pos = if list then g:int(1, #list + 1) else 1
+				local row = { id = nextStateId(state), v = g:int(1, 3) }
+				return { how = how, pos = pos, row = row }
+			end,
+			run = function(sut, arg, state)
+				local list, proxy = listOf(state, sut)
 				if list then
-					local how = g:pick({ "append", "past the end", "at" })
-					local pos = g:int(1, #list + 1)
-					local row = { id = nextId(), v = g:int(1, 3) }
-					if how == "append" then
-						g:note("Store.insert(list, %s)", show(row))
-						Store.insert(proxy, plain(row))
-						table.insert(list, row)
-					elseif how == "past the end" then
-						g:note("list[%d] = %s", #list + 1, show(row))
-						proxy[#list + 1] = plain(row)
+					local pos = math.clamp(arg.pos, 1, #list + 1)
+					if arg.how == "append" then
+						Store.insert(proxy, plain(arg.row))
+					elseif arg.how == "past the end" then
+						proxy[#list + 1] = plain(arg.row)
+					else
+						Store.insert(proxy, pos, plain(arg.row))
+					end
+				end
+			end,
+			next = function(state, arg)
+				state.dirtyAll = true
+				local list = state.mirror.list
+				if type(list) == "table" then
+					local pos = math.clamp(arg.pos, 1, #list + 1)
+					local row = plain(arg.row)
+					if arg.how == "append" or arg.how == "past the end" then
 						table.insert(list, row)
 					else
-						g:note("Store.insert(list, %d, %s)", pos, show(row))
-						Store.insert(proxy, pos, plain(row))
 						table.insert(list, pos, row)
 					end
 				end
-			elseif op == "remove" then
-				local list, proxy = listOf()
+			end,
+		},
+		remove = {
+			weight = 3,
+			gen = function(g, state)
+				local list = if type(state.mirror.list) == "table" then state.mirror.list else nil
+				local pos = if g:bool() and list and #list > 0 then g:int(1, #list) else nil
+				return pos
+			end,
+			run = function(sut, pos, state)
+				local list, proxy = listOf(state, sut)
 				if list then
-					local pos = if g:bool() and #list > 0 then g:int(1, #list) else nil
-					g:note("Store.remove(list, %s)", show(pos))
-					sert.eq(
-						Store.remove(proxy, pos),
-						table.remove(list, pos),
-						"Store.remove returns the removed element"
-					)
+					local validPos = if pos ~= nil and pos >= 1 and pos <= #list then pos else nil
+					return { removed = Store.remove(proxy, validPos), validPos = validPos, hadList = true }
 				end
-			elseif op == "move" then
-				local list, proxy = listOf()
+				return { hadList = false }
+			end,
+			post = function(state, _pos, res)
+				if res.hadList then
+					local list = state.mirror.list
+					local expected = list[res.validPos or #list]
+					sert.eq(res.removed, expected, "Store.remove returns the removed element")
+				end
+			end,
+			next = function(state, _pos, res)
+				state.dirtyAll = true
+				if res.hadList then
+					table.remove(state.mirror.list, res.validPos)
+				end
+			end,
+		},
+		move = {
+			weight = 2,
+			gen = function(g, state)
+				local list = if type(state.mirror.list) == "table" then state.mirror.list else nil
+				local n = if list and #list > 0 then #list else 1
+				return { from = g:int(1, n), to = g:int(1, n) }
+			end,
+			run = function(sut, arg, state)
+				local list, proxy = listOf(state, sut)
 				if list and #list > 0 then
-					local from, to = g:int(1, #list), g:int(1, #list)
-					g:note("Store.move(list, %d, %d)", from, to)
+					local from, to = math.clamp(arg.from, 1, #list), math.clamp(arg.to, 1, #list)
 					Store.move(proxy, from, to)
+				end
+			end,
+			next = function(state, arg)
+				state.dirtyAll = true
+				local list = state.mirror.list
+				if type(list) == "table" and #list > 0 then
+					local from, to = math.clamp(arg.from, 1, #list), math.clamp(arg.to, 1, #list)
 					table.insert(list, to, table.remove(list, from))
 				end
-			elseif op == "setRow" then
-				local list = listOf()
+			end,
+		},
+		setRow = {
+			weight = 2,
+			gen = function(g, state)
+				local list = if type(state.mirror.list) == "table" then state.mirror.list else nil
+				local n = if list and #list > 0 then #list else 1
+				return { index = g:int(1, n), value = g:int(1, 3) }
+			end,
+			run = function(sut, arg, state)
+				local list = listOf(state, sut)
 				if list and #list > 0 then
-					local index, value = g:int(1, #list), g:int(1, 3)
-					g:note("list[%d].v = %d", index, value)
-					walkStore({ "list", index }).v = value
-					leafWrite(list[index], "v", value)
+					local index = math.clamp(arg.index, 1, #list)
+					walkStore(sut, { "list", index }).v = arg.value
 				end
-			elseif op == "aliasRow" then
-				local list, proxy = listOf()
+			end,
+			next = function(state, arg)
+				local list = state.mirror.list
+				if type(list) == "table" and #list > 0 then
+					local index = math.clamp(arg.index, 1, #list)
+					leafWrite(state, list[index], "v", arg.value)
+				end
+			end,
+		},
+		aliasRow = {
+			weight = 1,
+			gen = function(g, state)
+				local list = if type(state.mirror.list) == "table" then state.mirror.list else nil
+				local n = if list and #list > 1 then #list else 2
+				return { from = g:int(1, n), to = g:int(1, n) }
+			end,
+			run = function(sut, arg, state)
+				local list, proxy = listOf(state, sut)
 				if list and #list > 1 then
-					local from, to = g:int(1, #list), g:int(1, #list)
+					local from, to = math.clamp(arg.from, 1, #list), math.clamp(arg.to, 1, #list)
 					if from ~= to then
-						g:note("list[%d] = list[%d]", to, from)
-						proxy[to] = walkStore({ "list", from })
+						proxy[to] = walkStore(sut, { "list", from })
+					end
+				end
+			end,
+			next = function(state, arg)
+				state.dirtyAll = true
+				local list = state.mirror.list
+				if type(list) == "table" and #list > 1 then
+					local from, to = math.clamp(arg.from, 1, #list), math.clamp(arg.to, 1, #list)
+					if from ~= to then
 						list[to] = list[from]
 					end
 				end
-			elseif op == "badPos" then
-				local list, proxy = listOf()
+			end,
+		},
+		badPos = {
+			weight = 1,
+			gen = function(g, state)
+				local list = if type(state.mirror.list) == "table" then state.mirror.list else nil
+				local n = if list then #list else 0
+				return {
+					kind = g:pick({ "insert", "remove", "move" }),
+					bad = g:pick({ 0, n + 2, 1.5, "1" }),
+				}
+			end,
+			run = function(sut, arg, state)
+				local list, proxy = listOf(state, sut)
 				if list then
 					local n = #list
-					local kind = g:pick({ "insert", "remove", "move" })
-					local bad = g:pick({ 0, n + 2, 1.5, "1" })
-					g:note("Store.%s(list, bad %s)", kind, show(bad))
+					local bad = if type(arg.bad) == "number" and arg.bad > 1.5 then n + 2 else arg.bad
 					local beyond = if bad == n + 2 then n + 1 else bad
 					local ok
-					if kind == "insert" then
+					if arg.kind == "insert" then
 						ok = pcall(Store.insert, proxy, bad, { id = 0, v = 0 })
-					elseif kind == "remove" then
+					elseif arg.kind == "remove" then
 						ok = pcall(Store.remove, proxy, beyond)
 					else
 						ok = pcall(Store.move, proxy, if n > 0 then 1 else bad, beyond)
 					end
-					sert(not ok, `Store.{kind} rejects position {show(bad)}`)
+					sert(not ok, `Store.{arg.kind} rejects position {show(bad)}`)
 				end
-			elseif op == "reconcileLeaf" then
+			end,
+		},
+		reconcileLeaf = {
+			weight = 2,
+			gen = function(g, state)
 				local keyed = g:bool()
-				local leaves = {}
+				local choices: { any } = {}
 				for _, key in ROOT_KEYS do
-					local value = mirror[key]
-					if type(value) == "table" then
-						table.insert(leaves, { value, g:pick({ "x", "y" }) })
+					if type(state.mirror[key]) == "table" then
+						table.insert(choices, { kind = "nested", key = key, field = g:pick({ "x", "y" }) })
 					else
-						table.insert(leaves, { mirror, key })
+						table.insert(choices, { kind = "root", key = key })
 					end
 				end
-				local list = listOf()
-				if list and #list > 0 then
-					table.insert(leaves, { list[g:int(1, #list)], "v" })
+				if type(state.mirror.list) == "table" and #state.mirror.list > 0 then
+					table.insert(choices, { kind = "row", index = g:int(1, #state.mirror.list) })
 				end
-				local leaf = g:pick(leaves)
-				local value = g:int(1, 3)
-				if not hasAlias(mirror) then
-					leafWrite(leaf[1], leaf[2], value)
-					g:note(
-						"Store.reconcile(store, <mirror with %s = %d>%s)",
-						show(leaf[2]),
-						value,
-						if keyed then ', "id"' else ""
-					)
-					Store.reconcile(store, plain(mirror), if keyed then "id" else nil)
+				return { keyed = keyed, target = g:pick(choices), value = g:int(1, 3) }
+			end,
+			run = function(sut, arg, state)
+				if not hasAlias(state.mirror) then
+					local target = arg.target
+					if target.kind == "nested" and type(state.mirror[target.key]) == "table" then
+						leafWrite(state, state.mirror[target.key], target.field, arg.value)
+					elseif target.kind == "row" and type(state.mirror.list) == "table" and #state.mirror.list > 0 then
+						local idx = math.clamp(target.index, 1, #state.mirror.list)
+						leafWrite(state, state.mirror.list[idx], "v", arg.value)
+					elseif target.kind == "root" and type(state.mirror[target.key]) ~= "table" then
+						leafWrite(state, state.mirror, target.key, arg.value)
+					end
+					Store.reconcile(sut.store, plain(state.mirror), if arg.keyed then "id" else nil)
 				end
-			elseif op == "reconcileList" or op == "reconcileRoot" or op == "reconcileSame" then
+			end,
+		},
+		reconcileList = {
+			weight = 2,
+			gen = function(g, state)
+				local list = if type(state.mirror.list) == "table" then state.mirror.list else nil
+				return {
+					keyed = g:bool(),
+					snapshot = genList(g, list, function()
+						return nextStateId(state)
+					end),
+				}
+			end,
+			run = function(sut, arg, state)
+				state.dirtyAll = true
+				runReconcileStep("reconcileList", state, sut, arg)
+			end,
+		},
+		reconcileRoot = {
+			weight = 2,
+			gen = function(g, state)
 				local keyed = g:bool()
-				local list = listOf()
-				if not hasAlias(mirror) and (op ~= "reconcileList" or list) then
-					local snapshot
-					if op == "reconcileSame" then
-						snapshot = plain(mirror)
-					elseif op == "reconcileList" then
-						snapshot = genList(g, list, nextId)
+				if g.size <= 3 then
+					local snapshot = plain(state.mirror)
+					snapshot.a = genRootValue(g)
+					return { keyed = keyed, snapshot = snapshot }
+				end
+				local list = if type(state.mirror.list) == "table" then state.mirror.list else nil
+				local snapshot = {}
+				for _, key in ROOT_KEYS do
+					local current = state.mirror[key]
+					if g:bool(0.6) then
+						snapshot[key] = plain(current)
+						if type(current) == "table" and g:bool() then
+							snapshot[key][g:pick({ "x", "y" })] = genField(g)
+						end
 					else
-						snapshot = {}
-						for _, key in ROOT_KEYS do
-							local current = mirror[key]
-							if g:bool(0.6) then
-								snapshot[key] = plain(current)
-								if type(current) == "table" and g:bool() then
-									snapshot[key][g:pick({ "x", "y" })] = genField(g)
-								end
-							else
-								snapshot[key] = genRootValue(g)
-							end
-						end
-						snapshot.list = if g:bool(0.9) then genList(g, list, nextId) else g:pick({ 1, "s" })
-					end
-					g:note(
-						"Store.reconcile(%s, %s%s)",
-						if op == "reconcileList" then "list" else "store",
-						show(snapshot),
-						if keyed then ', "id"' else ""
-					)
-
-					local before, rows, counts = {}, {}, nil
-					local function remember(path: { any })
-						local value = walkStore(path)
-						if type(value) == "table" then
-							before[show(path)] = value
-						end
-					end
-					if op == "reconcileSame" then
-						counts = settle()
-					else
-						if op == "reconcileRoot" then
-							for _, key in ROOT_KEYS do
-								remember({ key })
-							end
-							remember({ "list" })
-						end
-						for index, row in list or {} do
-							rows[row.id] = walkStore({ "list", index })
-							remember({ "list", index })
-						end
-					end
-
-					local target = if op == "reconcileList" then walkStore({ "list" }) else store
-					local result = Store.reconcile(target, plain(snapshot), if keyed then "id" else nil)
-					sert(result == target, "returns proxy")
-					if op == "reconcileList" then
-						mirror.list = snapshot
-					elseif op == "reconcileRoot" then
-						mirror = snapshot
-					end
-
-					if op == "reconcileRoot" then
-						for _, key in ROOT_KEYS do
-							local old = before[show({ key })]
-							if old and type(mirror[key]) == "table" then
-								sert(
-									walkStore({ key }) == old,
-									`store[{show(key)}] kept its proxy across the reconcile`
-								)
-							end
-						end
-					end
-					local newList = mirror.list
-					if type(newList) == "table" and (op == "reconcileList" or before[show({ "list" })]) then
-						for index, row in newList do
-							local old = if keyed then rows[row.id] else before[show({ "list", index })]
-							if old then
-								sert(
-									walkStore({ "list", index }) == old,
-									`list[{index}] kept its proxy (keyed: {keyed})`
-								)
-							end
-						end
-					end
-					if counts then
-						sert.eq(settle(), counts, "a reconcile that changes nothing runs no reader")
+						snapshot[key] = genRootValue(g)
 					end
 				end
-			elseif op == "reader" then
-				local spec = g:pick(READ_SPECS)
-				local isEffect = g:bool()
-				g:note("reader %s (effect: %s)", show(spec), tostring(isEffect))
-				local reader = Model.reader(readerScope, isEffect, function()
-					return readSpec(store, spec)
+				snapshot.list = if g:bool(0.9)
+					then genList(g, list, function()
+						return nextStateId(state)
+					end)
+					else g:pick({ 1, "s" })
+				return { keyed = keyed, snapshot = snapshot }
+			end,
+			run = function(sut, arg, state)
+				state.dirtyAll = true
+				runReconcileStep("reconcileRoot", state, sut, arg)
+			end,
+		},
+		reconcileSame = {
+			weight = 1,
+			gen = function(g)
+				return { keyed = g:bool(), snapshot = nil }
+			end,
+			run = function(sut, arg, state)
+				runReconcileStep("reconcileSame", state, sut, arg)
+			end,
+		},
+		reader = {
+			weight = 3,
+			gen = function(g)
+				return { spec = g:pick(READ_SPECS), isEffect = g:bool() }
+			end,
+			run = function(sut, arg)
+				local reader = Model.reader(sut.readerScope, arg.isEffect, function()
+					return readSpec(sut.store, arg.spec)
 				end)
-				reader.spec = spec
-				table.insert(readers, reader)
-			elseif op == "dropReader" then
-				if #readers > 0 then
-					local index = g:int(1, #readers)
-					g:note("drop reader %d", index)
-					table.remove(readers, index).node:Destroy()
+				reader.spec = arg.spec
+				table.insert(sut.readers, reader)
+			end,
+		},
+		dropReader = {
+			weight = 1,
+			gen = function(g)
+				return g:int(1, 8)
+			end,
+			run = function(sut, index)
+				if #sut.readers > 0 then
+					local i = math.clamp(index, 1, #sut.readers)
+					table.remove(sut.readers, i).node:Destroy()
 				end
-			else
-				g:note("flush")
+			end,
+		},
+		flush = {
+			weight = 5,
+			run = function(sut, _arg, state)
 				Flux.flush()
-				checkReaders("after flush")
+				checkReaders(state, sut, "after flush")
+			end,
+		},
+	},
+	never = {
+		rootProxyStrippedEarly = function(_state, sut)
+			return getmetatable(sut.store) == nil
+		end,
+		liveProxyTornDown = function(_state, sut)
+			local live = reachable(sut.rawRoot)
+			for raw, proxy in sut.proxies do
+				if live[raw] and getmetatable(proxy) == nil then
+					return true
+				end
 			end
-			checkState(op)
-		end
+			return false
+		end,
+		deadProxyLeaked = function(_state, sut)
+			local live = reachable(sut.rawRoot)
+			for raw, proxy in sut.proxies do
+				if not live[raw] and getmetatable(proxy) ~= nil then
+					return true
+				end
+			end
+			return false
+		end,
+	},
+	invariants = {
+		rawMatchesMirror = function(state, sut)
+			sert.eq(Store.unwrap(sut.store), state.mirror, "raw table matches the mirror")
+		end,
+		proxiesConsistent = function(_state, sut)
+			local live = reachable(sut.rawRoot)
+			for raw, proxy in sut.proxies do
+				if live[raw] then
+					sert(getmetatable(proxy) ~= nil, `a reachable table's proxy is live ({show(raw)})`)
+				else
+					sert(getmetatable(proxy) == nil, `a displaced table's proxy is torn down ({show(raw)})`)
+					sut.proxies[raw] = nil
+				end
+			end
+		end,
+	},
+}
 
-		Flux.flush()
-		checkReaders("at the end")
-
-		local how = g:pick({ "Store.Destroy", "Flux.dispose", "scope" })
-		g:note("teardown: %s", how)
-		if how == "scope" and inScope then
-			owners[1]:Destroy()
-		elseif how == "Flux.dispose" then
-			Flux.dispose(store)
-		else
-			Store.Destroy(store)
-		end
-		sert(getmetatable(store) == nil, "the root proxy is stripped")
-		for raw, proxy in proxies do
-			sert(getmetatable(proxy) == nil, `every nested proxy is torn down ({show(raw)})`)
-		end
-		sert.eq(rawRoot, mirror, "teardown leaves the raw table intact")
-	end)
-end, {
+sert.model("store · random writes, array ops and reconciles match a plain-table mirror", storeModelSpec, {
 	runs = 200,
-	size = 30,
+	length = 30,
 	exhaustive = { size = 1 },
 	regressions = { 894361127 },
 })
+
+test("store · model replay covers nested writes, array ops, reconciles and readers", function()
+	local state, sut = sert.model.replay(storeModelSpec, {
+		{ "reader", { spec = { path = { "a", "x" } }, isEffect = false } },
+		{ "reader", { spec = { path = { "list" }, len = true }, isEffect = true } },
+		{ "flush" },
+		{ "setField", { key = "a", field = "x", value = 2, viaIteration = false } },
+		{ "flush" },
+		{ "insert", { how = "append", pos = 4, row = { id = 10, v = 3 } } },
+		{ "move", { from = 1, to = 3 } },
+		{ "setRow", { index = 2, value = 1 } },
+		{ "reconcileSame", { keyed = true } },
+		{ "reconcileLeaf", { keyed = true, target = { kind = "nested", key = "a", field = "x" }, value = 3 } },
+		{ "reconcileList", { keyed = true, snapshot = { { id = 2, v = 2 }, { id = 10, v = 3 } } } },
+		{ "remove", 1 },
+		{ "setRoot", { key = "b", value = { x = 1, y = 2 }, teardownHow = "Flux.dispose" } },
+		{ "flush" },
+		{ "dropReader", 1 },
+	})
+	expect(state.mirror.a.x == 3 and #state.mirror.list == 1 and getmetatable(sut.store) == nil)
+end)
+
+sert.laws.differential("store · nested proxy mutations, array ops and reconciles match pure functional oracle", {
+	gen = sert.gen.list(
+		sert.gen.record({
+			op = sert.gen.pick({ "addScore", "pushItem", "popItem", "moveItem", "reconcileBonus" }),
+			val = sert.gen.int(1, 50),
+			idx = sert.gen.int(1, 4),
+		}),
+		1,
+		12
+	),
+	oracle = function(ops)
+		local score = 10
+		local bonus = 2
+		local items: { number } = { 5, 15, 25 }
+		for _, step in ops do
+			if step.op == "addScore" then
+				score += step.val
+			elseif step.op == "pushItem" then
+				table.insert(items, step.val)
+			elseif step.op == "popItem" then
+				if #items > 0 then
+					local pos = math.clamp(step.idx, 1, #items)
+					table.remove(items, pos)
+				end
+			elseif step.op == "moveItem" then
+				if #items > 1 then
+					local from = math.clamp(step.idx, 1, #items)
+					local to = math.clamp((step.val % #items) + 1, 1, #items)
+					local v = table.remove(items, from) :: number
+					table.insert(items, to, v)
+				end
+			elseif step.op == "reconcileBonus" then
+				bonus = step.val
+			end
+		end
+		local sum = 0
+		local parts: { string } = {}
+		for _, v in items do
+			sum += v
+			table.insert(parts, tostring(v))
+		end
+		local total = (score + sum) * bonus
+		return `{total}|{#items}:{table.concat(parts, ",")}`
+	end,
+	sut = function(ops)
+		local st = Flux.store({
+			stats = { score = 10, bonus = 2 },
+			items = { 5, 15, 25 },
+		})
+		local latestEffect = ""
+		local totalNode
+		local scope = Flux.scope(function()
+			local sumNode = Flux.computed(function()
+				local s = 0
+				for _, v in st.items do
+					s += v
+				end
+				return s
+			end)
+			totalNode = Flux.computed(function()
+				return (st.stats.score + sumNode()) * st.stats.bonus
+			end)
+			Flux.effect(function()
+				local parts: { string } = {}
+				for _, v in st.items do
+					table.insert(parts, tostring(v))
+				end
+				latestEffect = `{totalNode()}|{#st.items}:{table.concat(parts, ",")}`
+			end)
+		end)
+		Flux.flush()
+
+		for _, step in ops do
+			if step.op == "addScore" then
+				st.stats.score += step.val
+			elseif step.op == "pushItem" then
+				Store.insert(st.items, step.val)
+			elseif step.op == "popItem" then
+				if #st.items > 0 then
+					local pos = math.clamp(step.idx, 1, #st.items)
+					Store.remove(st.items, pos)
+				end
+			elseif step.op == "moveItem" then
+				if #st.items > 1 then
+					local from = math.clamp(step.idx, 1, #st.items)
+					local to = math.clamp((step.val % #st.items) + 1, 1, #st.items)
+					Store.move(st.items, from, to)
+				end
+			elseif step.op == "reconcileBonus" then
+				Store.reconcile(st.stats, { score = st.stats.score, bonus = step.val })
+			end
+			Flux.flush()
+		end
+
+		scope:Destroy()
+		Flux.dispose(st)
+		Flux.flush()
+		return latestEffect
+	end,
+}, { runs = 80 })
 
 return {}

@@ -24,6 +24,7 @@ test("responsive · scaleOf fits the tighter axis by default, honors mode and cl
 		{ Vector2.new(384, 216), { min = 0.5 }, 0.5 },
 		{ Vector2.new(3840, 2160), { max = 1.5 }, 1.5 },
 		{ Vector2.new(960, 540), { mode = bogus }, 0.5 },
+		{ Vector2.new(960, 540), { mode = bogus }, 0.5 },
 	}
 	local warned = env.warnings(function()
 		for _, case in cases do
@@ -34,6 +35,7 @@ test("responsive · scaleOf fits the tighter axis by default, honors mode and cl
 			s:Destroy()
 		end
 	end)
+	expect.eq(#warned, 1, "unknown scale mode warns once per mode")
 	expect.eq(warned[1], `[Flux] unknown scale mode "{bogus}"; falling back to "min"`, "the unknown mode warns")
 end)
 
@@ -169,6 +171,251 @@ engineTest("responsive · the live nodes follow the engine's services", function
 	expect.eq(seen[4], "gamepad", "input follows PreferredInput")
 	expect.eq(seen[5], "mobile", "platform re-derives without a keyboard")
 	expect.eq(Responsive.platform:get(), "pc", "and back")
+
+	local oldCam = env.workspace.CurrentCamera
+	local altCam = env.Instance.new("Camera")
+	rawset(altCam._props, "ViewportSize", Vector2.new(1280, 720))
+	env.workspace.CurrentCamera = altCam
+	env.settle()
+	expect.eq(Responsive.viewport:get(), Vector2.new(1280, 720), "CurrentCamera swap updates viewport immediately")
+	rawset(oldCam._props, "ViewportSize", Vector2.new(640, 480))
+	oldCam:GetPropertyChangedSignal("ViewportSize"):Fire()
+	env.settle()
+	expect.eq(Responsive.viewport:get(), Vector2.new(1280, 720), "previous camera signal was disconnected")
+	env.workspace.CurrentCamera = nil :: any
+	env.settle()
+	rawset(altCam._props, "ViewportSize", Vector2.new(800, 600))
+	altCam:GetPropertyChangedSignal("ViewportSize"):Fire()
+	env.settle()
+	expect.eq(Responsive.viewport:get(), Vector2.new(1280, 720), "nil CurrentCamera disconnects active camera")
+	rawset(oldCam._props, "ViewportSize", Vector2.new(1920, 1080))
+	env.workspace.CurrentCamera = oldCam
+	env.settle()
+	altCam:Destroy()
 end)
+
+sert.laws.ui("responsive · adaptive layout across Phone, Tablet, Desktop, and Console viewports", {
+	noTextOverflow = not env.IS_ROBLOX,
+	mount = function(_uiEnv, parent, viewport)
+		local UDim2 = env.UDim2
+		local Enum = env.Enum
+		local hostParent, cleanHost = env.mountUi(parent, viewport)
+		if env.engine ~= nil then
+			env.engine:setViewport(viewport)
+		end
+		Responsive.viewport:set(viewport)
+		Flux.flush()
+
+		local root: Frame
+		local scope = Flux.scope(function()
+			local cols = Flux.computed(function()
+				local bp = Responsive.breakpoint()
+				return if bp == "phone" then 1 elseif bp == "tablet" then 2 else 3
+			end)
+			local pad = Flux.computed(function()
+				return if Responsive.breakpoint() == "phone" then 8 else 16
+			end)
+			local cellW = Flux.computed(function()
+				local bp = Responsive.breakpoint()
+				local avail = math.min(viewport.X - 24, 960) - (if bp == "phone" then 16 else 32)
+				local n = cols()
+				return math.floor((avail - (n - 1) * 8) / n)
+			end)
+			local cellSize = Flux.computed(function()
+				return Vector2.new(math.max(80, cellW()), 44)
+			end)
+
+			root = Flux.new("Frame")({
+				Name = "ResponsiveShell",
+				Parent = hostParent,
+				Position = UDim2.fromOffset(12, 12),
+				Size = UDim2.fromOffset(math.min(viewport.X - 24, 960), math.min(viewport.Y - 24, 540)),
+				Flux.padding(pad),
+				Flux.list({ direction = "y", gap = 10 }),
+				Flux.new("Frame")({
+					Name = "TopBar",
+					LayoutOrder = 1,
+					Size = UDim2.new(1, 0, 0, 36),
+					Flux.list({ direction = "x", gap = 8, align = "center" }),
+					Flux.new("TextLabel")({
+						Name = "ModeBadge",
+						LayoutOrder = 1,
+						Size = UDim2.fromOffset(120, 28),
+						Text = function()
+							return `BP:{Responsive.breakpoint()}`
+						end,
+						TextSize = 14,
+						TextScaled = true,
+					}),
+					Flux.switch(Responsive.breakpoint)({
+						phone = function()
+							return Flux.new("TextLabel")({
+								Name = "NavCompact",
+								LayoutOrder = 2,
+								Size = UDim2.fromOffset(96, 28),
+								Text = "Menu",
+								TextSize = 14,
+								TextScaled = true,
+							})
+						end,
+						tablet = function()
+							return Flux.new("TextLabel")({
+								Name = "NavMedium",
+								LayoutOrder = 2,
+								Size = UDim2.fromOffset(160, 28),
+								Text = "Home · Shop",
+								TextSize = 14,
+								TextScaled = true,
+							})
+						end,
+						desktop = function()
+							return Flux.new("TextLabel")({
+								Name = "NavFull",
+								LayoutOrder = 2,
+								Size = UDim2.fromOffset(220, 28),
+								Text = "Home · Shop · Guild · Ranks",
+								TextSize = 14,
+								TextScaled = true,
+							})
+						end,
+					}),
+				}),
+				Flux.new("ScrollingFrame")({
+					Name = "CardGrid",
+					LayoutOrder = 2,
+					Size = UDim2.new(1, 0, 0, 180),
+					CanvasSize = UDim2.fromScale(0, 0),
+					AutomaticCanvasSize = Enum.AutomaticSize.Y,
+					ScrollingDirection = Enum.ScrollingDirection.Y,
+					ClipsDescendants = true,
+					Flux.grid({ cell = cellSize, gap = 8, fill = "x" }),
+					Flux.new("Frame")({
+						Name = "Card1",
+						LayoutOrder = 1,
+						Flux.new("TextLabel")({
+							Size = UDim2.fromScale(1, 1),
+							Text = "Slot 1",
+							TextSize = 12,
+							TextScaled = true,
+						}),
+					}),
+					Flux.new("Frame")({
+						Name = "Card2",
+						LayoutOrder = 2,
+						Flux.new("TextLabel")({
+							Size = UDim2.fromScale(1, 1),
+							Text = "Slot 2",
+							TextSize = 12,
+							TextScaled = true,
+						}),
+					}),
+					Flux.new("Frame")({
+						Name = "Card3",
+						LayoutOrder = 3,
+						Flux.new("TextLabel")({
+							Size = UDim2.fromScale(1, 1),
+							Text = "Slot 3",
+							TextSize = 12,
+							TextScaled = true,
+						}),
+					}),
+				}),
+			})
+		end)
+		Flux.flush()
+		sert.defer(function()
+			scope:Destroy()
+			root:Destroy()
+			cleanHost()
+			if env.engine ~= nil then
+				env.engine:setViewport(Vector2.new(1920, 1080))
+			end
+			Responsive.viewport:set(Vector2.new(1920, 1080))
+			Flux.flush()
+		end)
+		return root
+	end,
+	check = function(_uiEnv, root, vp)
+		local RobloxLayout = sert.roblox.Layout
+		RobloxLayout.audit(root, { viewport = vp.size, fitsParent = true, noTextOverflow = not env.IS_ROBLOX })
+
+		local expectedBp = if vp.size.X < 600 then "phone" elseif vp.size.X < 1024 then "tablet" else "desktop"
+		expect.eq(Responsive.breakpoint:get(), expectedBp, `breakpoint at {vp.name} ({vp.size.X}x{vp.size.Y})`)
+
+		local topBar = root:FindFirstChild("TopBar") :: Frame
+		local badge = topBar:FindFirstChild("ModeBadge") :: TextLabel
+		expect.eq(badge.Text, `BP:{expectedBp}`, "ModeBadge text reflects active breakpoint")
+
+		local hasCompact = topBar:FindFirstChild("NavCompact") ~= nil
+		local hasMedium = topBar:FindFirstChild("NavMedium") ~= nil
+		local hasFull = topBar:FindFirstChild("NavFull") ~= nil
+		expect.eq(hasCompact, expectedBp == "phone", "NavCompact mounted iff phone")
+		expect.eq(hasMedium, expectedBp == "tablet", "NavMedium mounted iff tablet")
+		expect.eq(hasFull, expectedBp == "desktop", "NavFull mounted iff desktop")
+	end,
+})
+
+engineTest(
+	"responsive · env:setViewport relayouts live ScreenGui across Phone, Tablet, Desktop, and Console",
+	function()
+		local RobloxLayout = sert.roblox.Layout
+		local UDim2 = env.UDim2
+		local screen: ScreenGui
+		local panel: Frame
+		local scope = Flux.scope(function()
+			panel = Flux.new("Frame")({
+				Name = "AdaptivePanel",
+				Size = UDim2.fromScale(1, 1),
+				Flux.padding(12),
+				Flux.list({
+					direction = function()
+						return if Responsive.breakpoint() == "phone" then "y" else "x"
+					end,
+					gap = 10,
+				}),
+				Flux.new("Frame")({
+					Name = "PaneA",
+					LayoutOrder = 1,
+					Size = UDim2.fromOffset(150, 80),
+				}),
+				Flux.new("Frame")({
+					Name = "PaneB",
+					LayoutOrder = 2,
+					Size = UDim2.fromOffset(150, 80),
+				}),
+			})
+			screen = Flux.new("ScreenGui")({
+				Name = "ViewportGui",
+				Parent = env.Compat.services.Players.LocalPlayer.PlayerGui,
+				panel,
+			})
+		end)
+		Flux.flush()
+
+		local viewports = {
+			{ name = "Phone", size = Vector2.new(390, 844), bp = "phone", axis = "Y" },
+			{ name = "Tablet", size = Vector2.new(820, 1180), bp = "tablet", axis = "X" },
+			{ name = "Desktop", size = Vector2.new(1920, 1080), bp = "desktop", axis = "X" },
+			{ name = "Console", size = Vector2.new(1920, 1080), bp = "desktop", axis = "X" },
+		}
+		for _, vp in viewports do
+			env.engine:setViewport(vp.size)
+			Responsive.viewport:set(vp.size)
+			Flux.flush()
+			expect.eq(Responsive.breakpoint:get(), vp.bp, `breakpoint matches {vp.name}`)
+			expect.eq(screen.AbsoluteSize, vp.size, `ScreenGui AbsoluteSize matches {vp.name} viewport`)
+			RobloxLayout.audit(panel, { viewport = vp.size, fitsParent = true })
+			local paneA = panel:FindFirstChild("PaneA") :: Frame
+			local paneB = panel:FindFirstChild("PaneB") :: Frame
+			RobloxLayout.spacing({ paneA, paneB }, vp.axis :: any, 10)
+		end
+
+		scope:Destroy()
+		screen:Destroy()
+		env.engine:setViewport(Vector2.new(1920, 1080))
+		Responsive.viewport:set(Vector2.new(1920, 1080))
+		Flux.flush()
+	end
+)
 
 return {}

@@ -2,9 +2,6 @@
 local env = if game
 	then require(game:GetService("ReplicatedStorage"):WaitForChild("Flux.lib"):WaitForChild("env")) :: any
 	else require("../lib/env") :: any
-local Model = if game
-	then require(game:GetService("ReplicatedStorage"):WaitForChild("Flux.lib"):WaitForChild("Model")) :: any
-	else require("../lib/Model") :: any
 local Motion = if game
 	then require((game :: any).ReplicatedStorage.Flux.Motion) :: any
 	else require("../../src/Motion") :: any
@@ -21,16 +18,15 @@ local Engine = Motion.Engine
 local Easing = Motion.Easing
 local near = sert.near
 local prop = sert.prop
-local float = Model.float
 local advance = Flux.Motion.step
 
 local function damping(g: any): number
 	local branch = g:pick({ "critical", "under", "over" })
-	return if branch == "critical" then 1 elseif branch == "under" then float(g, 0.05, 0.98) else float(g, 1.02, 3)
+	return if branch == "critical" then 1 elseif branch == "under" then g:float(0.05, 0.98) else g:float(1.02, 3)
 end
 
 local function away(g: any, start: number): number
-	local gap = float(g, 100, 1000)
+	local gap = g:float(100, 1000)
 	return if g:bool() then start + gap else start - gap
 end
 
@@ -54,7 +50,7 @@ end
 
 local function walk(g: any, check: () -> ())
 	for _ = 1, g:int(1, g.size) do
-		advance(float(g, 0, 0.1))
+		advance(g:float(0, 0.1))
 		check()
 	end
 end
@@ -223,10 +219,10 @@ test("motion · waking a sleeping motion inside step callback does not corrupt i
 end)
 
 prop("motion · a spring stepped by a then b lands where one step of a + b does", function(g)
-	local frequency, ratio = float(g, 0.2, 3), damping(g)
-	local start = float(g, -1000, 1000)
-	local goal, velocity = away(g, start), float(g, -2000, 2000)
-	local a, b = float(g, 0, 0.25), float(g, 0, 0.25)
+	local frequency, ratio = g:float(0.2, 3), damping(g)
+	local start = g:float(-1000, 1000)
+	local goal, velocity = away(g, start), g:float(-2000, 2000)
+	local a, b = g:float(0, 0.25), g:float(0, 0.25)
 	g:note(
 		"frequency %g damping %g start %g goal %g velocity %g a %g b %g",
 		frequency,
@@ -252,8 +248,8 @@ prop("motion · a spring stepped by a then b lands where one step of a + b does"
 end, { runs = 200 })
 
 prop("motion · from rest, damping >= 1 never crosses the target and damping < 1 does", function(g)
-	local frequency, ratio = float(g, 0.2, 5), damping(g)
-	local start = float(g, -1000, 1000)
+	local frequency, ratio = g:float(0.2, 5), damping(g)
+	local start = g:float(-1000, 1000)
 	local goal = away(g, start)
 	local side = if start > goal then 1 else -1
 	g:note("frequency %g damping %g start %g goal %g", frequency, ratio, start, goal)
@@ -275,12 +271,12 @@ prop("motion · from rest, damping >= 1 never crosses the target and damping < 1
 end, { runs = 200 })
 
 prop("motion · a spring settles exactly on its target and leaves the stepped set", function(g)
-	local frequency, ratio = float(g, 1, 8), damping(g)
+	local frequency, ratio = g:float(1, 8), damping(g)
 	if ratio < 1 then
 		ratio = math.max(ratio, 0.2)
 	end
-	local start = float(g, -1000, 1000)
-	local goal, velocity = away(g, start), float(g, -2000, 2000)
+	local start = g:float(-1000, 1000)
+	local goal, velocity = away(g, start), g:float(-2000, 2000)
 	g:note("frequency %g damping %g start %g goal %g velocity %g", frequency, ratio, start, goal, velocity)
 	local scope, spring = springs(1, start, frequency, ratio)
 	spring(goal)
@@ -290,7 +286,7 @@ prop("motion · a spring settles exactly on its target and leaves the stepped se
 		if not Engine.isActive(motion) then
 			break
 		end
-		advance(float(g, 1 / 240, 1 / 30))
+		advance(g:float(1 / 240, 1 / 30))
 	end
 	expect(not Engine.isActive(motion), `still moving at {spring:get()}`)
 	expect(spring:get() == goal, `settled at {spring:get()}, not exactly {goal}`)
@@ -300,12 +296,12 @@ prop("motion · a spring settles exactly on its target and leaves the stepped se
 end, { runs = 100 })
 
 prop("motion · a vector spring moves exactly like three number springs", function(g)
-	local frequency, ratio = float(g, 0.2, 5), damping(g)
+	local frequency, ratio = g:float(0.2, 5), damping(g)
 	local start, goal, velocity = {}, {}, {}
 	for i = 1, 3 do
-		start[i] = float(g, -1000, 1000)
+		start[i] = g:float(-1000, 1000)
 		goal[i] = if g:bool(0.2) then start[i] else away(g, start[i])
-		velocity[i] = float(g, -2000, 2000)
+		velocity[i] = g:float(-2000, 2000)
 	end
 	local function f32(values: { number }): { number }
 		local v = vector.create(values[1], values[2], values[3])
@@ -340,10 +336,10 @@ prop("motion · a vector spring moves exactly like three number springs", functi
 end, { runs = 100 })
 
 prop("motion · impulses add: a run of impulses moves a spring like one impulse of their sum", function(g)
-	local frequency, ratio = float(g, 0.2, 5), damping(g)
-	local rest = float(g, -1000, 1000)
+	local frequency, ratio = g:float(0.2, 5), damping(g)
+	local rest = g:float(-1000, 1000)
 	local kicks = g:list(function()
-		return float(g, -2000, 2000)
+		return g:float(-2000, 2000)
 	end, 1, 5)
 	local sum = 0
 	for _, kick in kicks do
@@ -361,12 +357,12 @@ prop("motion · impulses add: a run of impulses moves a spring like one impulse 
 end, { runs = 200 })
 
 prop("motion · setVelocity replaces every earlier impulse", function(g)
-	local frequency, ratio = float(g, 0.2, 5), damping(g)
-	local start = float(g, -1000, 1000)
+	local frequency, ratio = g:float(0.2, 5), damping(g)
+	local start = g:float(-1000, 1000)
 	local goal = if g:bool() then start else away(g, start)
-	local velocity = g:weighted({ { 1, 0 }, { 2, float(g, -2000, 2000) } })
+	local velocity = g:weighted({ { 1, 0 }, { 2, g:float(-2000, 2000) } })
 	local kicks = g:list(function()
-		return float(g, -2000, 2000)
+		return g:float(-2000, 2000)
 	end, 1, 5)
 	local scope, kicked, clean = springs(2, start, frequency, ratio)
 	kicked(goal)
@@ -386,9 +382,9 @@ prop("motion · a tween follows its eased curve across repeats and reverses and 
 	local style, direction = g:pick(STYLES), g:pick(DIRECTIONS)
 	local repeats = g:weighted({ { 3, 0 }, { 2, 1 }, { 2, 2 }, { 1, 3 }, { 1, -1 } })
 	local reverses = g:bool()
-	local tweenInfo = info(float(g, 0.05, 2), style, direction, repeats, reverses)
+	local tweenInfo = info(g:float(0.05, 2), style, direction, repeats, reverses)
 	local time = tweenInfo.Time
-	local start = float(g, -1000, 1000)
+	local start = g:float(-1000, 1000)
 	local goal = away(g, start)
 	g:note(
 		"time %g %s %s repeats %d reverses %s start %g goal %g",
@@ -411,7 +407,7 @@ prop("motion · a tween follows its eased curve across repeats and reverses and 
 
 	local elapsed = 0
 	for _ = 1, g.size do
-		local dt = float(g, 0, 1.5 * time)
+		local dt = g:float(0, 1.5 * time)
 		advance(dt)
 		elapsed += dt
 		g:note("elapsed %g", elapsed)
@@ -773,12 +769,12 @@ local function color(g: any)
 	local kind = g:weighted({ { 6, "random" }, { 1, "grey" }, { 1, "corner" } })
 	local c
 	if kind == "grey" then
-		local v = float(g, 0, 1)
+		local v = g:float(0, 1)
 		c = Color3.new(v, v, v)
 	elseif kind == "corner" then
 		c = Color3.new(g:int(0, 1), g:int(0, 1), g:int(0, 1))
 	else
-		c = Color3.new(float(g, 0, 1), float(g, 0, 1), float(g, 0, 1))
+		c = Color3.new(g:float(0, 1), g:float(0, 1), g:float(0, 1))
 	end
 	g:note("%s colour %s", kind, tostring(c))
 	return c
@@ -820,7 +816,7 @@ end)
 
 prop("color · lighten shifts L alone, clamps to [0, 1], and lighten(-a) undoes lighten(a)", function(g)
 	local c = color(g)
-	local amount = float(g, -1.5, 1.5)
+	local amount = g:float(-1.5, 1.5)
 	g:note("amount %g", amount)
 	local lab = Oklab.fromRGB(c)
 	local lit = Oklab.lighten(lab, amount)
@@ -828,7 +824,7 @@ prop("color · lighten shifts L alone, clamps to [0, 1], and lighten(-a) undoes 
 	near(lit.Y, lab.Y, 1e-9, "lighten keeps a")
 	near(lit.Z, lab.Z, 1e-9, "lighten keeps b")
 
-	local small = float(g, -0.2, 0.2)
+	local small = g:float(-0.2, 0.2)
 	g:note("small %g", small)
 	local shifted = Oklab.lighten(lab, small)
 	if lab.X + small > 0 and lab.X + small < 1 and inGamut(shifted, 1e-3) then
@@ -838,7 +834,7 @@ end, { runs = 300 })
 
 prop("color · saturate moves chroma along the hue, stopping at grey", function(g)
 	local c = color(g)
-	local amount = float(g, -0.5, 0.5)
+	local amount = g:float(-0.5, 0.5)
 	g:note("amount %g", amount)
 	local lab = Oklab.fromRGB(c)
 	local sat = Oklab.saturate(lab, amount)
@@ -885,7 +881,7 @@ end, { runs = 300 })
 
 prop("color · mix lands on its endpoints and follows the Oklab lerp between", function(g)
 	local a, b = color(g), color(g)
-	local t = float(g, 0, 1)
+	local t = g:float(0, 1)
 	g:note("t %g", t)
 	near(Color.mix(a, b, 0), a, 1e-5, "mix t=0 is a")
 	near(Color.mix(a, b, 1), b, 1e-5, "mix t=1 is b")
@@ -922,7 +918,7 @@ test("color · readable picks the more legible text colour", function()
 end)
 
 prop("color · gamut clip lands in range, keeps hue, and leaves in-gamut colours alone", function(g)
-	local lab = Vector3.new(float(g, 0, 1), float(g, -0.4, 0.4), float(g, -0.4, 0.4))
+	local lab = Vector3.new(g:float(0, 1), g:float(-0.4, 0.4), g:float(-0.4, 0.4))
 	g:note("lab %s", tostring(lab))
 	local clipped = Oklab.toRGB(lab, true)
 	for _, channel in { clipped.R, clipped.G, clipped.B } do
@@ -938,11 +934,397 @@ prop("color · gamut clip lands in range, keeps hue, and leaves in-gamut colours
 	if inGamut(lab, 1e-6) then
 		near(clipped, Oklab.toRGB(lab, false), 0, "an in-gamut colour is left alone")
 	end
-	local pushed = Color.saturate(color(g), float(g, 0, 0.5))
+	local pushed = Color.saturate(color(g), g:float(0, 0.5))
 	for _, channel in { pushed.R, pushed.G, pushed.B } do
 		expect(channel >= -1e-6 and channel <= 1 + 1e-6, `saturated channel in range, got {pushed}`)
 	end
 end, { runs = 300 })
+
+sert.laws.codec("color · Oklab <-> sRGB Color3 codec laws", {
+	gen = function(g)
+		return Color3.fromRGB(g:int(0, 255), g:int(0, 255), g:int(0, 255))
+	end,
+	encode = function(c)
+		return Oklab.fromRGB(c)
+	end,
+	decode = function(lab)
+		local rgb = Oklab.toRGB(lab, false)
+		return Color3.fromRGB(
+			math.clamp(math.round(rgb.R * 255), 0, 255),
+			math.clamp(math.round(rgb.G * 255), 0, 255),
+			math.clamp(math.round(rgb.B * 255), 0, 255)
+		)
+	end,
+	eq = function(a, b)
+		return math.abs(a.R - b.R) <= 1e-5 and math.abs(a.G - b.G) <= 1e-5 and math.abs(a.B - b.B) <= 1e-5
+	end,
+})
+
+sert.laws.codec("color · Oklch <-> Oklab cylindrical codec laws", {
+	gen = function(g)
+		return Vector3.new(g:float(0.05, 0.95), g:float(0.01, 0.35), g:float(0, 359.99))
+	end,
+	encode = function(lch)
+		local rad = math.rad(lch.Z)
+		local scale = 1e6
+		return Vector3.new(
+			math.round(lch.X * scale) / scale,
+			math.round(lch.Y * math.cos(rad) * scale) / scale,
+			math.round(lch.Y * math.sin(rad) * scale) / scale
+		)
+	end,
+	decode = function(lab)
+		return Vector3.new(lab.X, chroma(lab), hueDeg(lab))
+	end,
+	eq = function(a, b)
+		local dh = math.abs(a.Z - b.Z)
+		dh = math.min(dh, 360 - dh)
+		return math.abs(a.X - b.X) <= 1e-4 and math.abs(a.Y - b.Y) <= 1e-4 and dh <= 1e-2
+	end,
+})
+
+sert.laws.order("color · luminance forms a strict weak order on Color3", {
+	gen = color,
+	lt = function(a, b)
+		return Color.luminance(a) < Color.luminance(b)
+	end,
+	eq = function(a, b)
+		return Color.luminance(a) == Color.luminance(b)
+	end,
+})
+
+sert.laws.codec("color · Color3 <-> Hex string codec laws", {
+	gen = function(g)
+		return Color3.fromRGB(g:int(0, 255), g:int(0, 255), g:int(0, 255))
+	end,
+	encode = function(c)
+		return c:ToHex()
+	end,
+	decode = function(hex)
+		return Color3.fromHex(hex)
+	end,
+	eq = function(a, b)
+		return math.abs(a.R - b.R) <= 1e-5 and math.abs(a.G - b.G) <= 1e-5 and math.abs(a.B - b.B) <= 1e-5
+	end,
+})
+
+sert.laws.codec("color · sRGB <-> Linear RGB quantized codec laws", {
+	gen = function(g)
+		return Color3.fromRGB(g:int(0, 255), g:int(0, 255), g:int(0, 255))
+	end,
+	encode = function(c)
+		local lin = Color.sRGB.toLinear(c)
+		local scale = 1e6
+		return Color3.new(
+			math.round(lin.R * scale) / scale,
+			math.round(lin.G * scale) / scale,
+			math.round(lin.B * scale) / scale
+		)
+	end,
+	decode = function(lin)
+		local srgb = Color.sRGB.fromLinear(lin)
+		return Color3.fromRGB(
+			math.clamp(math.round(srgb.R * 255), 0, 255),
+			math.clamp(math.round(srgb.G * 255), 0, 255),
+			math.clamp(math.round(srgb.B * 255), 0, 255)
+		)
+	end,
+	eq = function(a, b)
+		return math.abs(a.R - b.R) <= 1e-5 and math.abs(a.G - b.G) <= 1e-5 and math.abs(a.B - b.B) <= 1e-5
+	end,
+})
+
+sert.laws.algebra("color · Oklab.mix midpoint (t = 0.5) commutativity and idempotence laws", {
+	gen = function(g)
+		return Vector3.new(g:float(0, 1), g:float(-0.3, 0.3), g:float(-0.3, 0.3))
+	end,
+	op = function(a, b)
+		return Oklab.mix(a, b, 0.5)
+	end,
+	associative = false,
+	commutative = true,
+	idempotent = true,
+	eq = function(a, b)
+		return math.abs(a.X - b.X) <= 1e-6 and math.abs(a.Y - b.Y) <= 1e-6 and math.abs(a.Z - b.Z) <= 1e-6
+	end,
+})
+
+local anchorLab = Oklab.fromRGB(Color3.new(0.85, 0.25, 0.35))
+sert.laws.algebra("color · Oklab.rotateHue group action associativity, commutativity, identity and inverse laws", {
+	gen = function(g)
+		return g:float(-360, 360)
+	end,
+	op = function(a, b)
+		return a + b
+	end,
+	identity = 0,
+	inverse = function(a)
+		return -a
+	end,
+	associative = true,
+	commutative = true,
+	idempotent = false,
+	eq = function(a, b)
+		local ra = Oklab.rotateHue(anchorLab, a)
+		local rb = Oklab.rotateHue(anchorLab, b)
+		return math.abs(ra.X - rb.X) <= 1e-6 and math.abs(ra.Y - rb.Y) <= 1e-6 and math.abs(ra.Z - rb.Z) <= 1e-6
+	end,
+})
+
+sert.laws.differential("color · Color.mix and Color.contrast match analytical Oklab & WCAG 2.1 oracle", {
+	gen = sert.gen.record({
+		a = color,
+		b = color,
+		t = sert.gen.float(0, 1),
+	}),
+	oracle = function(input)
+		local labA = Oklab.fromRGB(input.a)
+		local labB = Oklab.fromRGB(input.b)
+		local mixedLab = labA + (labB - labA) * input.t
+		local mixedRgb = Oklab.toRGB(mixedLab, true)
+
+		local function srgbChannelToLinear(c: number): number
+			return if c <= 0.04045 then c / 12.92 else ((c + 0.055) / 1.055) ^ 2.4
+		end
+		local function relLum(c: Color3): number
+			return 0.2126 * srgbChannelToLinear(c.R)
+				+ 0.7152 * srgbChannelToLinear(c.G)
+				+ 0.0722 * srgbChannelToLinear(c.B)
+		end
+		local l1, l2 = relLum(input.a), relLum(input.b)
+		local hi, lo = math.max(l1, l2), math.min(l1, l2)
+		local ratio = (hi + 0.05) / (lo + 0.05)
+		return { mix = mixedRgb, contrast = ratio }
+	end,
+	sut = function(input)
+		return {
+			mix = Color.mix(input.a, input.b, input.t),
+			contrast = Color.contrast(input.a, input.b),
+		}
+	end,
+	eq = function(a, b)
+		local mixClose = math.abs(a.mix.R - b.mix.R) <= 1e-5
+			and math.abs(a.mix.G - b.mix.G) <= 1e-5
+			and math.abs(a.mix.B - b.mix.B) <= 1e-5
+		local contrastClose = math.abs(a.contrast - b.contrast) <= 1e-5
+		return mixClose and contrastClose
+	end,
+}, { runs = 100 })
+
+local finiteBoundary01 = sert.gen.filter(sert.gen.boundaryFloat(0, 1), function(x)
+	return x == x and math.abs(x) < math.huge
+end)
+local finiteBoundarySigned = sert.gen.filter(sert.gen.boundaryFloat(-2, 2), function(x)
+	return x == x and math.abs(x) < math.huge
+end)
+local finiteBoundaryDeg = sert.gen.filter(sert.gen.boundaryFloat(-720, 720), function(x)
+	return x == x and math.abs(x) < math.huge
+end)
+
+prop(
+	"color · boundaryFloat fuzzing across Oklab, sRGB, mix, contrast, lighten, saturate, rotateHue, grayscale produces zero NaNs",
+	function(g)
+		local r1, g1, b1 = finiteBoundary01(g), finiteBoundary01(g), finiteBoundary01(g)
+		local r2, g2, b2 = finiteBoundary01(g), finiteBoundary01(g), finiteBoundary01(g)
+		local t = finiteBoundary01(g)
+		local delta = finiteBoundarySigned(g)
+		local deg = finiteBoundaryDeg(g)
+
+		local c1 = Color3.new(math.clamp(r1, 0, 1), math.clamp(g1, 0, 1), math.clamp(b1, 0, 1))
+		local c2 = Color3.new(math.clamp(r2, 0, 1), math.clamp(g2, 0, 1), math.clamp(b2, 0, 1))
+
+		local function checkColor3(c: Color3, label: string)
+			expect(c.R == c.R and c.G == c.G and c.B == c.B, `{label} has no NaN components`)
+			expect(
+				c.R >= -1e-6
+					and c.R <= 1 + 1e-6
+					and c.G >= -1e-6
+					and c.G <= 1 + 1e-6
+					and c.B >= -1e-6
+					and c.B <= 1 + 1e-6,
+				`{label} clamped in [0, 1]: {tostring(c)}`
+			)
+		end
+
+		local function checkVec3(v: Vector3, label: string)
+			expect(
+				v.X == v.X
+					and v.Y == v.Y
+					and v.Z == v.Z
+					and math.abs(v.X) < math.huge
+					and math.abs(v.Y) < math.huge
+					and math.abs(v.Z) < math.huge,
+				`{label} is finite Vector3`
+			)
+		end
+
+		local lab1 = Oklab.fromRGB(c1)
+		checkVec3(lab1, "Oklab.fromRGB")
+		checkColor3(Oklab.toRGB(lab1, true), "Oklab.toRGB(gamutClip=true)")
+		checkColor3(Color.sRGB.toLinear(c1), "sRGB.toLinear")
+		checkColor3(Color.sRGB.fromLinear(c1), "sRGB.fromLinear")
+		checkColor3(Color.mix(c1, c2, math.clamp(t, 0, 1)), "Color.mix")
+		checkColor3(Color.lighten(c1, delta), "Color.lighten")
+		checkColor3(Color.saturate(c1, delta), "Color.saturate")
+		checkColor3(Color.rotateHue(c1, deg), "Color.rotateHue")
+		checkColor3(Color.grayscale(c1), "Color.grayscale")
+
+		local lum = Color.luminance(c1)
+		expect(lum == lum and lum >= -1e-6 and lum <= 1 + 1e-6, `luminance in [0, 1]: {lum}`)
+		local cr = Color.contrast(c1, c2)
+		expect(cr == cr and cr >= 1 - 1e-5 and cr <= 21 + 1e-4, `contrast in [1, 21]: {cr}`)
+		local rd = Color.readable(c1)
+		checkColor3(rd, "Color.readable")
+	end,
+	{ runs = 120 }
+)
+
+sert.laws.differential(
+	"motion · spring step matches closed-form damped harmonic oscillator ODE across damping regimes",
+	{
+		gen = sert.gen.record({
+			target = sert.gen.float(-50, 50),
+			freq = sert.gen.float(1, 12),
+			damping = sert.gen.oneOf({
+				sert.gen.float(0.15, 0.95),
+				sert.gen.constant(1.0),
+				sert.gen.float(1.05, 3.0),
+			}),
+			dt = sert.gen.float(1 / 240, 1 / 30),
+			steps = sert.gen.int(1, 8),
+		}),
+		oracle = function(cfg: any)
+			local p: number = 0
+			local v: number = 0
+			local target: number = cfg.target
+			local w: number = 2 * math.pi * cfg.freq
+			local d: number = cfg.damping
+			local dt: number = cfg.dt
+			for _ = 1, cfg.steps do
+				local x0 = p - target
+				if d < 1 then
+					local wd = w * math.sqrt(1 - d * d)
+					local exp = math.exp(-d * w * dt)
+					local c = math.cos(wd * dt)
+					local s = math.sin(wd * dt)
+					local c2 = (v + d * w * x0) / wd
+					p = target + exp * (x0 * c + c2 * s)
+					v = exp * ((c2 * wd - d * w * x0) * c - (x0 * wd + d * w * c2) * s)
+				elseif d == 1 then
+					local exp = math.exp(-w * dt)
+					local c2 = v + w * x0
+					p = target + exp * (x0 + c2 * dt)
+					v = exp * (c2 - w * (x0 + c2 * dt))
+				else
+					local s = math.sqrt(d * d - 1)
+					local r1 = -w * (d - s)
+					local r2 = -w * (d + s)
+					local e1 = math.exp(r1 * dt)
+					local e2 = math.exp(r2 * dt)
+					local c2 = (v - r1 * x0) / (r2 - r1)
+					local c1 = x0 - c2
+					p = target + c1 * e1 + c2 * e2
+					v = c1 * r1 * e1 + c2 * r2 * e2
+				end
+				if math.abs(p - target) < 1e-4 and math.abs(v) < 1e-4 then
+					p = target
+					v = 0
+				end
+			end
+			return p
+		end,
+		sut = function(cfg)
+			local s = Flux.spring(0, cfg.freq, cfg.damping)
+			s:set(cfg.target)
+			for _ = 1, cfg.steps do
+				Flux.Motion.step(cfg.dt)
+			end
+			local out = s:peek()
+			s:Destroy()
+			Flux.flush()
+			return out
+		end,
+		eq = function(a, b)
+			return math.abs(a - b) <= 1e-4
+		end,
+	},
+	{ runs = 80 }
+)
+
+sert.laws.differential("motion · tween linear step matches analytical ramp oracle", {
+	gen = sert.gen.record({
+		startVal = sert.gen.float(-100, 100),
+		endVal = sert.gen.float(-100, 100),
+		duration = sert.gen.float(0.1, 2.0),
+		elapsed = sert.gen.float(0, 2.5),
+	}),
+	oracle = function(cfg)
+		local alpha = math.clamp(cfg.elapsed / cfg.duration, 0, 1)
+		return cfg.startVal + (cfg.endVal - cfg.startVal) * alpha
+	end,
+	sut = function(cfg)
+		local tw = Flux.tween(cfg.startVal, info(cfg.duration, "Linear", "Out"))
+		tw:set(cfg.endVal)
+		Flux.Motion.step(cfg.elapsed)
+		local out = tw:peek()
+		tw:Destroy()
+		Flux.flush()
+		return out
+	end,
+	eq = function(a, b)
+		return math.abs(a - b) <= 1e-4
+	end,
+}, { runs = 80 })
+
+local finiteMotionFloat = sert.gen.filter(sert.gen.boundaryFloat(-1e3, 1e3), function(x)
+	return x == x and math.abs(x) <= 1e3
+end)
+
+prop(
+	"motion · spring and tween step convergence with boundaryFloat targets stays finite and settles to target",
+	function(g)
+		local startVal = finiteMotionFloat(g)
+		local targetVal = finiteMotionFloat(g)
+		local damping = g:pick({ 0.5, 1.0, 1.5 })
+
+		local spr = Flux.spring(startVal, 6, damping)
+		spr:set(targetVal)
+		local prevDist = math.abs(targetVal - startVal)
+		local maxBound = math.max(1, prevDist * 2.5)
+		for _ = 1, 60 do
+			Flux.Motion.step(1 / 30)
+			local cur = spr:peek()
+			expect(cur == cur and math.abs(cur) < math.huge, `spring value is finite: {cur}`)
+			local dist = math.abs(targetVal - cur)
+			expect(dist <= maxBound + 1e-3, `spring stays within energy envelope: dist={dist}, max={maxBound}`)
+			if damping >= 1.0 then
+				expect(dist <= prevDist + 1e-4, `critically/overdamped spring approaches target monotonically`)
+				prevDist = dist
+			end
+		end
+		-- Advance long enough to settle completely
+		Flux.Motion.step(10)
+		near(spr:peek(), targetVal, 1e-3, "spring settles to targetVal")
+		spr:Destroy()
+
+		local tw = Flux.tween(startVal, info(0.5, "Quad", "Out"))
+		tw:set(targetVal)
+		local prevTweenDist = math.abs(targetVal - startVal)
+		for _ = 1, 10 do
+			Flux.Motion.step(0.05)
+			local cur = tw:peek()
+			expect(cur == cur and math.abs(cur) < math.huge, `tween value is finite: {cur}`)
+			local dist = math.abs(targetVal - cur)
+			expect(dist <= prevTweenDist + 1e-4, "Quad Out tween approaches target monotonically")
+			prevTweenDist = dist
+		end
+		Flux.Motion.step(1.0)
+		near(tw:peek(), targetVal, 1e-4, "tween settles to targetVal")
+		tw:Destroy()
+		Flux.flush()
+	end,
+	{ runs = 80 }
+)
 
 test(
 	"motion · static target with reactive config preserves imperative set, nil fallback methods, and sequence overshoot clamping",

@@ -2,9 +2,6 @@
 local env = if game
 	then require(game:GetService("ReplicatedStorage"):WaitForChild("Flux.lib"):WaitForChild("env")) :: any
 	else require("../lib/env") :: any
-local Model = if game
-	then require(game:GetService("ReplicatedStorage"):WaitForChild("Flux.lib"):WaitForChild("Model")) :: any
-	else require("../lib/Model") :: any
 
 local Flux = env.Flux
 local sert = env.sert
@@ -876,11 +873,13 @@ test("edit · __CLEAN runs once on an immediate destroy, owned or not; a node Pa
 	screen:Destroy()
 end)
 
-sert.prop("edit · reactive properties, attributes, tags and two-way models stay synchronized", function(g)
-	Model.isolated(function(owners)
+local TAG_POOL = { { "A" }, { "B" }, { "A", "B" }, { "B", "C" }, {} }
+
+sert.model("edit · reactive properties, attributes, tags and two-way models stay synchronized", {
+	init = function()
 		local textSig = Flux.signal("t0")
 		local attrSig = Flux.signal(1)
-		local tagBool = Flux.signal(g:bool())
+		local tagBool = Flux.signal(false)
 		local tagSet = Flux.signal({ "A" } :: any)
 
 		local box
@@ -892,74 +891,135 @@ sert.prop("edit · reactive properties, attributes, tags and two-way models stay
 				__TAG = { "Static", tagSet },
 			})
 		end)
-		table.insert(owners, scope)
+		flush()
 
-		local expectedText = "t0"
-		local expectedAttr = 1
-		local expectedFlag = tagBool:peek()
-		local expectedSet: { string } = { "A" }
-
-		local function verify(where: string)
-			flush()
-			sert.eq(box.Text, expectedText, `{where}: box.Text`)
-			sert.eq(textSig:peek(), expectedText, `{where}: textSig`)
-			sert.eq(box:GetAttribute("Score"), expectedAttr, `{where}: Score attr`)
-			sert.eq(attrSig:peek(), expectedAttr, `{where}: attrSig`)
-			sert.eq(box:HasTag("Flag"), expectedFlag, `{where}: Flag tag`)
-			sert(box:HasTag("Static"), `{where}: Static tag preserved`)
+		local state = {
+			expectedText = "t0",
+			expectedAttr = 1,
+			expectedFlag = false,
+			expectedSet = { "A" } :: { string },
+		}
+		local sut = {
+			scope = scope,
+			box = box,
+			textSig = textSig,
+			attrSig = attrSig,
+			tagBool = tagBool,
+			tagSet = tagSet,
+		}
+		return state, sut
+	end,
+	teardown = function(sut)
+		sut.scope:Destroy()
+		Flux.flush()
+	end,
+	actions = {
+		nodeText = {
+			weight = 2,
+			gen = function(g)
+				return "n" .. tostring(g:int(1, 9))
+			end,
+			run = function(sut, text)
+				sut.textSig:set(text)
+				flush()
+			end,
+			next = function(state, text)
+				state.expectedText = text
+			end,
+		},
+		instText = {
+			weight = 2,
+			gen = function(g)
+				return "i" .. tostring(g:int(1, 9))
+			end,
+			run = function(sut, text)
+				sut.box.Text = text
+				settle()
+				flush()
+			end,
+			next = function(state, text)
+				state.expectedText = text
+			end,
+		},
+		nodeAttr = {
+			weight = 2,
+			gen = function(g)
+				return g:int(1, 20)
+			end,
+			run = function(sut, score)
+				sut.attrSig:set(score)
+				flush()
+			end,
+			next = function(state, score)
+				state.expectedAttr = score
+			end,
+		},
+		instAttr = {
+			weight = 2,
+			gen = function(g)
+				return g:int(1, 20)
+			end,
+			run = function(sut, score)
+				sut.box:SetAttribute("Score", score)
+				settle()
+				flush()
+			end,
+			next = function(state, score)
+				state.expectedAttr = score
+			end,
+		},
+		flag = {
+			weight = 2,
+			gen = function(g)
+				return g:bool()
+			end,
+			run = function(sut, flag)
+				sut.tagBool:set(flag)
+				flush()
+			end,
+			next = function(state, flag)
+				state.expectedFlag = flag
+			end,
+		},
+		tags = {
+			weight = 2,
+			gen = function(g)
+				return TAG_POOL[g:int(1, #TAG_POOL)]
+			end,
+			run = function(sut, set)
+				sut.tagSet:set(set)
+				flush()
+			end,
+			next = function(state, set)
+				state.expectedSet = set
+			end,
+		},
+	},
+	never = {
+		staticTagLost = function(_state, sut)
+			return not sut.box:HasTag("Static")
+		end,
+	},
+	invariants = {
+		textSynchronized = function(state, sut)
+			sert.eq(sut.box.Text, state.expectedText, "box.Text")
+			sert.eq(sut.textSig:peek(), state.expectedText, "textSig")
+		end,
+		attrSynchronized = function(state, sut)
+			sert.eq(sut.box:GetAttribute("Score"), state.expectedAttr, "Score attr")
+			sert.eq(sut.attrSig:peek(), state.expectedAttr, "attrSig")
+		end,
+		tagsSynchronized = function(state, sut)
+			sert.eq(sut.box:HasTag("Flag"), state.expectedFlag, "Flag tag")
 			for _, t in { "A", "B", "C" } do
-				local inSet = table.find(expectedSet, t) ~= nil
-				sert.eq(box:HasTag(t), inSet, `{where}: tag {t}`)
+				local inSet = table.find(state.expectedSet, t) ~= nil
+				sert.eq(sut.box:HasTag(t), inSet, `tag {t}`)
 			end
-		end
-		verify("initial")
-
-		local TAG_POOL = { { "A" }, { "B" }, { "A", "B" }, { "B", "C" }, {} }
-		for _, op in
-			Model.ops(g, {
-				{ 2, "nodeText" },
-				{ 2, "instText" },
-				{ 2, "nodeAttr" },
-				{ 2, "instAttr" },
-				{ 2, "flag" },
-				{ 2, "tags" },
-			})
-		do
-			if op == "nodeText" then
-				expectedText = "n" .. tostring(g:int(1, 9))
-				g:note("textSig = %s", expectedText)
-				textSig:set(expectedText)
-			elseif op == "instText" then
-				expectedText = "i" .. tostring(g:int(1, 9))
-				g:note("box.Text = %s", expectedText)
-				box.Text = expectedText
-				settle()
-			elseif op == "nodeAttr" then
-				expectedAttr = g:int(1, 20)
-				g:note("attrSig = %d", expectedAttr)
-				attrSig:set(expectedAttr)
-			elseif op == "instAttr" then
-				expectedAttr = g:int(1, 20)
-				g:note("SetAttribute Score = %d", expectedAttr)
-				box:SetAttribute("Score", expectedAttr)
-				settle()
-			elseif op == "flag" then
-				expectedFlag = g:bool()
-				g:note("tagBool = %s", tostring(expectedFlag))
-				tagBool:set(expectedFlag)
-			elseif op == "tags" then
-				expectedSet = TAG_POOL[g:int(1, #TAG_POOL)]
-				g:note("tagSet = {%s}", table.concat(expectedSet, ","))
-				tagSet:set(expectedSet)
-			end
-			verify(op)
-		end
-
-		scope:Destroy()
-	end)
-end, {
+		end,
+	},
+}, {
 	runs = 120,
-	size = 14,
+	length = 14,
 	exhaustive = { size = 2 },
 })
 
@@ -1207,17 +1267,69 @@ test("edit · LayoutOrder model/node pinning, Find numeric ordering, and __REF p
 
 	local refSawChild = false
 	local foundChild = false
+	local refCleaned = false
 	local host = Flux.new("Frame")({
-		[1] = Flux.new("TextLabel")({ Name = "Target", Text = "Initial" }),
-		[2] = Flux.Find.Child("Target")({ Text = "Hydrated" }),
+		[10] = Flux.new("TextLabel")({ Name = "Second" }),
+		[2] = Flux.new("TextLabel")({ Name = "Target", Text = "Initial" }),
+		[5] = Flux.Find.Child("Target")({ Text = "Hydrated" }),
 		__REF = function(inst: Instance)
 			local target = inst:FindFirstChild("Target") :: TextLabel?
 			refSawChild = target ~= nil
 			foundChild = target ~= nil and target.Text == "Hydrated"
+			return function()
+				refCleaned = true
+			end
 		end,
 	})
 	expect(refSawChild and foundChild, "__REF runs after numeric children and Find selectors")
+	expect(
+		(host:FindFirstChild("Target") :: TextLabel).LayoutOrder == 1
+			and (host:FindFirstChild("Second") :: TextLabel).LayoutOrder == 2,
+		"sparse numeric child keys sort in ascending order"
+	)
 	host:Destroy()
+	expect(refCleaned, "__REF cleanup function runs on Destroy")
+
+	local auto1 = Flux.new("Frame")({ BackgroundTransparency = 0 })
+	local auto2 = Flux.new("Frame")({ BackgroundTransparency = Flux.signal(0.5) })
+	local auto3 = Flux.new("Frame")({ Visible = Flux.model(Flux.signal(true)) })
+	local autoHost = Flux.new("Frame")({ auto1, auto2, auto3 })
+	flush()
+	expect(
+		auto1.LayoutOrder == 1 and auto2.LayoutOrder == 2 and auto3.LayoutOrder == 3,
+		"non-LayoutOrder zero/node/model properties do not pin LayoutOrder=0"
+	)
+	autoHost:Destroy()
+
+	local preTagged = Instance.new("Folder")
+	local tagSig = Flux.signal(1 :: any)
+	Flux.edit(preTagged)({ _tag_Preexisting = Flux.model(tagSig) })
+	expect(tagSig:peek() == true, "_tag_Name model normalizes initial HasTag boolean")
+	preTagged:Destroy()
+
+	local childA = Instance.new("Frame")
+	local childB = Instance.new("Frame")
+	local childC = Instance.new("Frame")
+	local dynChildren = Flux.signal({ childA, childB } :: any)
+	local dynHost = Flux.new("Frame")({ dynChildren })
+	flush()
+	expect(childA.Parent == dynHost and childB.Parent == dynHost, "initial 2 children mounted")
+	dynChildren:set({ childA, childC })
+	flush()
+	expect(
+		childA.Parent == dynHost and childB.Parent == nil and childC.Parent == dynHost,
+		"2-to-2 swap keeps shared child and unparents removed child"
+	)
+	dynChildren:set({ childA })
+	flush()
+	expect(childA.Parent == dynHost and childC.Parent == nil, "2-to-1 table keeps remaining child")
+	dynChildren:set(childC)
+	flush()
+	expect(childA.Parent == nil and childC.Parent == dynHost, "table-to-Instance unparents old child")
+	dynHost:Destroy()
+	childA:Destroy()
+	childB:Destroy()
+	childC:Destroy()
 end)
 
 return {}

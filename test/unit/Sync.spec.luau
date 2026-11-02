@@ -489,46 +489,288 @@ test("sync · untrusted messages are ignored", function()
 	w.destroy()
 end)
 
+local function validateSyncV(_, v): (boolean, number?)
+	if type(v) ~= "number" or v % 5 == 0 then
+		return false
+	end
+	return true, math.min(v, 39)
+end
+
+local function validServerInt(g: any): number
+	local v = g:int(1, 38)
+	if v % 5 == 0 then
+		v += 1
+	end
+	return v
+end
+
+local FluxSyncSpec = sert.sim.spec({
+	name = "FluxSync",
+	init = function()
+		return {
+			v = 1,
+			other = "a",
+			hasOwn = false,
+			own = {},
+			expectedOverrides = {},
+		}
+	end,
+	project = function(sut: any)
+		local own = {}
+		local rawOwn = sut.value._own
+		if rawOwn ~= nil then
+			for idx, client in sut.players do
+				local node = rawOwn[client]
+				if node ~= nil then
+					own[idx] = node:peek()
+				end
+			end
+		end
+		return {
+			v = sut.value:peek(),
+			other = sut.other:peek(),
+			hasOwn = rawOwn ~= nil,
+			own = own,
+			expectedOverrides = table.clone(sut.expectedOverrides),
+		}
+	end,
+	actions = {
+		serverWriteV = {
+			gen = { 1, 2, 6, 14, 28, 39 },
+			next = function(state, val)
+				state.expectedOverrides = table.clone(state.own)
+				state.v = val
+			end,
+		},
+		serverWritePlayerV = {
+			gen = {
+				{ player = 1, value = 2 },
+				{ player = 2, value = 7 },
+				{ player = 3, value = 19 },
+			},
+			next = function(state, arg)
+				state.hasOwn = true
+				state.own[arg.player] = arg.value
+				state.expectedOverrides[arg.player] = arg.value
+			end,
+		},
+		serverClearPlayerV = {
+			gen = { 1, 2, 3 },
+			next = function(state, idx)
+				state.own[idx] = nil
+				state.expectedOverrides[idx] = nil
+			end,
+		},
+		clientWriteV = {
+			gen = {
+				{ player = 1, value = 5 },
+				{ player = 1, value = 12 },
+				{ player = 2, value = 45 },
+			},
+			next = function() end,
+		},
+		serverWriteOther = {
+			gen = { "a", "b", "c" },
+			next = function(state, val)
+				state.other = val
+			end,
+		},
+		touchPlayerV = {
+			gen = { 1, 2, 3 },
+			next = function(state, idx)
+				state.hasOwn = true
+				if state.own[idx] == nil then
+					state.own[idx] = state.v
+				end
+				state.expectedOverrides[idx] = state.own[idx]
+			end,
+		},
+		flushServer = {
+			next = function() end,
+		},
+		flushClient = {
+			gen = { 1, 2, 3 },
+			next = function() end,
+		},
+		deliverServer = {
+			gen = {
+				{ joined = false, hasValue = false, player = 1, value = 0 },
+				{ joined = true, hasValue = true, player = 1, value = 5 },
+				{ joined = true, hasValue = true, player = 1, value = 12 },
+				{ joined = true, hasValue = true, player = 2, value = 45 },
+			},
+			next = function(state, arg, result)
+				local packet = if result ~= nil then result else arg
+				if packet ~= nil and packet.joined and packet.hasValue then
+					local ok, sanitized = validateSyncV(nil, packet.value)
+					if ok and sanitized ~= nil then
+						if state.hasOwn then
+							state.own[packet.player] = sanitized
+							state.expectedOverrides[packet.player] = sanitized
+						else
+							state.v = sanitized
+						end
+					end
+				end
+			end,
+		},
+		deliverClient = {
+			gen = { 1, 2, 3 },
+			next = function() end,
+		},
+	},
+	never = {
+		unvalidatedServerValue = function(state)
+			if state.v % 5 == 0 or state.v > 40 then
+				return true
+			end
+			for _, v in state.own do
+				if v % 5 == 0 or v > 40 then
+					return true
+				end
+			end
+			return false
+		end,
+		sharedWriteClobbersOverride = function(state)
+			for idx, expected in state.expectedOverrides do
+				if state.own[idx] ~= expected then
+					return true
+				end
+			end
+			return false
+		end,
+	},
+	invariants = {
+		authoritativeStateValid = function(state, sut)
+			sert(state.v >= 1 and state.v <= 39 and state.v % 5 ~= 0, "server V stays sanitized")
+			sert(state.other == "a" or state.other == "b" or state.other == "c", "server Other stays valid")
+			if sut ~= nil then
+				sert.eq(sut.value:peek(), state.v, "sut.value matches spec state.v")
+				sert.eq(sut.other:peek(), state.other, "sut.other matches spec state.other")
+			end
+		end,
+	},
+})
+
+sert.sim.checkSpec("sync · pure state specification holds", FluxSyncSpec, {
+	maxStates = 200,
+	maxDepth = 6,
+})
+
 sert.prop("sync · random writes and delivery orders converge to the server's values", function(g)
 	local w = world(3)
 	local players = w.clients
-	local value = w.server("V", 0, function(_, v)
-		if type(v) ~= "number" or v % 5 == 0 then
-			return false
-		end
-		return true, math.min(v, 40)
-	end)
+	local value = w.server("V", 1, validateSyncV)
 	local other = w.server("Other", "a")
+	local sut = {
+		world = w,
+		players = players,
+		value = value,
+		other = other,
+		expectedOverrides = {},
+	}
 	for _, client in players do
 		if g:bool() then
 			client.inst:start()
 		end
 	end
-	for _ = 1, g:int(1, g.size) do
-		local client = g:pick(players)
+
+	local specState = FluxSyncSpec.def.init()
+	local trace = {}
+	for step = 1, g:int(1, g.size) do
+		local idx = g:int(1, #players)
+		local client = players[idx]
 		local op = g:int(1, 10)
+		local actionName: string
+		local arg: any = nil
+		local result: any = nil
+
 		if op == 1 then
-			value(g:int(0, 60))
+			actionName = "serverWriteV"
+			arg = validServerInt(g)
+			local rawOwn = value._own
+			sut.expectedOverrides = {}
+			if rawOwn ~= nil then
+				for i, p in players do
+					if rawOwn[p] ~= nil then
+						sut.expectedOverrides[i] = rawOwn[p]:peek()
+					end
+				end
+			end
+			value(arg)
 		elseif op == 2 then
-			value:of(client)(g:int(0, 60))
+			actionName = "serverWritePlayerV"
+			local v = validServerInt(g)
+			arg = { player = idx, value = v }
+			value:of(client)(v)
+			sut.expectedOverrides[idx] = v
 		elseif op == 3 then
+			actionName = "serverClearPlayerV"
+			arg = idx
 			value:clear(client)
+			sut.expectedOverrides[idx] = nil
 		elseif op == 4 then
-			client.sync.V(g:int(0, 60))
+			actionName = "clientWriteV"
+			local v = g:int(0, 60)
+			arg = { player = idx, value = v }
+			client.sync.V(v)
 		elseif op == 5 then
-			other(g:pick({ "a", "b", "c" }))
+			actionName = "serverWriteOther"
+			arg = g:pick({ "a", "b", "c" })
+			other(arg)
 		elseif op == 6 then
+			actionName = "flushServer"
 			w.serverInst:flush()
 		elseif op == 7 then
+			actionName = "flushClient"
+			arg = idx
 			client.inst:flush()
 		elseif op == 8 then
-			w.deliverServer()
+			actionName = "deliverServer"
+			local msg = w.toServer[1]
+			if msg ~= nil then
+				local sender = msg[1]
+				local senderIdx = table.find(players, sender) or 1
+				local wasJoined = w.serverInst.received[sender] ~= nil
+				local hasValue = msg.n >= 3 and msg[2] == "\0"
+				result = {
+					joined = wasJoined,
+					hasValue = hasValue,
+					player = senderIdx,
+					value = msg[3],
+				}
+				w.deliverServer()
+				local rawOwn = value._own
+				if rawOwn ~= nil and rawOwn[sender] ~= nil then
+					sut.expectedOverrides[senderIdx] = rawOwn[sender]:peek()
+				end
+			else
+				result = { joined = false, hasValue = false, player = 1, value = 0 }
+				w.deliverServer()
+			end
 		elseif op == 9 then
-			value:of(client) -- per-player use without a write
+			actionName = "touchPlayerV"
+			arg = idx
+			local node = value:of(client)
+			sut.expectedOverrides[idx] = node:peek()
 		else
+			actionName = "deliverClient"
+			arg = idx
 			w.deliverClient(client)
 		end
+
+		specState = FluxSyncSpec:step(specState, actionName, arg, result, sut)
+		table.insert(trace, {
+			step = step,
+			action = actionName,
+			arg = arg,
+			result = result,
+			state = FluxSyncSpec.def.project(sut),
+		})
 	end
+
+	FluxSyncSpec:verifyTrace(trace)
+
 	for _, client in players do
 		client.inst:start()
 	end
@@ -540,6 +782,115 @@ sert.prop("sync · random writes and delivery orders converge to the server's va
 	end
 	w.destroy()
 end, { runs = 150, size = 40 })
+
+test("sync · replicates across sert.sim server and client peers over RemoteEvents", function()
+	local simWorld = sert.sim.new({ mode = "random", faults = "light", seed = 0x51A0 })
+	local srv = simWorld:server()
+	local srvEnv = srv:env()
+	local c1 = srv:client(101)
+	local c2 = srv:client(102)
+	local c1Env = c1:env()
+	local c2Env = c2:env()
+
+	local srvRep = srvEnv.game:GetService("ReplicatedStorage")
+	local srvReliable = srvEnv.Instance.new("RemoteEvent", srvRep)
+	srvReliable.Name = "SyncEvent"
+	local srvUnreliable = srvEnv.Instance.new("UnreliableRemoteEvent", srvRep)
+	srvUnreliable.Name = "SyncUnreliable"
+
+	local serverSync, serverInst = create(true, srvReliable, srvUnreliable)
+	srvReliable.OnServerEvent:Connect(function(player, ...)
+		serverInst:receive(player, ...)
+	end)
+	srvEnv.game:GetService("Players").PlayerRemoving:Connect(function(player)
+		serverInst:leave(player)
+	end)
+
+	local score = serverSync("Score", 10)
+	local bid = serverSync("Bid", 1, function(_, v)
+		if type(v) ~= "number" or v < 0 then
+			return false
+		end
+		return true, math.min(v, 100)
+	end)
+	local aim = serverSync("Aim", 0):unreliable()
+
+	local function bindClient(cEnv: any)
+		local rep = cEnv.game:GetService("ReplicatedStorage")
+		local rel = rep:FindFirstChild("SyncEvent")
+		local unrel = rep:FindFirstChild("SyncUnreliable")
+		local cSync, cInst = create(false, rel, unrel)
+		rel.OnClientEvent:Connect(function(...)
+			cInst:receive(...)
+		end)
+		unrel.OnClientEvent:Connect(function(...)
+			cInst:receive(...)
+		end)
+		return cSync, cInst
+	end
+
+	local c1Sync, c1Inst = bindClient(c1Env)
+	local c2Sync, c2Inst = bindClient(c2Env)
+	local c1Score = c1Sync("Score", 0)
+	local c2Score = c2Sync("Score", 0)
+	local c1Bid = c1Sync("Bid", 0, true)
+	local c2Bid = c2Sync("Bid", 0, true)
+	local c1Aim = c1Sync("Aim", 0)
+
+	local sendAim = false
+	simWorld:onFrame(function()
+		if sendAim then
+			aim(42)
+			aim:update()
+		end
+		serverInst:flush()
+		c1Inst:flush()
+		c2Inst:flush()
+	end)
+
+	-- 1. Handshake & initial state sync
+	c1Inst:start()
+	c2Inst:start()
+	simWorld:runUntil(function()
+		return c1Inst.joined and c2Inst.joined and c1Score() == 10 and c2Score() == 10
+	end, 2)
+	expect.eq(c1Score(), 10, "client 1 received initial Score on handshake")
+	expect.eq(c2Score(), 10, "client 2 received initial Score on handshake")
+
+	-- 2. Server broadcast & per-player :of(player) override
+	local p1OnServer = srvEnv.game:GetService("Players"):GetPlayerByUserId(101)
+	score(25)
+	score:of(p1OnServer)(99)
+	simWorld:runUntil(function()
+		return c1Score() == 99 and c2Score() == 25
+	end, 2)
+	expect.eq(c1Score(), 99, "client 1 receives per-player override")
+	expect.eq(c2Score(), 25, "client 2 receives shared broadcast")
+
+	-- 3. Client-to-server validated write (clamped to 100) and rejected write (< 0)
+	c1Bid(250)
+	simWorld:runUntil(function()
+		return bid() == 100 and c2Bid() == 100
+	end, 2)
+	expect.eq(bid(), 100, "server clamps client 1 bid to 100")
+	expect.eq(c2Bid(), 100, "client 2 receives sanitized bid")
+
+	c2Bid(-50)
+	simWorld:run(0.5)
+	expect.eq(bid(), 100, "negative client write is rejected by server validator")
+
+	-- 4. Unreliable sync updates
+	sendAim = true
+	simWorld:runUntil(function()
+		return c1Aim() == 42
+	end, 2)
+	sendAim = false
+	expect.eq(c1Aim(), 42, "unreliable sync value arrives at client 1")
+
+	serverInst:destroy()
+	c1Inst:destroy()
+	c2Inst:destroy()
+end)
 
 sert.rtest("sync · the default instance creates its remotes on the server without yielding", function()
 	local RunService = game:GetService("RunService")

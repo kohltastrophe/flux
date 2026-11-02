@@ -141,11 +141,26 @@ test("clock · cancel stops a delay, a deferred call and a wait", function()
 			table.insert(ran, "wait")
 		end)
 		coroutine.resume(waiting)
+		local selfThread = coroutine.create(function()
+			local me = coroutine.running()
+			Clock.delay(0.1, me)
+			Clock.defer(me)
+			Clock.cancel(me)
+			coroutine.yield()
+			table.insert(ran, "self")
+		end)
+		coroutine.resume(selfThread)
 		Clock.cancel(delayed)
 		Clock.cancel(deferred)
 		Clock.cancel(waiting)
+		if not IS_ROBLOX then
+			eq(coroutine.status(waiting), "dead", "cancelled suspended thread is closed")
+		end
 		Clock.step(0.2)
 		eq(ran, {}, "nothing cancelled runs")
+		if not IS_ROBLOX then
+			coroutine.close(selfThread)
+		end
 	end)
 end)
 
@@ -189,19 +204,28 @@ test("clock · a frame runs render subscribers, then Flux's step and flush, then
 		Clock.connect("Heartbeat", function()
 			table.insert(order, "heartbeat")
 		end)
+		Clock.delay(0, function()
+			table.insert(order, "timer")
+			Clock.defer(function()
+				table.insert(order, "timer-defer")
+			end)
+		end)
 		Clock.connect("PreRender", function()
 			table.insert(order, "prerender")
+			Clock.defer(function()
+				table.insert(order, "render-defer")
+			end)
 			value:set(value:get() + 1)
 		end)
 		local disconnect = Clock.connect("RenderStepped", function()
 			table.insert(order, "renderstepped")
 		end)
 		Clock.step(1 / 60)
-		eq(order, { "prerender", "renderstepped", "flush", "heartbeat" })
+		eq(order, { "timer", "timer-defer", "prerender", "renderstepped", "render-defer", "flush", "heartbeat" })
 		disconnect()
 		table.clear(order)
 		Clock.step(1 / 60)
-		eq(order, { "prerender", "flush", "heartbeat" }, "a disconnected subscriber stops")
+		eq(order, { "prerender", "render-defer", "flush", "heartbeat" }, "a disconnected subscriber stops")
 		fails(function()
 			Clock.connect("Stepped" :: any, function() end)
 		end, "unknown phase")
@@ -265,6 +289,9 @@ test("compat · headless stubs and arithmetic metamethods behave consistently", 
 	expect(u2 == U2.new(0.5, 0, 0.25, 0) and U2.fromOffset(10, 20) == U2.new(0, 10, 0, 20), "UDim2 constructors")
 
 	local v2 = (V2.new(3, 4) + V2.new(1, 2) - V2.new(1, 2)) * 2 / 2
+	eq(v2.X, 3)
+	eq(v2.Y, 4)
+	eq(V2.new().X, 0)
 	expect(v2 == V2.new(3, 4) and -v2 == V2.new(-3, -4), "Vector2 arithmetic")
 	expect(V2.zero:Lerp(V2.new(1, 1), 0.5) == V2.new(0.5, 0.5), "Vector2 Lerp")
 
@@ -274,8 +301,31 @@ test("compat · headless stubs and arithmetic metamethods behave consistently", 
 
 	expect(C3.fromHex("#ff8000") == C3.fromRGB(255, 128, 0), "Color3.fromHex 6-digit")
 	expect(C3.fromHex("f0f") == C3.fromRGB(255, 0, 255), "Color3.fromHex 3-digit")
+	fails(function()
+		C3.fromHex("1234")
+	end)
+	fails(function()
+		C3.fromHex("zzzzzz")
+	end)
 	expect(C3.fromRGB(255, 128, 0):ToHex() == "ff8000", "Color3:ToHex")
 	expect(C3.new(0, 0, 0):Lerp(C3.new(1, 0.5, 0.25), 0.5) == C3.new(0.5, 0.25, 0.125), "Color3:Lerp")
+
+	local kp = Compat.NumberSequenceKeypoint.new(0, 1, 0.5)
+	eq(kp.Envelope, 0.5)
+	eq(Compat.NumberSequenceKeypoint.new(0, 1).Envelope, 0)
+	local ns1 = Compat.NumberSequence.new(0, 1)
+	local ns2 = Compat.NumberSequence.new(0, 1)
+	local ns3 = Compat.NumberSequence.new(0, 2)
+	local ns4 = Compat.NumberSequence.new({
+		Compat.NumberSequenceKeypoint.new(0, 0),
+		Compat.NumberSequenceKeypoint.new(0.5, 0.5),
+		Compat.NumberSequenceKeypoint.new(1, 1),
+	})
+	local cs1 = Compat.ColorSequence.new(C3.new(1, 0, 0))
+	expect(ns1 == ns2, "equal NumberSequence")
+	expect(ns1 ~= ns3, "different keypoint values")
+	expect(ns1 ~= ns4, "different keypoint count")
+	expect((ns1 :: any) ~= (cs1 :: any), "different sequence metatable")
 end)
 
 test("compat · typeof reports engine names for the datatypes", function()
@@ -304,6 +354,13 @@ test("compat · an enum item's EnumType is its enum", function()
 	expect(quad.EnumType ~= Compat.Enum.EasingDirection, "and no other")
 	eq(tostring(quad), "Enum.EasingStyle.Quad")
 	eq(tostring(quad.EnumType), "EasingStyle")
+	if not IS_ROBLOX then
+		local enumName = env.fresh("CustomEnum")
+		local enumA = Compat.Enum[enumName]
+		local enumB = Compat.Enum[enumName]
+		expect(rawequal(enumA, enumB), "enum table is cached on Compat.Enum")
+		expect(rawequal(enumA.Alpha, enumA.Alpha), "enum item is cached on its enum")
+	end
 end)
 
 test("compat · TweenInfo defaults and Vector3:Lerp match the engine", function()
@@ -418,5 +475,80 @@ rtest("clock · a manual clock steps subscribers, motion and flush; engine defer
 		spring:Destroy()
 	end)
 end)
+
+local function firstExecutionTime(entry: { delay: number, seq: number }): number
+	local firedAt = 0
+	manual(function()
+		local tickOrder = 0
+		Clock.delay(0, function()
+			tickOrder += 1
+		end)
+		for _ = 1, entry.seq do
+			Clock.delay(entry.delay, function()
+				tickOrder += 1
+			end)
+		end
+		Clock.delay(entry.delay, function()
+			tickOrder += 1
+			firedAt = Clock.now() * 1e6 + tickOrder
+		end)
+		Clock.step(1.5)
+	end)
+	return firedAt
+end
+
+sert.laws.order("clock · deadline and registration sequence form a strict weak order", {
+	gen = function(g)
+		return {
+			delay = g:int(0, 20) * 0.05,
+			seq = g:int(1, 5),
+		}
+	end,
+	lt = function(a, b)
+		if a.delay ~= b.delay then
+			return a.delay < b.delay
+		end
+		return a.seq < b.seq and firstExecutionTime(a) < firstExecutionTime(b)
+	end,
+	eq = function(a, b)
+		return a.delay == b.delay and a.seq == b.seq
+	end,
+})
+
+sert.prop("clock · random delay deadlines fire in non-decreasing (deadline, sequence) order", function(g)
+	manual(function()
+		local count = g:int(2, 16)
+		local fired: { { deadline: number, seq: number, at: number } } = {}
+		local base = Clock.now()
+		for seq = 1, count do
+			local d = g:float(0, 1)
+			local deadline = base + d
+			Clock.delay(d, function()
+				table.insert(fired, {
+					deadline = deadline,
+					seq = seq,
+					at = Clock.now(),
+				})
+			end)
+		end
+		local remaining = 1.2
+		while remaining > 0 do
+			local dt = math.min(remaining, g:float(0.01, 0.25))
+			Clock.step(dt)
+			remaining -= dt
+		end
+		eq(#fired, count, "all scheduled delays fired once total step exceeded max deadline")
+		for i = 1, #fired do
+			local cur = fired[i]
+			expect(cur.at + 1e-9 >= cur.deadline, "callback never fires before its deadline")
+			if i > 1 then
+				local prev = fired[i - 1]
+				local ordered = prev.deadline < cur.deadline - 1e-9
+					or (math.abs(prev.deadline - cur.deadline) <= 1e-9 and prev.seq < cur.seq)
+				expect(ordered, "callbacks fire in non-decreasing (deadline, seq) order")
+			end
+		end
+	end)
+end, { runs = 100 })
 
 return {}
