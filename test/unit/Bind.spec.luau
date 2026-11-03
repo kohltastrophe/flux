@@ -335,10 +335,10 @@ test("bind · late Bind.children attachment, model destroy pruning, and untracke
 
 	local shared = Flux.signal("hello")
 	local sharedTag = Flux.signal(true)
-	for _ = 1, 5 do
-		local box = Flux.new("TextBox")({ Text = Flux.model(shared), _tag_Active = Flux.model(sharedTag) })
-		box:Destroy()
-	end
+	local boxA = Flux.new("TextBox")({ Text = Flux.model(shared), _tag_Active = Flux.model(sharedTag) })
+	local boxB = Flux.new("TextBox")({ Text = Flux.model(shared), _tag_Active = Flux.model(sharedTag) })
+	boxA:Destroy()
+	boxB:Destroy()
 	local afterCount = if (shared :: any)[1].destroys then #(shared :: any)[1].destroys else 0
 	local afterTagCount = if (sharedTag :: any)[1].destroys then #(sharedTag :: any)[1].destroys else 0
 	expect(
@@ -375,5 +375,252 @@ test("bind · late Bind.children attachment, model destroy pruning, and untracke
 	listenerScope:Destroy()
 	frame:Destroy()
 end)
+
+local function syncMountedChildren(sut: any, mountedIds: { number })
+	for _, c in sut.pool do
+		c.Parent = nil
+		c.LayoutOrder = 0
+	end
+	local list = {}
+	for _, id in mountedIds do
+		table.insert(list, sut.pool[id])
+	end
+	sut.childrenSig:set(list)
+	flush()
+end
+
+sert.model("bind · dynamic DOM hierarchy and two-way Flux.property/Flux.model binding reconciliation", {
+	init = function()
+		local textSig = Flux.signal("t0")
+		local attrSig = Flux.signal(10)
+		local tagSig = Flux.signal(false)
+		local childrenSig = Flux.signal({} :: { any })
+
+		local pool = {
+			Flux.new("Frame")({ Name = "Child1" }),
+			Flux.new("Frame")({ Name = "Child2" }),
+			Flux.new("Frame")({ Name = "Child3" }),
+			Flux.new("Frame")({ Name = "Child4" }),
+		}
+
+		local host, propText, propAttr, propTag
+		local scope = Flux.scope(function()
+			host = Flux.new("TextBox")({
+				Name = "BindHost",
+				Parent = workspace,
+				Text = Flux.model(textSig),
+				_attr_Score = Flux.model(attrSig),
+				_tag_Active = Flux.model(tagSig),
+				childrenSig,
+			})
+			propText = Flux.property(host, "Text")
+			propAttr = Flux.property(host, "$Score")
+			propTag = Flux.property(host, "#Active")
+		end)
+		flush()
+		settle()
+
+		local state = {
+			mounted = {} :: { number },
+			text = "t0",
+			score = 10,
+			active = false,
+		}
+		local sut = {
+			scope = scope,
+			host = host,
+			pool = pool,
+			childrenSig = childrenSig,
+			textSig = textSig,
+			attrSig = attrSig,
+			tagSig = tagSig,
+			propText = propText,
+			propAttr = propAttr,
+			propTag = propTag,
+		}
+		return state, sut
+	end,
+	teardown = function(sut)
+		sut.scope:Destroy()
+		for _, c in sut.pool do
+			c:Destroy()
+		end
+		sut.host:Destroy()
+		flush()
+		sert.eq(env.idle(Flux), nil, "zero-leak reactive state on teardown")
+		sert.eq(env.drained(Flux), nil, "zero pending effects on teardown")
+	end,
+	actions = {
+		MountChild = {
+			weight = 3,
+			gen = function(g)
+				return g:int(1, 4)
+			end,
+			run = function(sut, id, state)
+				if table.find(state.mounted, id) ~= nil then
+					return
+				end
+				local nextIds = table.clone(state.mounted)
+				table.insert(nextIds, id)
+				syncMountedChildren(sut, nextIds)
+			end,
+			next = function(state, id)
+				if table.find(state.mounted, id) == nil then
+					table.insert(state.mounted, id)
+				end
+			end,
+		},
+		UnmountChild = {
+			weight = 2,
+			gen = function(g)
+				return g:int(1, 4)
+			end,
+			run = function(sut, id, state)
+				local idx = table.find(state.mounted, id)
+				if idx == nil then
+					return
+				end
+				local nextIds = table.clone(state.mounted)
+				table.remove(nextIds, idx)
+				syncMountedChildren(sut, nextIds)
+			end,
+			next = function(state, id)
+				local idx = table.find(state.mounted, id)
+				if idx ~= nil then
+					table.remove(state.mounted, idx)
+				end
+			end,
+		},
+		ReorderChildren = {
+			weight = 2,
+			run = function(sut, _arg, state)
+				if #state.mounted < 2 then
+					return
+				end
+				local nextIds = {}
+				for i = #state.mounted, 1, -1 do
+					table.insert(nextIds, state.mounted[i])
+				end
+				syncMountedChildren(sut, nextIds)
+			end,
+			next = function(state)
+				if #state.mounted < 2 then
+					return
+				end
+				local rev = {}
+				for i = #state.mounted, 1, -1 do
+					table.insert(rev, state.mounted[i])
+				end
+				state.mounted = rev
+			end,
+		},
+		WriteSignalProp = {
+			weight = 2,
+			gen = function(g)
+				return `sig_{g:int(1, 20)}`
+			end,
+			run = function(sut, val)
+				sut.textSig:set(val)
+				flush()
+			end,
+			next = function(state, val)
+				state.text = val
+			end,
+		},
+		MutateInstanceProp = {
+			weight = 2,
+			gen = function(g)
+				return `inst_{g:int(1, 20)}`
+			end,
+			run = function(sut, val)
+				sut.host.Text = val
+				settle()
+				flush()
+			end,
+			next = function(state, val)
+				state.text = val
+			end,
+		},
+		MutateAttribute = {
+			weight = 2,
+			gen = function(g)
+				return { score = g:int(1, 50), viaInstance = g:bool() }
+			end,
+			run = function(sut, arg)
+				if arg.viaInstance then
+					sut.host:SetAttribute("Score", arg.score)
+					settle()
+				else
+					sut.attrSig:set(arg.score)
+				end
+				flush()
+			end,
+			next = function(state, arg)
+				state.score = arg.score
+			end,
+		},
+		ToggleTag = {
+			weight = 2,
+			gen = function(g)
+				return { active = g:bool(), viaInstance = g:bool() }
+			end,
+			run = function(sut, arg)
+				if arg.viaInstance then
+					if arg.active then
+						sut.host:AddTag("Active")
+					else
+						sut.host:RemoveTag("Active")
+					end
+				else
+					sut.tagSig:set(arg.active)
+					flush()
+				end
+				settle()
+				flush()
+			end,
+			next = function(state, arg)
+				state.active = arg.active
+			end,
+		},
+	},
+	never = {
+		unmountedChildRetainedInHost = function(state, sut)
+			for id, inst in sut.pool do
+				if table.find(state.mounted, id) == nil and inst.Parent ~= nil then
+					return true
+				end
+			end
+			return false
+		end,
+	},
+	invariants = {
+		childrenOrderMatchesState = function(state, sut)
+			local children = sut.host:GetChildren()
+			sert.eq(#children, #state.mounted, "mounted child count")
+			for idx, id in state.mounted do
+				local expected = sut.pool[id]
+				sert.eq(children[idx], expected, `GetChildren()[{idx}] identity`)
+				sert.eq((children[idx] :: Frame).LayoutOrder, idx, `GetChildren()[{idx}] LayoutOrder`)
+			end
+		end,
+		twoWayPropertyAndModelParity = function(state, sut)
+			sert.eq(sut.host.Text, state.text, "host.Text")
+			sert.eq(sut.textSig:peek(), state.text, "textSig")
+			sert.eq(sut.propText:peek(), state.text, "Flux.property Text")
+
+			sert.eq(sut.host:GetAttribute("Score"), state.score, "host Score attribute")
+			sert.eq(sut.attrSig:peek(), state.score, "attrSig")
+			sert.eq(sut.propAttr:peek(), state.score, "Flux.property $Score")
+
+			sert.eq(sut.host:HasTag("Active"), state.active, "host Active tag")
+			sert.eq(sut.tagSig:peek(), state.active, "tagSig")
+			sert.eq(sut.propTag:peek(), state.active, "Flux.property #Active")
+		end,
+	},
+}, {
+	runs = 120,
+	length = 16,
+	exhaustive = { size = 2 },
+})
 
 return {}

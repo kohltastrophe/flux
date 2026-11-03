@@ -1257,51 +1257,6 @@ sert.model(
 
 -- Selector ------------------------------------------------------------------------------------------------------------
 
-test("selector · unobserved keys are swept once enough new keys are read", function()
-	local active = new("kept")
-	local sel = Flux.selector(active)
-	local seenKept, seenMany, seenAgain
-	local gone = Flux.effect(function()
-		sel("gone")
-	end)
-	local kept = Flux.effect(function()
-		seenKept = sel("kept")
-	end)
-	flush()
-	gone:Destroy()
-
-	local many = Flux.effect(function()
-		local n = 0
-		for k = 1, 100 do
-			if not sel(k) then
-				n += 1
-			end
-		end
-		seenMany = n
-	end)
-	flush()
-	expect(seenMany == 100, "every key read false")
-	expect(sel._nodes.gone == nil, "the unobserved key was swept")
-	expect(seenKept == true, "an observed key reads right after the sweep")
-
-	active(7)
-	flush()
-	expect(seenMany == 99 and seenKept == false, "values flip correctly after a sweep")
-	expect(sel:get("gone") == false, "an untracked read of a swept key is right")
-	local again = Flux.effect(function()
-		seenAgain = sel("gone")
-	end)
-	flush()
-	expect(seenAgain == false, "a swept key is recreated when read again")
-	active("gone")
-	flush()
-	expect(seenAgain == true, "and the new node flips")
-	kept:Destroy()
-	many:Destroy()
-	again:Destroy()
-	sel:Destroy()
-end)
-
 test("selector · a custom equals re-tests every key after an in-place update", function()
 	local row = { id = 1 }
 	local source = new(row)
@@ -1537,8 +1492,11 @@ flickerTest("conditional & list layout · transitions settle cleanly without vis
 
 	local showBanner = Flux.signal(true)
 	local items = Flux.signal({ "Alpha", "Beta" })
+	local idxItems = Flux.signal({ 10, 20 })
 	local bannerFrame: Frame? = nil
 	local rowFrames: { [string]: Frame } = {}
+	local slotFrames: { [number]: Frame } = {}
+	local columnFrame: Frame
 
 	local screenParent = if env.IS_ROBLOX
 		then (if game:GetService("Players").LocalPlayer
@@ -1547,32 +1505,43 @@ flickerTest("conditional & list layout · transitions settle cleanly without vis
 		else env.engine.LocalPlayer.PlayerGui
 	local screen
 	local scope = Flux.scope(function()
+		columnFrame = Flux.new("Frame")({
+			Name = "Column",
+			Position = UDim2.fromOffset(16, 16),
+			Size = UDim2.fromOffset(240, 260),
+			Flux.list({ gap = 6 }),
+			Flux.show(showBanner, function()
+				local f = Flux.new("Frame")({
+					Name = "Banner",
+					LayoutOrder = 0,
+					Size = UDim2.fromOffset(240, 28),
+				})
+				bannerFrame = f
+				return f
+			end),
+			Flux.forValue(items, function(indexNode, label)
+				local row = Flux.new("Frame")({
+					Name = `Row_{label}`,
+					LayoutOrder = indexNode,
+					Size = UDim2.fromOffset(240, 24),
+				})
+				rowFrames[label] = row
+				return row
+			end),
+			Flux.forIndex(idxItems, function(idx, _valNode)
+				local slot = Flux.new("Frame")({
+					Name = `Slot_{idx}`,
+					LayoutOrder = 10 + idx,
+					Size = UDim2.fromOffset(240, 24),
+				})
+				slotFrames[idx] = slot
+				return slot
+			end),
+		})
 		screen = Flux.new("ScreenGui")({
 			Parent = screenParent,
 			Enabled = true,
-			Flux.new("Frame")({
-				Name = "Column",
-				Position = UDim2.fromOffset(16, 16),
-				Size = UDim2.fromOffset(240, 200),
-				Flux.list({ gap = 6 }),
-				Flux.show(showBanner, function()
-					local f = Flux.new("Frame")({
-						Name = "Banner",
-						Size = UDim2.fromOffset(240, 28),
-					})
-					bannerFrame = f
-					return f
-				end),
-				Flux.forValue(items, function(indexNode, label)
-					local row = Flux.new("Frame")({
-						Name = `Row_{label}`,
-						LayoutOrder = indexNode,
-						Size = UDim2.fromOffset(240, 24),
-					})
-					rowFrames[label] = row
-					return row
-				end),
-			}),
+			columnFrame,
 		})
 	end)
 	sert.defer(function()
@@ -1585,48 +1554,197 @@ flickerTest("conditional & list layout · transitions settle cleanly without vis
 	expect(settled, `initial conditional/list layout settled ({tostring(moving)})`)
 	expect(bannerFrame ~= nil and Layout.visible(bannerFrame :: any, screen), "banner is visible")
 	expect(rowFrames.Alpha ~= nil and Layout.visible(rowFrames.Alpha, screen), "Row_Alpha is visible")
+	Layout.audit(columnFrame, { fitsParent = true })
 
+	-- Insertion across forValue and forIndex
 	local enterResult = Flicker.around(function()
 		return rowFrames.Gamma
 	end, function()
 		items:set({ "Alpha", "Beta", "Gamma" })
+		idxItems:set({ 10, 20, 30 })
 	end, { runService = rs, stable = 2, label = "Row_Gamma enter" })
 	Flicker.expect(enterResult, "Row_Gamma enter")
+	Layout.audit(columnFrame, { fitsParent = true })
 
-	local reorderResult = Flicker.around(function()
+	-- Permutation across forValue and forIndex
+	local permuteResult = Flicker.around(function()
+		return rowFrames.Gamma
+	end, function()
+		items:set({ "Gamma", "Alpha", "Beta" })
+		idxItems:set({ 30, 10, 20 })
+	end, { runService = rs, stable = 2, motion = 60, label = "Row_Gamma permutation" })
+	Flicker.expect(permuteResult, "Row_Gamma permutation")
+	Layout.audit(columnFrame, { fitsParent = true })
+
+	-- Removal across forValue, forIndex, and conditional banner hide
+	local removeResult = Flicker.around(function()
 		return rowFrames.Beta
 	end, function()
 		showBanner:set(false)
-	end, { runService = rs, stable = 2, motion = 34, label = "Row_Beta shift on banner hide" })
-	Flicker.expect(reorderResult, "Row_Beta shift on banner hide")
+		items:set({ "Gamma", "Beta" })
+		idxItems:set({ 30, 20 })
+	end, { runService = rs, stable = 2, motion = 64, label = "Row_Beta shift on removal and banner hide" })
+	Flicker.expect(removeResult, "Row_Beta shift on removal and banner hide")
+	Layout.audit(columnFrame, { fitsParent = true })
 
 	local settledAfter, movingAfter = Layout.settle(screen, { step = env.frame, lead = 1, stable = 2 })
 	expect(settledAfter, `post-transition layout settled ({tostring(movingAfter)})`)
 end)
 
-test("selector · a key read only by an unobserved computed stays right across a sweep", function()
-	local active = new("a")
-	local sel = Flux.selector(active)
-	local lazy = Flux.computed(function()
-		return sel("x")
-	end)
-	expect(lazy() == false, "not selected")
-	local many = Flux.effect(function()
-		for k = 1, 100 do
-			sel(k)
+sert.model("selector · subscription lifecycle and cache sweeping evicts unobserved keys and preserves active keys", {
+	init = function()
+		local active = Flux.signal("k1")
+		local sel = Flux.selector(active)
+		local lazyComputeds: { [string]: any } = {}
+		local subs: { [string]: any } = {}
+		local seen: { [string]: boolean } = {}
+		local scope = Flux.scope(function()
+			for i = 1, 4 do
+				local k = `k{i}`
+				lazyComputeds[k] = Flux.computed(function()
+					return sel(k)
+				end)
+			end
+		end)
+		local state = {
+			active = "k1",
+			subscribed = { k1 = false, k2 = false, k3 = false, k4 = false } :: { [string]: boolean },
+			sweptSinceUnsub = false,
+		}
+		local sut = {
+			scope = scope,
+			active = active,
+			sel = sel,
+			lazyComputeds = lazyComputeds,
+			subs = subs,
+			seen = seen,
+			probeCounter = 0,
+		}
+		return state, sut
+	end,
+	teardown = function(sut)
+		for _, eff in sut.subs do
+			eff:Destroy()
 		end
-	end)
-	flush()
-	expect(sel._nodes.x == nil, "the key read only by an unobserved computed was swept")
-	active("x")
-	flush()
-	expect(lazy() == true, "the computed re-runs on its next read and sees the new selection")
-	active("a")
-	flush()
-	expect(lazy() == false, "and keeps following it")
-	many:Destroy()
-	sel:Destroy()
-end)
+		sut.scope:Destroy()
+		sut.sel:Destroy()
+		flush()
+	end,
+	actions = {
+		SelectKey = {
+			weight = 3,
+			gen = function(g)
+				return `k{g:int(1, 4)}`
+			end,
+			run = function(sut, key)
+				sut.active:set(key)
+				flush()
+			end,
+			next = function(state, key)
+				state.active = key
+			end,
+		},
+		SubscribeKey = {
+			weight = 3,
+			gen = function(g)
+				return `k{g:int(1, 4)}`
+			end,
+			run = function(sut, key)
+				if sut.subs[key] ~= nil then
+					return
+				end
+				sut.subs[key] = Flux.effect(function()
+					sut.seen[key] = sut.sel(key)
+				end)
+				flush()
+			end,
+			next = function(state, key)
+				state.subscribed[key] = true
+			end,
+		},
+		UnsubscribeKey = {
+			weight = 2,
+			gen = function(g)
+				return `k{g:int(1, 4)}`
+			end,
+			run = function(sut, key)
+				local eff = sut.subs[key]
+				if eff ~= nil then
+					sut.subs[key] = nil
+					sut.seen[key] = nil
+					eff:Destroy()
+				end
+			end,
+			next = function(state, key)
+				state.subscribed[key] = false
+				state.sweptSinceUnsub = false
+			end,
+		},
+		ReadLazyComputed = {
+			weight = 2,
+			gen = function(g)
+				return `k{g:int(1, 4)}`
+			end,
+			run = function(sut, key, state)
+				sert.eq(sut.lazyComputeds[key](), state.active == key, `lazy computed for {key}`)
+			end,
+			next = function(state)
+				state.sweptSinceUnsub = false
+			end,
+		},
+		TriggerSweep = {
+			weight = 2,
+			run = function(sut)
+				sut.probeCounter += 1
+				local probeKey = `probe_{sut.probeCounter}`
+				(sut.sel :: any)._sweepAt = 0
+				local c = Flux.computed(function()
+					return sut.sel(probeKey)
+				end)
+				c()
+				c:Destroy()
+				flush()
+			end,
+			next = function(state)
+				state.sweptSinceUnsub = true
+			end,
+		},
+	},
+	never = {
+		unobservedKeyRetainedAfterSweep = function(state, sut)
+			if not state.sweptSinceUnsub then
+				return false
+			end
+			for k, isSub in state.subscribed do
+				if not isSub and (sut.sel :: any)._nodes[k] ~= nil then
+					return true
+				end
+			end
+			return false
+		end,
+	},
+	invariants = {
+		activeSubscribersAndLazyComputedsMatchSelection = function(state, sut)
+			local activeCount = 0
+			for k, isSub in state.subscribed do
+				local want = state.active == k
+				if isSub then
+					activeCount += 1
+					sert.eq(sut.seen[k], want, `subscribed effect for {k}`)
+					expect((sut.sel :: any)._nodes[k] ~= nil, `subscribed key {k} retained in _nodes`)
+				end
+				sert.eq(sut.sel:get(k), want, `untracked sel:get({k})`)
+			end
+			if state.sweptSinceUnsub then
+				sert.eq((sut.sel :: any)._count, activeCount, "swept _count matches active subscriber count")
+			end
+		end,
+	},
+}, {
+	runs = 120,
+	length = 16,
+	exhaustive = { size = 2 },
+})
 
 local lastDynamicControls: {
 	showAlert: any,

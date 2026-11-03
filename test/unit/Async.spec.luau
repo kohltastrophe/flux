@@ -389,4 +389,319 @@ test("gate · gating off after an error clears the error", function()
 	a:Destroy()
 end)
 
+local asyncLifecycleSpec = {
+	init = function()
+		local source = Flux.signal(1 :: any)
+		local state = {
+			requestSeq = 0,
+			activeSeq = nil :: number?,
+			inFlight = {} :: { [number]: { seq: number, input: any, settled: boolean } },
+			status = "unresolved" :: string,
+			value = "init" :: any,
+			error = nil :: string?,
+			resolved = false,
+			gated = false,
+			sourceVal = 1,
+			mutatedAtSeq = 0,
+			lastMutateValue = nil :: any,
+			destroyed = false,
+			snapshotAtDestroy = nil :: { status: string, value: any, error: string?, loading: boolean }?,
+			staleOverwrote = false,
+			inFlightOverwroteMutate = false,
+			updatedAfterDestroy = false,
+		}
+		local sut: any = {
+			source = source,
+			threads = {} :: { [number]: thread },
+			node = nil :: any,
+			scope = nil :: any,
+		}
+		sut.scope = Flux.scope(function()
+			sut.node = Async(source, function(v)
+				state.requestSeq += 1
+				local mySeq = state.requestSeq
+				state.activeSeq = mySeq
+				state.inFlight[mySeq] = {
+					seq = mySeq,
+					input = v,
+					settled = false,
+				}
+				sut.threads[mySeq] = coroutine.running()
+				local ok, payload = coroutine.yield()
+				if not ok then
+					error(payload, 0)
+				end
+				return payload
+			end, "init")
+		end)
+		flush()
+		state.status = "pending"
+		return state, sut
+	end,
+	teardown = function(sut)
+		if sut.scope ~= nil then
+			sut.scope:Destroy()
+			sut.scope = nil
+		end
+		for _, th in sut.threads do
+			if coroutine.status(th) == "suspended" then
+				coroutine.close(th)
+			end
+		end
+		table.clear(sut.threads)
+		env.reset()
+		local idleErr = env.idle(Flux)
+		if idleErr ~= nil then
+			error(idleErr, 0)
+		end
+	end,
+	commands = {
+		ChangeSource = {
+			gen = function(g)
+				return g:int(1, 8)
+			end,
+			run = function(sut, val, state)
+				local beforeSeq = state.requestSeq
+				sut.source(val)
+				flush()
+				return state.requestSeq > beforeSeq
+			end,
+			next = function(state, val, spawned)
+				state.sourceVal = val
+				if not state.destroyed then
+					state.gated = false
+					if spawned then
+						state.error = nil
+						state.status = if state.resolved then "refreshing" else "pending"
+					end
+				end
+			end,
+		},
+		ToggleGate = {
+			gen = function(g)
+				return g:bool()
+			end,
+			run = function(sut, gatedOff, state)
+				local beforeSeq = state.requestSeq
+				if gatedOff then
+					sut.source(false)
+				else
+					sut.source(state.sourceVal)
+				end
+				flush()
+				return state.requestSeq > beforeSeq
+			end,
+			next = function(state, gatedOff, spawned)
+				if state.destroyed then
+					return
+				end
+				state.gated = gatedOff
+				if gatedOff then
+					state.activeSeq = nil
+					state.error = nil
+					state.status = if state.resolved then "ready" else "unresolved"
+				elseif spawned then
+					state.error = nil
+					state.status = if state.resolved then "refreshing" else "pending"
+				end
+			end,
+		},
+		Refetch = {
+			run = function(sut, _, state)
+				local beforeSeq = state.requestSeq
+				sut.node:refetch("manual")
+				return state.requestSeq > beforeSeq
+			end,
+			next = function(state, _, spawned)
+				if not state.destroyed and not state.gated and spawned then
+					state.error = nil
+					state.status = if state.resolved then "refreshing" else "pending"
+				end
+			end,
+		},
+		Mutate = {
+			gen = function(g)
+				return `mut-{g:int(1, 50)}`
+			end,
+			run = function(sut, val)
+				sut.node:mutate(val)
+			end,
+			next = function(state, val)
+				if state.destroyed then
+					return
+				end
+				state.activeSeq = nil
+				state.mutatedAtSeq = state.requestSeq
+				state.lastMutateValue = val
+				state.resolved = true
+				state.value = val
+				state.error = nil
+				state.status = "ready"
+			end,
+		},
+		ResolveInFlight = {
+			gen = function(g, state)
+				local pending: { number } = {}
+				for seq, entry in state.inFlight do
+					if not entry.settled then
+						table.insert(pending, seq)
+					end
+				end
+				if #pending == 0 then
+					return 0
+				end
+				table.sort(pending)
+				return g:pick(pending)
+			end,
+			run = function(sut, seq, state)
+				if seq == 0 then
+					return
+				end
+				local entry = state.inFlight[seq]
+				entry.settled = true
+				local th = sut.threads[seq]
+				local payload = `res-{seq}-{entry.input}`
+				local isStale = state.destroyed or state.activeSeq ~= seq
+				local wasMutatedAfter = state.mutatedAtSeq >= seq and state.activeSeq == nil
+				local beforeVal = if not state.destroyed then sut.node.data:peek() else nil
+				if th ~= nil and coroutine.status(th) == "suspended" then
+					coroutine.resume(th, true, payload)
+				end
+				if state.destroyed then
+					if sut.node._effect ~= nil then
+						state.updatedAfterDestroy = true
+					end
+				elseif isStale then
+					if sut.node.data:peek() ~= beforeVal then
+						state.staleOverwrote = true
+						if wasMutatedAfter then
+							state.inFlightOverwroteMutate = true
+						end
+					end
+				end
+				return payload
+			end,
+			next = function(state, seq, payload)
+				if seq == 0 or state.destroyed then
+					return
+				end
+				if state.activeSeq == seq then
+					state.activeSeq = nil
+					state.resolved = true
+					state.value = payload
+					state.error = nil
+					state.status = "ready"
+				end
+			end,
+		},
+		RejectInFlight = {
+			gen = function(g, state)
+				local pending: { number } = {}
+				for seq, entry in state.inFlight do
+					if not entry.settled then
+						table.insert(pending, seq)
+					end
+				end
+				if #pending == 0 then
+					return 0
+				end
+				table.sort(pending)
+				return g:pick(pending)
+			end,
+			run = function(sut, seq, state)
+				if seq == 0 then
+					return
+				end
+				local entry = state.inFlight[seq]
+				entry.settled = true
+				local th = sut.threads[seq]
+				local errMsg = `err-{seq}`
+				local isStale = state.destroyed or state.activeSeq ~= seq
+				local wasMutatedAfter = state.mutatedAtSeq >= seq and state.activeSeq == nil
+				local beforeState = if not state.destroyed then sut.node.state:peek() else nil
+				if th ~= nil and coroutine.status(th) == "suspended" then
+					coroutine.resume(th, false, errMsg)
+				end
+				if state.destroyed then
+					if sut.node._effect ~= nil then
+						state.updatedAfterDestroy = true
+					end
+				elseif isStale then
+					if sut.node.state:peek() ~= beforeState or sut.node.error:peek() == errMsg then
+						state.staleOverwrote = true
+						if wasMutatedAfter then
+							state.inFlightOverwroteMutate = true
+						end
+					end
+				end
+				return errMsg
+			end,
+			next = function(state, seq, errMsg)
+				if seq == 0 or state.destroyed then
+					return
+				end
+				if state.activeSeq == seq then
+					state.activeSeq = nil
+					state.error = errMsg
+					state.status = "errored"
+				end
+			end,
+		},
+		Destroy = {
+			weight = 1,
+			run = function(sut, _, state)
+				if not state.destroyed then
+					state.snapshotAtDestroy = {
+						status = sut.node.state:peek(),
+						value = sut.node.data:peek(),
+						error = sut.node.error:peek(),
+						loading = sut.node.loading:peek(),
+					}
+				end
+				sut.scope:Destroy()
+			end,
+			next = function(state)
+				state.destroyed = true
+				state.activeSeq = nil
+			end,
+		},
+	},
+	never = {
+		staleRequestOverwroteLatest = function(state)
+			return state.staleOverwrote
+		end,
+		inFlightOverwroteManualMutate = function(state)
+			return state.inFlightOverwroteMutate
+		end,
+		updatedAfterDestroy = function(state, sut)
+			if not state.destroyed then
+				return false
+			end
+			return state.updatedAfterDestroy or sut.node._effect ~= nil
+		end,
+	},
+	invariants = {
+		lifecycleMatchesReference = function(state, sut)
+			if state.destroyed then
+				expect(sut.node._effect == nil, "destroyed Async node cleared its internal effect")
+				return
+			end
+			local expectedLoading = state.activeSeq ~= nil
+			expect.eq(sut.node.state:peek(), state.status, "Async.state matches reference status")
+			expect.eq(sut.node.loading:peek(), expectedLoading, "Async.loading matches reference activeSeq")
+			expect.eq(sut.node.data:peek(), state.value, "Async.data matches reference value")
+			expect.eq(sut.node.error:peek(), state.error, "Async.error matches reference error")
+		end,
+	},
+}
+
+sert.model(
+	"async · lifecycle state machine holds across source changes, gates, mutate, out-of-order resolution and destroy",
+	asyncLifecycleSpec,
+	{
+		runs = 120,
+		length = 30,
+	}
+)
+
 return {}

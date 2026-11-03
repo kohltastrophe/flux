@@ -875,153 +875,270 @@ end)
 
 local TAG_POOL = { { "A" }, { "B" }, { "A", "B" }, { "B", "C" }, {} }
 
-sert.model("edit · reactive properties, attributes, tags and two-way models stay synchronized", {
-	init = function()
-		local textSig = Flux.signal("t0")
-		local attrSig = Flux.signal(1)
-		local tagBool = Flux.signal(false)
-		local tagSet = Flux.signal({ "A" } :: any)
+local function syncEditChildren(sut: any, mountedIds: { number })
+	for _, c in sut.pool do
+		c.Parent = nil
+		c.LayoutOrder = 0
+	end
+	local list = {}
+	for _, id in mountedIds do
+		table.insert(list, sut.pool[id])
+	end
+	sut.childrenSig:set(list)
+	flush()
+end
 
-		local box
-		local scope = Flux.scope(function()
-			box = Flux.new("TextBox")({
-				Text = Flux.model(textSig),
-				_attr_Score = Flux.model(attrSig),
-				_tag_Flag = tagBool,
-				__TAG = { "Static", tagSet },
-			})
-		end)
-		flush()
+sert.model(
+	"edit · dynamic DOM hierarchy, reactive properties, attributes, tags and two-way models stay synchronized",
+	{
+		init = function()
+			local textSig = Flux.signal("t0")
+			local attrSig = Flux.signal(1)
+			local tagBool = Flux.signal(false)
+			local tagSet = Flux.signal({ "A" } :: any)
+			local childrenSig = Flux.signal({} :: { any })
 
-		local state = {
-			expectedText = "t0",
-			expectedAttr = 1,
-			expectedFlag = false,
-			expectedSet = { "A" } :: { string },
-		}
-		local sut = {
-			scope = scope,
-			box = box,
-			textSig = textSig,
-			attrSig = attrSig,
-			tagBool = tagBool,
-			tagSet = tagSet,
-		}
-		return state, sut
-	end,
-	teardown = function(sut)
-		sut.scope:Destroy()
-		Flux.flush()
-	end,
-	actions = {
-		nodeText = {
-			weight = 2,
-			gen = function(g)
-				return "n" .. tostring(g:int(1, 9))
-			end,
-			run = function(sut, text)
-				sut.textSig:set(text)
-				flush()
-			end,
-			next = function(state, text)
-				state.expectedText = text
-			end,
-		},
-		instText = {
-			weight = 2,
-			gen = function(g)
-				return "i" .. tostring(g:int(1, 9))
-			end,
-			run = function(sut, text)
-				sut.box.Text = text
-				settle()
-				flush()
-			end,
-			next = function(state, text)
-				state.expectedText = text
-			end,
-		},
-		nodeAttr = {
-			weight = 2,
-			gen = function(g)
-				return g:int(1, 20)
-			end,
-			run = function(sut, score)
-				sut.attrSig:set(score)
-				flush()
-			end,
-			next = function(state, score)
-				state.expectedAttr = score
-			end,
-		},
-		instAttr = {
-			weight = 2,
-			gen = function(g)
-				return g:int(1, 20)
-			end,
-			run = function(sut, score)
-				sut.box:SetAttribute("Score", score)
-				settle()
-				flush()
-			end,
-			next = function(state, score)
-				state.expectedAttr = score
-			end,
-		},
-		flag = {
-			weight = 2,
-			gen = function(g)
-				return g:bool()
-			end,
-			run = function(sut, flag)
-				sut.tagBool:set(flag)
-				flush()
-			end,
-			next = function(state, flag)
-				state.expectedFlag = flag
-			end,
-		},
-		tags = {
-			weight = 2,
-			gen = function(g)
-				return TAG_POOL[g:int(1, #TAG_POOL)]
-			end,
-			run = function(sut, set)
-				sut.tagSet:set(set)
-				flush()
-			end,
-			next = function(state, set)
-				state.expectedSet = set
-			end,
-		},
-	},
-	never = {
-		staticTagLost = function(_state, sut)
-			return not sut.box:HasTag("Static")
+			local pool = {
+				Flux.new("Frame")({ Name = "EditChild1" }),
+				Flux.new("Frame")({ Name = "EditChild2" }),
+				Flux.new("Frame")({ Name = "EditChild3" }),
+			}
+
+			local box, propText, propAttr, propFlag
+			local scope = Flux.scope(function()
+				box = Flux.new("TextBox")({
+					Parent = workspace,
+					Text = Flux.model(textSig),
+					_attr_Score = Flux.model(attrSig),
+					_tag_Flag = Flux.model(tagBool),
+					__TAG = { "Static", tagSet },
+					childrenSig,
+				})
+				propText = Flux.property(box, "Text")
+				propAttr = Flux.property(box, "$Score")
+				propFlag = Flux.property(box, "#Flag")
+			end)
+			flush()
+			settle()
+
+			local state = {
+				mounted = {} :: { number },
+				expectedText = "t0",
+				expectedAttr = 1,
+				expectedFlag = false,
+				expectedSet = { "A" } :: { string },
+			}
+			local sut = {
+				scope = scope,
+				box = box,
+				pool = pool,
+				childrenSig = childrenSig,
+				textSig = textSig,
+				attrSig = attrSig,
+				tagBool = tagBool,
+				tagSet = tagSet,
+				propText = propText,
+				propAttr = propAttr,
+				propFlag = propFlag,
+			}
+			return state, sut
 		end,
-	},
-	invariants = {
-		textSynchronized = function(state, sut)
-			sert.eq(sut.box.Text, state.expectedText, "box.Text")
-			sert.eq(sut.textSig:peek(), state.expectedText, "textSig")
-		end,
-		attrSynchronized = function(state, sut)
-			sert.eq(sut.box:GetAttribute("Score"), state.expectedAttr, "Score attr")
-			sert.eq(sut.attrSig:peek(), state.expectedAttr, "attrSig")
-		end,
-		tagsSynchronized = function(state, sut)
-			sert.eq(sut.box:HasTag("Flag"), state.expectedFlag, "Flag tag")
-			for _, t in { "A", "B", "C" } do
-				local inSet = table.find(state.expectedSet, t) ~= nil
-				sert.eq(sut.box:HasTag(t), inSet, `tag {t}`)
+		teardown = function(sut)
+			sut.scope:Destroy()
+			for _, c in sut.pool do
+				c:Destroy()
 			end
+			sut.box:Destroy()
+			Flux.flush()
+			sert.eq(env.idle(Flux), nil, "zero-leak reactive state on teardown")
 		end,
+		actions = {
+			MountChild = {
+				weight = 2,
+				gen = function(g)
+					return g:int(1, 3)
+				end,
+				run = function(sut, id, state)
+					if table.find(state.mounted, id) ~= nil then
+						return
+					end
+					local nextIds = table.clone(state.mounted)
+					table.insert(nextIds, id)
+					syncEditChildren(sut, nextIds)
+				end,
+				next = function(state, id)
+					if table.find(state.mounted, id) == nil then
+						table.insert(state.mounted, id)
+					end
+				end,
+			},
+			UnmountChild = {
+				weight = 2,
+				gen = function(g)
+					return g:int(1, 3)
+				end,
+				run = function(sut, id, state)
+					local idx = table.find(state.mounted, id)
+					if idx == nil then
+						return
+					end
+					local nextIds = table.clone(state.mounted)
+					table.remove(nextIds, idx)
+					syncEditChildren(sut, nextIds)
+				end,
+				next = function(state, id)
+					local idx = table.find(state.mounted, id)
+					if idx ~= nil then
+						table.remove(state.mounted, idx)
+					end
+				end,
+			},
+			ReorderChildren = {
+				weight = 2,
+				run = function(sut, _arg, state)
+					if #state.mounted < 2 then
+						return
+					end
+					local nextIds = {}
+					for i = #state.mounted, 1, -1 do
+						table.insert(nextIds, state.mounted[i])
+					end
+					syncEditChildren(sut, nextIds)
+				end,
+				next = function(state)
+					if #state.mounted < 2 then
+						return
+					end
+					local rev = {}
+					for i = #state.mounted, 1, -1 do
+						table.insert(rev, state.mounted[i])
+					end
+					state.mounted = rev
+				end,
+			},
+			WriteSignalProp = {
+				weight = 2,
+				gen = function(g)
+					return "n" .. tostring(g:int(1, 9))
+				end,
+				run = function(sut, text)
+					sut.textSig:set(text)
+					flush()
+				end,
+				next = function(state, text)
+					state.expectedText = text
+				end,
+			},
+			MutateInstanceProp = {
+				weight = 2,
+				gen = function(g)
+					return "i" .. tostring(g:int(1, 9))
+				end,
+				run = function(sut, text)
+					sut.box.Text = text
+					settle()
+					flush()
+				end,
+				next = function(state, text)
+					state.expectedText = text
+				end,
+			},
+			MutateAttribute = {
+				weight = 2,
+				gen = function(g)
+					return { score = g:int(1, 20), viaInstance = g:bool() }
+				end,
+				run = function(sut, arg)
+					if arg.viaInstance then
+						sut.box:SetAttribute("Score", arg.score)
+						settle()
+					else
+						sut.attrSig:set(arg.score)
+					end
+					flush()
+				end,
+				next = function(state, arg)
+					state.expectedAttr = arg.score
+				end,
+			},
+			ToggleTag = {
+				weight = 2,
+				gen = function(g)
+					return { flag = g:bool(), viaInstance = g:bool() }
+				end,
+				run = function(sut, arg)
+					if arg.viaInstance then
+						if arg.flag then
+							sut.box:AddTag("Flag")
+						else
+							sut.box:RemoveTag("Flag")
+						end
+					else
+						sut.tagBool:set(arg.flag)
+						flush()
+					end
+					settle()
+					flush()
+				end,
+				next = function(state, arg)
+					state.expectedFlag = arg.flag
+				end,
+			},
+			tags = {
+				weight = 2,
+				gen = function(g)
+					return TAG_POOL[g:int(1, #TAG_POOL)]
+				end,
+				run = function(sut, set)
+					sut.tagSet:set(set)
+					flush()
+				end,
+				next = function(state, set)
+					state.expectedSet = set
+				end,
+			},
+		},
+		never = {
+			staticTagLost = function(_state, sut)
+				return not sut.box:HasTag("Static")
+			end,
+		},
+		invariants = {
+			childrenOrderSynchronized = function(state, sut)
+				local children = sut.box:GetChildren()
+				sert.eq(#children, #state.mounted, "mounted child count")
+				for idx, id in state.mounted do
+					sert.eq(children[idx], sut.pool[id], `GetChildren()[{idx}]`)
+					sert.eq((children[idx] :: Frame).LayoutOrder, idx, `GetChildren()[{idx}] LayoutOrder`)
+				end
+			end,
+			textSynchronized = function(state, sut)
+				sert.eq(sut.box.Text, state.expectedText, "box.Text")
+				sert.eq(sut.textSig:peek(), state.expectedText, "textSig")
+				sert.eq(sut.propText:peek(), state.expectedText, "propText")
+			end,
+			attrSynchronized = function(state, sut)
+				sert.eq(sut.box:GetAttribute("Score"), state.expectedAttr, "Score attr")
+				sert.eq(sut.attrSig:peek(), state.expectedAttr, "attrSig")
+				sert.eq(sut.propAttr:peek(), state.expectedAttr, "propAttr")
+			end,
+			tagsSynchronized = function(state, sut)
+				sert.eq(sut.box:HasTag("Flag"), state.expectedFlag, "Flag tag")
+				sert.eq(sut.tagBool:peek(), state.expectedFlag, "tagBool")
+				sert.eq(sut.propFlag:peek(), state.expectedFlag, "propFlag")
+				for _, t in { "A", "B", "C" } do
+					local inSet = table.find(state.expectedSet, t) ~= nil
+					sert.eq(sut.box:HasTag(t), inSet, `tag {t}`)
+				end
+			end,
+		},
 	},
-}, {
-	runs = 120,
-	length = 14,
-	exhaustive = { size = 2 },
-})
+	{
+		runs = 120,
+		length = 14,
+		exhaustive = { size = 2 },
+	}
+)
 
 test("edit · a later edit replaces a property's binding instead of stacking it", function()
 	local first = Flux.signal(1)

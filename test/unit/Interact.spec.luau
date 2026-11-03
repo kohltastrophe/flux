@@ -923,167 +923,373 @@ test("interact · states disconnect with their scope or their object", function(
 	hovering:Destroy()
 end)
 
-sert.model("interact · press, selected and focused states match reference across random events", {
-	init = function()
-		local services = fakeServices()
-		local guis = { fakeGui(), fakeGui() }
-		local pressed = {}
-		local selected = {}
-		local focused = {}
-		local scope = Flux.scope(function()
-			for i, gui in guis do
-				pressed[i] = InteractModule._pressWith(gui, services)
-				selected[i] = InteractModule._selectedWith(gui, services)
-				focused[i] = Flux.Interact.focused(gui)
-			end
-		end)
-		local state = {
-			activeMouse = { false, false },
-			activeGamepad = { false, false },
-			selectedIdx = nil :: number?,
-			menuOpen = false,
-			focused = { false, false },
-		}
-		local sut = {
-			services = services,
-			guis = guis,
-			pressed = pressed,
-			selected = selected,
-			focused = focused,
-			scope = scope,
-		}
-		return state, sut
-	end,
-	teardown = function(sut)
-		sut.scope:Destroy()
-	end,
-	actions = {
-		mouseDown = {
-			weight = 3,
-			gen = function(g)
-				return g:int(1, 2)
+sert.model(
+	"interact · hover, press, selected, focused, sunk and covered match geometric hit-testing and multi-touch isolation",
+	{
+		init = function()
+			local UDim2 = env.UDim2
+			local simEnv = env.engine
+				or sert.env.new({
+					isClient = true,
+					isStudio = true,
+					strict = true,
+					datatypes = {
+						Enum = Enum,
+						UDim2 = UDim2,
+						Vector2 = Vector2,
+						Vector3 = env.Compat.Vector3,
+					},
+				})
+			local services = {
+				GuiService = simEnv.game:GetService("GuiService"),
+				UserInputService = simEnv.game:GetService("UserInputService"),
+				RunService = simEnv.game:GetService("RunService"),
+			}
+			local input = simEnv:input()
+			local screen = simEnv.Instance.new("ScreenGui")
+			screen.Parent = simEnv.LocalPlayer.PlayerGui
+
+			local overlay = simEnv.Instance.new("Frame")
+			overlay.Position = UDim2.fromOffset(0, 0)
+			overlay.Size = UDim2.fromOffset(300, 100)
+			overlay.InputSink = SINK_NONE
+			overlay.ZIndex = 3
+			overlay.Parent = screen
+
+			local g1 = simEnv.Instance.new("TextBox")
+			g1.Position = UDim2.fromOffset(20, 20)
+			g1.Size = UDim2.fromOffset(80, 60)
+			g1.InputSink = SINK_ACTIVATE
+			g1.ZIndex = 2
+			g1.Parent = screen
+
+			local g2 = simEnv.Instance.new("TextBox")
+			g2.Position = UDim2.fromOffset(140, 20)
+			g2.Size = UDim2.fromOffset(80, 60)
+			g2.InputSink = SINK_ACTIVATE
+			g2.ZIndex = 2
+			g2.Parent = screen
+
+			local guis = { g1, g2 }
+			local positions = {
+				[0] = Vector2.new(260, 50),
+				[1] = Vector2.new(60, 50),
+				[2] = Vector2.new(180, 50),
+			}
+			input:move(positions[0])
+
+			local prevHoverServices = InteractModule._useHoverServices(services)
+			local hovered = {}
+			local pressed = {}
+			local selected = {}
+			local focused = {}
+			local scope = Flux.scope(function()
+				for i, gui in guis do
+					hovered[i] = InteractModule._hoverWith(gui, services)
+					pressed[i] = InteractModule._pressWith(gui, services)
+					selected[i] = InteractModule._selectedWith(gui, services)
+					focused[i] = Flux.Interact.focused(gui)
+				end
+			end)
+			local state = {
+				pointerTarget = 0,
+				overlayActive = false,
+				activeTouchSlot = { [1] = nil :: number?, [2] = nil :: number? },
+				heldTouchHover = { [1] = nil :: number?, [2] = nil :: number? },
+				heldPress = { [1] = nil :: string?, [2] = nil :: string? },
+				selectedIdx = nil :: number?,
+				menuOpen = false,
+				focused = { false, false },
+			}
+			local sut = {
+				simEnv = simEnv,
+				services = services,
+				input = input,
+				screen = screen,
+				overlay = overlay,
+				guis = guis,
+				positions = positions,
+				pointerTarget = 0,
+				activeTouches = {} :: { [number]: any },
+				hovered = hovered,
+				pressed = pressed,
+				selected = selected,
+				focused = focused,
+				scope = scope,
+				prevHoverServices = prevHoverServices,
+			}
+			return state, sut
+		end,
+		teardown = function(sut)
+			sut.services.GuiService.MenuIsOpen = false
+			sut.services.GuiService.SelectedObject = nil
+			InteractModule._useHoverServices(sut.prevHoverServices)
+			sut.scope:Destroy()
+			sut.screen:Destroy()
+		end,
+		actions = {
+			hover = {
+				weight = 3,
+				gen = function(g)
+					return g:int(0, 2)
+				end,
+				run = function(sut, target)
+					local pos = sut.positions[target]
+					sut.input:move(pos)
+					if sut.pointerTarget ~= 0 and sut.pointerTarget ~= target then
+						sut.guis[sut.pointerTarget].MouseLeave:Fire(pos.X, pos.Y)
+					end
+					if target ~= 0 then
+						sut.guis[target].MouseEnter:Fire(pos.X, pos.Y)
+					end
+					sut.pointerTarget = target
+					sut.simEnv:step(1 / 60)
+				end,
+				next = function(state, target)
+					state.pointerTarget = target
+				end,
+			},
+			ToggleOverlay = {
+				weight = 2,
+				gen = function(g)
+					return g:bool()
+				end,
+				run = function(sut, active)
+					sut.overlay.InputSink = if active then SINK_ALL else SINK_NONE
+					sut.simEnv:step(1 / 60)
+				end,
+				next = function(state, active)
+					state.overlayActive = active
+				end,
+			},
+			TouchPress = {
+				weight = 3,
+				gen = function(g)
+					return { idx = g:int(1, 2), slot = g:int(1, 2) }
+				end,
+				run = function(sut, arg)
+					if sut.activeTouches[arg.slot] ~= nil then
+						return
+					end
+					local pos = sut.positions[arg.idx]
+					local t = { UserInputType = TOUCH, KeyCode = UNKNOWN_KEY, Position = pos }
+					sut.activeTouches[arg.slot] = t
+					sut.guis[arg.idx].InputBegan:Fire(t)
+				end,
+				next = function(state, arg)
+					if state.activeTouchSlot[arg.slot] ~= nil then
+						return
+					end
+					state.activeTouchSlot[arg.slot] = arg.idx
+					if not state.menuOpen and not state.overlayActive then
+						if state.heldTouchHover[arg.idx] == nil then
+							state.heldTouchHover[arg.idx] = arg.slot
+						end
+						if state.heldPress[arg.idx] == nil then
+							state.heldPress[arg.idx] = `touch{arg.slot}`
+						end
+					end
+				end,
+			},
+			TouchRelease = {
+				weight = 3,
+				gen = function(g)
+					return g:int(1, 2)
+				end,
+				run = function(sut, slot)
+					local t = sut.activeTouches[slot]
+					if t == nil then
+						return
+					end
+					sut.activeTouches[slot] = nil
+					sut.services.UserInputService.InputEnded:Fire(t)
+					sut.simEnv:step(1 / 60)
+				end,
+				next = function(state, slot)
+					if state.activeTouchSlot[slot] == nil then
+						return
+					end
+					state.activeTouchSlot[slot] = nil
+					for i = 1, 2 do
+						if state.heldTouchHover[i] == slot then
+							state.heldTouchHover[i] = nil
+						end
+						if state.heldPress[i] == `touch{slot}` then
+							state.heldPress[i] = nil
+						end
+					end
+				end,
+			},
+			mouseDown = {
+				weight = 3,
+				gen = function(g)
+					return g:int(1, 2)
+				end,
+				run = function(sut, idx)
+					local pos = sut.positions[idx]
+					sut.guis[idx].InputBegan:Fire({
+						UserInputType = MOUSE_BUTTON1,
+						KeyCode = UNKNOWN_KEY,
+						Position = pos,
+					})
+				end,
+				next = function(state, idx)
+					if not state.menuOpen and not state.overlayActive and state.heldPress[idx] == nil then
+						state.heldPress[idx] = "mouse"
+					end
+				end,
+			},
+			mouseUp = {
+				weight = 3,
+				run = function(sut)
+					sut.services.UserInputService.InputEnded:Fire(fakeInput(MOUSE_BUTTON1))
+				end,
+				next = function(state)
+					for i = 1, 2 do
+						if state.heldPress[i] == "mouse" then
+							state.heldPress[i] = nil
+						end
+					end
+				end,
+			},
+			select = {
+				weight = 3,
+				gen = function(g)
+					return g:int(0, 2)
+				end,
+				run = function(sut, idx)
+					sut.services.GuiService.SelectedObject = if idx == 0 then nil else sut.guis[idx]
+				end,
+				next = function(state, idx)
+					state.selectedIdx = if idx == 0 then nil else idx
+				end,
+			},
+			gamepadDown = {
+				weight = 2,
+				run = function(sut)
+					sut.services.UserInputService.InputBegan:Fire(fakeInput(GAMEPAD1, BUTTON_A))
+				end,
+				next = function(state)
+					local idx = state.selectedIdx
+					if not state.menuOpen and idx ~= nil and state.heldPress[idx] == nil then
+						state.heldPress[idx] = "gamepad"
+					end
+				end,
+			},
+			gamepadUp = {
+				weight = 2,
+				run = function(sut)
+					sut.services.UserInputService.InputEnded:Fire(fakeInput(GAMEPAD1, BUTTON_A))
+				end,
+				next = function(state)
+					for i = 1, 2 do
+						if state.heldPress[i] == "gamepad" then
+							state.heldPress[i] = nil
+						end
+					end
+				end,
+			},
+			menu = {
+				weight = 2,
+				gen = function(g)
+					return g:bool()
+				end,
+				run = function(sut, open)
+					sut.services.GuiService.MenuIsOpen = open
+					sut.simEnv:step(1 / 60)
+				end,
+				next = function(state, open)
+					state.menuOpen = open
+					if open then
+						state.heldPress = { nil, nil }
+						state.heldTouchHover = { nil, nil }
+					end
+				end,
+			},
+			focus = {
+				weight = 2,
+				gen = function(g)
+					return { idx = g:int(1, 2), gain = g:bool() }
+				end,
+				run = function(sut, arg)
+					if arg.gain then
+						sut.guis[arg.idx].Focused:Fire()
+					else
+						sut.guis[arg.idx].FocusLost:Fire()
+					end
+				end,
+				next = function(state, arg)
+					state.focused[arg.idx] = arg.gain
+				end,
+			},
+		},
+		never = {
+			pressedWhileMenuOpen = function(state, sut)
+				return state.menuOpen and (sut.pressed[1]:peek() or sut.pressed[2]:peek())
 			end,
-			run = function(sut, idx)
-				sut.guis[idx].InputBegan:Fire(fakeInput(MOUSE_BUTTON1))
+			hoveredWhileMenuOpen = function(state, sut)
+				return state.menuOpen and (sut.hovered[1]:peek() or sut.hovered[2]:peek())
 			end,
-			next = function(state, idx)
-				if not state.menuOpen and not state.activeMouse[idx] and not state.activeGamepad[idx] then
-					state.activeMouse[idx] = true
+			pointerHoveredWhileOverlaySinks = function(state, sut)
+				return state.overlayActive
+					and (
+						(state.heldTouchHover[1] == nil and sut.hovered[1]:peek())
+						or (state.heldTouchHover[2] == nil and sut.hovered[2]:peek())
+					)
+			end,
+		},
+		invariants = {
+			hoverAndGeometryMatchReference = function(state, sut)
+				local ptr = sut.positions[state.pointerTarget]
+				local expectedClaimed = state.menuOpen or state.overlayActive
+				for i = 1, 2 do
+					local center = sut.positions[i]
+					sert.eq(
+						Flux.Interact.pointIn(ptr.X, ptr.Y, sut.guis[i]),
+						state.pointerTarget == i,
+						`pointIn[{i}] at pointer`
+					)
+					if not IS_ROBLOX then
+						sert.eq(
+							Flux.Interact.sunk(center.X, center.Y, sut.guis[i]),
+							expectedClaimed,
+							`sunk[{i}] at center`
+						)
+						sert.eq(
+							Flux.Interact.covered(center.X, center.Y, sut.guis[i]),
+							expectedClaimed,
+							`covered[{i}] at center`
+						)
+					end
+					local expectedHover = not state.menuOpen
+						and (state.heldTouchHover[i] ~= nil or (state.pointerTarget == i and not state.overlayActive))
+					sert.eq(sut.hovered[i]:peek(), expectedHover, `hovered[{i}]`)
 				end
 			end,
-		},
-		mouseUp = {
-			weight = 3,
-			run = function(sut)
-				sut.services.UserInputService.InputEnded:Fire(fakeInput(MOUSE_BUTTON1))
-			end,
-			next = function(state)
-				state.activeMouse[1] = false
-				state.activeMouse[2] = false
-			end,
-		},
-		select = {
-			weight = 3,
-			gen = function(g)
-				return g:int(0, 2)
-			end,
-			run = function(sut, idx)
-				sut.services.GuiService.SelectedObject = if idx == 0 then nil else sut.guis[idx]
-				sut.services.selectionChanged:Fire()
-			end,
-			next = function(state, idx)
-				state.selectedIdx = if idx == 0 then nil else idx
-			end,
-		},
-		gamepadDown = {
-			weight = 2,
-			run = function(sut)
-				sut.services.UserInputService.InputBegan:Fire(fakeInput(GAMEPAD1, BUTTON_A))
-			end,
-			next = function(state)
-				local idx = state.selectedIdx
-				if
-					not state.menuOpen
-					and idx ~= nil
-					and not state.activeMouse[idx]
-					and not state.activeGamepad[idx]
-				then
-					state.activeGamepad[idx] = true
+			pressedMatchesActive = function(state, sut)
+				for i = 1, 2 do
+					sert.eq(sut.pressed[i]:peek(), state.heldPress[i] ~= nil, `pressed[{i}]`)
 				end
 			end,
-		},
-		gamepadUp = {
-			weight = 2,
-			run = function(sut)
-				sut.services.UserInputService.InputEnded:Fire(fakeInput(GAMEPAD1, BUTTON_A))
-			end,
-			next = function(state)
-				state.activeGamepad[1] = false
-				state.activeGamepad[2] = false
-			end,
-		},
-		menu = {
-			weight = 2,
-			gen = function(g)
-				return g:bool()
-			end,
-			run = function(sut, open)
-				sut.services.GuiService.MenuIsOpen = open
-				sut.services.menuChanged:Fire()
-			end,
-			next = function(state, open)
-				state.menuOpen = open
-				if open then
-					state.activeMouse = { false, false }
-					state.activeGamepad = { false, false }
+			selectedMatchesGuiService = function(state, sut)
+				for i = 1, 2 do
+					sert.eq(sut.selected[i]:peek(), state.selectedIdx == i, `selected[{i}]`)
 				end
 			end,
-		},
-		focus = {
-			weight = 2,
-			gen = function(g)
-				return { idx = g:int(1, 2), gain = g:bool() }
-			end,
-			run = function(sut, arg)
-				if arg.gain then
-					sut.guis[arg.idx].Focused:Fire()
-				else
-					sut.guis[arg.idx].FocusLost:Fire()
+			focusedMatchesTextBox = function(state, sut)
+				for i = 1, 2 do
+					sert.eq(sut.focused[i]:peek(), state.focused[i], `focused[{i}]`)
 				end
-			end,
-			next = function(state, arg)
-				state.focused[arg.idx] = arg.gain
 			end,
 		},
 	},
-	never = {
-		pressedWhileMenuOpen = function(state, sut)
-			return state.menuOpen and (sut.pressed[1]:peek() or sut.pressed[2]:peek())
-		end,
-	},
-	invariants = {
-		pressedMatchesActive = function(state, sut)
-			for i = 1, 2 do
-				sert.eq(sut.pressed[i]:peek(), state.activeMouse[i] or state.activeGamepad[i], `pressed[{i}]`)
-			end
-		end,
-		selectedMatchesGuiService = function(state, sut)
-			for i = 1, 2 do
-				sert.eq(sut.selected[i]:peek(), state.selectedIdx == i, `selected[{i}]`)
-			end
-		end,
-		focusedMatchesTextBox = function(state, sut)
-			for i = 1, 2 do
-				sert.eq(sut.focused[i]:peek(), state.focused[i], `focused[{i}]`)
-			end
-		end,
-	},
-}, {
-	runs = 120,
-	size = 16,
-	length = 16,
-	exhaustive = { size = 2 },
-})
+	{
+		runs = 120,
+		size = 16,
+		length = 16,
+		exhaustive = { size = 2 },
+	}
+)
 
 ctest("interact · selected and focused mirror a real player gui", function()
 	local GuiService = game:GetService("GuiService")
