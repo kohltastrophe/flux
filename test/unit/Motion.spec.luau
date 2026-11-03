@@ -569,7 +569,7 @@ test("motion · a tween of every Compat datatype lands on its goal", function()
 	end
 end)
 
-rtest("motion · a tween of every engine-only animatable type lands on its goal", function()
+test("motion · a tween of every sequence, range, Rect, and CFrame animatable type lands on its goal", function()
 	local nearVal = function(a: number, b: number): boolean
 		return math.abs(a - b) <= 3e-3
 	end
@@ -644,6 +644,7 @@ rtest("motion · a tween of every engine-only animatable type lands on its goal"
 			}),
 			keypoints(colorKeypoint),
 		},
+		{ "CFrame (translation)", CFrame.new(1, 2, 3), CFrame.new(5, -2, 8), components },
 		{ "CFrame", CFrame.new(0, 0, 0), CFrame.new(5, -2, 8) * CFrame.Angles(0, math.rad(90), 0), components },
 	}
 	for _, case in cases do

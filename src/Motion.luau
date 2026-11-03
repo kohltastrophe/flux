@@ -11,13 +11,15 @@ local Clock = require("./Clock")
 local Compat = require("./Compat")
 local Graph = require("./Graph")
 
-local IS_ROBLOX = Compat.isRoblox
+local CFrame = Compat.CFrame
 local Color3 = Compat.Color3
 local ColorSequence = Compat.ColorSequence
 local ColorSequenceKeypoint = Compat.ColorSequenceKeypoint
 local Enum = Compat.Enum
+local NumberRange = Compat.NumberRange
 local NumberSequence = Compat.NumberSequence
 local NumberSequenceKeypoint = Compat.NumberSequenceKeypoint
+local Rect = Compat.Rect
 local TweenInfo = Compat.TweenInfo
 local UDim = Compat.UDim
 local UDim2 = Compat.UDim2
@@ -302,11 +304,15 @@ export type Animatable =
 
 local round = math.round
 local math_max = math.max
+local CFrame_new = CFrame.new
+local CFrame_fromAxisAngle = CFrame.fromAxisAngle
 local Color3_new = Color3.new
 local ColorSequence_new = ColorSequence.new
 local ColorSequenceKeypoint_new = ColorSequenceKeypoint.new
+local NumberRange_new = NumberRange.new
 local NumberSequence_new = NumberSequence.new
 local NumberSequenceKeypoint_new = NumberSequenceKeypoint.new
+local Rect_new = Rect.new
 local UDim_new = UDim.new
 local UDim2_new = UDim2.new
 local Vector2_new = Vector2.new
@@ -345,6 +351,16 @@ local packers: { [string]: ({ number }, any) -> () } = {
 	NumberSequenceKeypoint = function(t, v: NumberSequenceKeypoint)
 		t[1], t[2], t[3] = v.Time, v.Value, v.Envelope
 	end,
+	CFrame = function(t, v: CFrame)
+		local p, a = v:ToAxisAngle()
+		t[1], t[2], t[3], t[4], t[5], t[6] = v.X, v.Y, v.Z, p.X * a, p.Y * a, p.Z * a
+	end,
+	NumberRange = function(t, v: NumberRange)
+		t[1], t[2] = v.Min, v.Max
+	end,
+	Rect = function(t, v: Rect)
+		t[1], t[2], t[3], t[4] = v.Min.X, v.Min.Y, v.Max.X, v.Max.Y
+	end,
 	UDim = function(t, v: UDim)
 		t[1], t[2] = v.Scale, v.Offset
 	end,
@@ -366,6 +382,12 @@ local unpackers: { [string]: ({ number }) -> any } = {
 	vector = function(v): vector
 		return vector.create(v[1], v[2], v[3])
 	end,
+	CFrame = function(t): CFrame
+		local p = CFrame_new(t[1], t[2], t[3])
+		local rx, ry, rz = t[4], t[5], t[6]
+		local a = math.sqrt(rx * rx + ry * ry + rz * rz)
+		return if a < 1e-6 then p else p * CFrame_fromAxisAngle(Vector3_new(rx / a, ry / a, rz / a), a)
+	end,
 	Color3 = function(t): Color3
 		return Oklab_toRGB(t[1], t[2], t[3], false)
 	end,
@@ -384,6 +406,10 @@ local unpackers: { [string]: ({ number }) -> any } = {
 	ColorSequenceKeypoint = function(t): ColorSequenceKeypoint
 		return ColorSequenceKeypoint_new(math.clamp(t[1], 0, 1), Oklab_toRGB(t[2], t[3], t[4], false))
 	end,
+	NumberRange = function(t): NumberRange
+		local min, max = t[1], t[2]
+		return NumberRange_new(min, math_max(min, max))
+	end,
 	NumberSequence = function(t): NumberSequence
 		local n = #t // 3
 		local k = table.create(n) :: { NumberSequenceKeypoint }
@@ -399,6 +425,10 @@ local unpackers: { [string]: ({ number }) -> any } = {
 	NumberSequenceKeypoint = function(t): NumberSequenceKeypoint
 		return NumberSequenceKeypoint_new(math.clamp(t[1], 0, 1), t[2], math_max(t[3], 0))
 	end,
+	Rect = function(t): Rect
+		local minX, minY, maxX, maxY = t[1], t[2], t[3], t[4]
+		return Rect_new(minX, minY, maxX, maxY)
+	end,
 	UDim = function(t): UDim
 		return UDim_new(t[1], round(t[2]))
 	end,
@@ -412,39 +442,6 @@ local unpackers: { [string]: ({ number }) -> any } = {
 		return Vector3_new(t[1], t[2], t[3])
 	end,
 }
-
-if IS_ROBLOX then
-	local CFrame_new = CFrame.new
-	local CFrame_fromAxisAngle = CFrame.fromAxisAngle
-	local NumberRange_new = NumberRange.new
-	local Rect_new = Rect.new
-
-	packers.CFrame = function(t, v: CFrame)
-		local p, a = v:ToAxisAngle()
-		t[1], t[2], t[3], t[4], t[5], t[6] = v.X, v.Y, v.Z, p.X * a, p.Y * a, p.Z * a
-	end
-	packers.NumberRange = function(t, v: NumberRange)
-		t[1], t[2] = v.Min, v.Max
-	end
-	packers.Rect = function(t, v: Rect)
-		t[1], t[2], t[3], t[4] = v.Min.X, v.Min.Y, v.Max.X, v.Max.Y
-	end
-
-	unpackers.CFrame = function(t): CFrame
-		local p = CFrame_new(t[1], t[2], t[3])
-		local rx, ry, rz = t[4], t[5], t[6]
-		local a = math.sqrt(rx * rx + ry * ry + rz * rz)
-		return if a < 1e-6 then p else p * CFrame_fromAxisAngle(Vector3_new(rx / a, ry / a, rz / a), a)
-	end
-	unpackers.NumberRange = function(t): NumberRange
-		local min, max = t[1], t[2]
-		return NumberRange_new(min, math_max(min, max))
-	end
-	unpackers.Rect = function(t): Rect
-		local minX, minY, maxX, maxY = t[1], t[2], t[3], t[4]
-		return Rect_new(minX, minY, maxX, maxY)
-	end
-end
 
 local function pack(arr: { number }, value: Animatable, t: string)
 	table.clear(arr)

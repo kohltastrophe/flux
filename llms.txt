@@ -84,7 +84,7 @@ Keep it current: after changing the public surface, a doc comment, or a guide, r
 - [`type GradientConfig = Layout.GradientConfig`](src/init.luau#L74)
 - [`type SizeConstraintConfig = Layout.SizeConstraintConfig`](src/init.luau#L75)
 - [`type TextSizeConstraintConfig = Layout.TextSizeConstraintConfig`](src/init.luau#L76)
-- [`Flux.Color: Color`](src/Motion.luau#L1120): [from Motion] Perceptual [`Color3`](https://create.roblox.com/docs/reference/engine/datatypes/Color3) utilities in Oklab (`lighten`, `saturate`, `mix`, `rotateHue`, and WCAG `contrast`/`readable`).
+- [`Flux.Color: Color`](src/Motion.luau#L1117): [from Motion] Perceptual [`Color3`](https://create.roblox.com/docs/reference/engine/datatypes/Color3) utilities in Oklab (`lighten`, `saturate`, `mix`, `rotateHue`, and WCAG `contrast`/`readable`).
 - [`Flux.Defaults: { [string]: { [string]: unknown } }`](src/Edit.luau#L1066): [Read Only] [from Edit] Mutable table of per-class default properties applied by [`Flux.new`](https://flux.kohl.gg/guide/roblox/creation#the-flux-new-function).
 - [`Flux.Find: Find`](src/Edit.luau#L1067): [from Edit] Instance selectors (`Child`, `Descendant`, `Ancestor`, `Path`, `Query`) for hydrating trees inside [`Flux.edit`](https://flux.kohl.gg/guide/roblox/hydration).
 - [`Flux.Flags: Flags`](src/Edit.luau#L1065): [from Edit] Global behavior flags (`Flags.defaults` toggles per-class defaults in [`Flux.new`](https://flux.kohl.gg/guide/roblox/creation#the-flux-new-function)).
@@ -132,8 +132,8 @@ Keep it current: after changing the public surface, a doc comment, or a guide, r
 - [`Flux.fallback<V, D>(value: V, default: D): Node<NonNil<Graph.Unwrap<V>> | Graph.Unwrap<D>>`](src/Conditional.luau#L596): [from Conditional] Derives a [node](https://flux.kohl.gg/guide/concepts/signals) returning `value` when non-`nil`, or `default` when `value` is `nil`.
 - [`Flux.forValue<L, U>(list: L, mapFn: (index: Node<number>, value: Item<L>) -> U): Node<{ U }>`](src/Conditional.luau#L598): [from Conditional] Maps `list` by item identity, running `mapFn(index, value)` once per unique value and updating `index` when an item moves.
 - [`Flux.forIndex<L, U>(list: L, mapFn: (index: number, item: Node<Item<L>>) -> U): Node<{ U }>`](src/Conditional.luau#L597): [from Conditional] Maps `list` by numeric index, running `mapFn(index, item)` once per slot and updating `item` in place when the value at that index changes.
-- [`Flux.spring<A>(target: A, frequency: Reactive<number>?, damping: Reactive<number>?, initialVelocity: any?): Spring<Unwrap<A>>`](src/Motion.luau#L1148-L1194): [from Motion] Creates a [node](https://flux.kohl.gg/guide/concepts/signals) that animates toward `target` using an analytic harmonic oscillator (`frequency` in Hz and `damping` ratio both default to `1` and may be reactive).
-- [`Flux.tween<A>(target: A, tweenInfo: Reactive<TweenInfo>?): Graph.Node<Unwrap<A>>`](src/Motion.luau#L1203-L1243): [from Motion] Creates a [node](https://flux.kohl.gg/guide/concepts/signals) that eases toward `target` over a [`TweenInfo`](https://create.roblox.com/docs/reference/engine/datatypes/TweenInfo) curve.
+- [`Flux.spring<A>(target: A, frequency: Reactive<number>?, damping: Reactive<number>?, initialVelocity: any?): Spring<Unwrap<A>>`](src/Motion.luau#L1145-L1191): [from Motion] Creates a [node](https://flux.kohl.gg/guide/concepts/signals) that animates toward `target` using an analytic harmonic oscillator (`frequency` in Hz and `damping` ratio both default to `1` and may be reactive).
+- [`Flux.tween<A>(target: A, tweenInfo: Reactive<TweenInfo>?): Graph.Node<Unwrap<A>>`](src/Motion.luau#L1200-L1240): [from Motion] Creates a [node](https://flux.kohl.gg/guide/concepts/signals) that eases toward `target` over a [`TweenInfo`](https://create.roblox.com/docs/reference/engine/datatypes/TweenInfo) curve.
 - [`Flux.padding(value: Length | PaddingSides | Graph.Node<any> | (() -> Length | Insets)): UIPadding`](src/Layout.luau#L393-L418): [from Layout] Creates a [`UIPadding`](https://create.roblox.com/docs/reference/engine/classes/UIPadding) from a single length, a `{ top, bottom, left, right, x, y }` table, or a reactive source.
 - [`Flux.corner(radius: ReactiveLength | CornerSides?): UICorner`](src/Layout.luau#L425-L437): [from Layout] Creates a [`UICorner`](https://create.roblox.com/docs/reference/engine/classes/UICorner) from an offset pixel radius, a [`UDim`](https://create.roblox.com/docs/reference/engine/datatypes/UDim), or a per-corner `{ topLeft, topRight, bottomLeft, bottomRight, top, bottom, left, right, radius }` table.
 - [`Flux.stroke(config: StrokeConfig?): UIStroke`](src/Layout.luau#L444-L457): [from Layout] Creates a [`UIStroke`](https://create.roblox.com/docs/reference/engine/classes/UIStroke) with static or reactive `thickness`, `color`, `transparency`, `mode`, `joins`, `position`, and `offset`.
@@ -167,7 +167,7 @@ Keep it current: after changing the public surface, a doc comment, or a guide, r
 - [`Flux.Interact.selected(object: GuiObject): Graph.Node<boolean>`](src/Interact.luau#L687): [from Interact] Returns a read-only boolean [node](https://flux.kohl.gg/guide/concepts/signals) tracking whether `object` is currently [`GuiService.SelectedObject`](https://create.roblox.com/docs/reference/engine/classes/GuiService#SelectedObject).
 - [`Flux.Interact.focused(textBox: TextBox): Graph.Node<boolean>`](src/Interact.luau#L688): [from Interact] Returns a read-only boolean [node](https://flux.kohl.gg/guide/concepts/signals) tracking whether `textBox` currently has keyboard focus.
 - [`Flux.Motion`](src/init.luau#L158-L160): Advances active [`Flux.spring`](https://flux.kohl.gg/guide/motion/spring) and [`Flux.tween`](https://flux.kohl.gg/guide/motion/tween) nodes.
-- [`Flux.Motion.step(dt: number?)`](src/Motion.luau#L1134): [from Motion] Advances every active [spring](https://flux.kohl.gg/guide/motion/spring) and [tween](https://flux.kohl.gg/guide/motion/tween) by `dt` seconds (or the time since the last step).
+- [`Flux.Motion.step(dt: number?)`](src/Motion.luau#L1131): [from Motion] Advances every active [spring](https://flux.kohl.gg/guide/motion/spring) and [tween](https://flux.kohl.gg/guide/motion/tween) by `dt` seconds (or the time since the last step).
 - [`Flux.Responsive`](src/init.luau#L166-L179): Reactive nodes for viewport size, UI scale, breakpoints, device platform, active input mode, and accessibility settings.
 - [`Flux.Responsive.config: Config`](src/Responsive.luau#L322): [Read Only] [from Responsive] Default responsive configuration shared by derived nodes.
 - [`Flux.Responsive.platform: Graph.Node<Platform>`](src/Responsive.luau#L323): [Read Only] [from Responsive] Active device class (`"vr"`, `"console"`, `"pc"`, or `"mobile"`), updated live on the client (`"pc"` off-client).
@@ -228,45 +228,31 @@ Keep it current: after changing the public surface, a doc comment, or a guide, r
 ## Compat
 
 - [Compat](src/Compat.luau)
-- [`Compat.isRoblox: boolean`](src/Compat.luau#L482)
-- [`Compat.task: any`](src/Compat.luau#L486)
-- [`Compat.services: { [string]: any }`](src/Compat.luau#L489)
-- [`Compat.Instance`](src/Compat.luau#L493)
-- [`Compat.Enum`](src/Compat.luau#L501)
-- [`Compat.ColorSequence: any`](src/Compat.luau#L502)
-- [`Compat.NumberSequence: any`](src/Compat.luau#L504)
-- [`Compat.traceback(err: any, level: number?): any`](src/Compat.luau#L483)
-- [`Compat.warn(...: any)`](src/Compat.luau#L484)
-- [`Compat.setWarnHook(hook: ((message: string) -> ())?)`](src/Compat.luau#L485)
-- [`Compat.typeof(value: any): string`](src/Compat.luau#L488)
-- [`Compat.getService(name: string): any`](src/Compat.luau#L490-L492)
+- [`Compat.isRoblox: boolean`](src/Compat.luau#L80): [Read Only]
+- [`Compat.task: any`](src/Compat.luau#L84): [Read Only]
+- [`Compat.typeof`](src/Compat.luau#L86): [Read Only]
+- [`Compat.services`](src/Compat.luau#L87-L95): [Read Only]
+- [`Compat.Instance`](src/Compat.luau#L96): [Read Only]
+- [`Compat.Color3`](src/Compat.luau#L97): [Read Only]
+- [`Compat.UDim`](src/Compat.luau#L98): [Read Only]
+- [`Compat.UDim2`](src/Compat.luau#L99): [Read Only]
+- [`Compat.Vector2`](src/Compat.luau#L100): [Read Only]
+- [`Compat.Vector3`](src/Compat.luau#L101): [Read Only]
+- [`Compat.CFrame`](src/Compat.luau#L102): [Read Only]
+- [`Compat.Rect`](src/Compat.luau#L103): [Read Only]
+- [`Compat.NumberRange`](src/Compat.luau#L104): [Read Only]
+- [`Compat.Font`](src/Compat.luau#L105): [Read Only]
+- [`Compat.TweenInfo`](src/Compat.luau#L106): [Read Only]
+- [`Compat.Enum`](src/Compat.luau#L107): [Read Only]
+- [`Compat.ColorSequence`](src/Compat.luau#L108): [Read Only]
+- [`Compat.ColorSequenceKeypoint`](src/Compat.luau#L109): [Read Only]
+- [`Compat.NumberSequence`](src/Compat.luau#L110): [Read Only]
+- [`Compat.NumberSequenceKeypoint`](src/Compat.luau#L111): [Read Only]
+- [`Compat.traceback(err: any, level: number?): any`](src/Compat.luau#L81)
+- [`Compat.warn(...: any)`](src/Compat.luau#L82)
+- [`Compat.setWarnHook(hook: ((message: string) -> ())?)`](src/Compat.luau#L83)
+- [`Compat.getService(name: string): any`](src/Compat.luau#L114-L116)
 - [`Compat.clock(): number`](src/Clock.luau#L168-L170): [from Clock] Seconds on a monotonic clock, for measuring intervals: `os.clock()` in a game, virtual time on a manual clock.
-- [`Compat.Color3`](src/Compat.luau#L494)
-- [`Compat.Color3.new(r: number?, g: number?, b: number?): any`](src/Compat.luau#L175-L177)
-- [`Compat.Color3.fromRGB(r: number?, g: number?, b: number?): any`](src/Compat.luau#L178-L180)
-- [`Compat.Color3.fromHex(hex: string): any`](src/Compat.luau#L181-L195)
-- [`Compat.UDim`](src/Compat.luau#L495)
-- [`Compat.UDim.new(scale: number?, offset: number?): any`](src/Compat.luau#L224)
-- [`Compat.UDim2`](src/Compat.luau#L496)
-- [`Compat.UDim2.new(a: any, b: any, c: number?, d: number?): any`](src/Compat.luau#L236-L238)
-- [`Compat.UDim2.fromScale(x: number?, y: number?): any`](src/Compat.luau#L239-L241)
-- [`Compat.UDim2.fromOffset(x: number?, y: number?): any`](src/Compat.luau#L242-L244)
-- [`Compat.Vector2`](src/Compat.luau#L497)
-- [`Compat.Vector2.zero: any`](src/Compat.luau#L280)
-- [`Compat.Vector2.new(x: number?, y: number?): any`](src/Compat.luau#L280)
-- [`Compat.Vector3`](src/Compat.luau#L498)
-- [`Compat.Vector3.zero: any`](src/Compat.luau#L321)
-- [`Compat.Vector3.new(x: number?, y: number?, z: number?): any`](src/Compat.luau#L321)
-- [`Compat.Font`](src/Compat.luau#L499)
-- [`Compat.Font.new(family: string, weight: any?, style: any?): any`](src/Compat.luau#L402)
-- [`Compat.Font.fromEnum(item: any): any`](src/Compat.luau#L403-L405)
-- [`Compat.Font.fromId(id: number, weight: any?, style: any?): any`](src/Compat.luau#L406-L408)
-- [`Compat.TweenInfo`](src/Compat.luau#L500)
-- [`Compat.TweenInfo.new(time: number?, easingStyle: any?, easingDirection: any?, repeatCount: number?, reverses: boolean?, delayTime: number?): any`](src/Compat.luau#L416-L432)
-- [`Compat.ColorSequenceKeypoint`](src/Compat.luau#L503)
-- [`Compat.ColorSequenceKeypoint.new(time: number, value: any): any`](src/Compat.luau#L503)
-- [`Compat.NumberSequenceKeypoint`](src/Compat.luau#L505)
-- [`Compat.NumberSequenceKeypoint.new(time: number, value: number, envelope: number?): any`](src/Compat.luau#L505)
 
 ## Conditional
 
@@ -404,38 +390,38 @@ Keep it current: after changing the public surface, a doc comment, or a guide, r
 ## Motion
 
 - [Motion](src/Motion.luau): Spring and tween animations (`spring`, `tween`) stepped once per frame, plus perceptual `Color` utilities.
-- [`type Spring<T>`](src/Motion.luau#L44-L53)
-- [`Motion.step(dt: number?)`](src/Motion.luau#L1134): Advances every active [spring](https://flux.kohl.gg/guide/motion/spring) and [tween](https://flux.kohl.gg/guide/motion/tween) by `dt` seconds (or the time since the last step).
-- [`Motion.spring<A>(target: A, frequency: Reactive<number>?, damping: Reactive<number>?, initialVelocity: any?): Spring<Unwrap<A>>`](src/Motion.luau#L1148-L1194): Creates a [node](https://flux.kohl.gg/guide/concepts/signals) that animates toward `target` using an analytic harmonic oscillator (`frequency` in Hz and `damping` ratio both default to `1` and may be reactive).
-- [`Motion.tween<A>(target: A, tweenInfo: Reactive<TweenInfo>?): Graph.Node<Unwrap<A>>`](src/Motion.luau#L1203-L1243): Creates a [node](https://flux.kohl.gg/guide/concepts/signals) that eases toward `target` over a [`TweenInfo`](https://create.roblox.com/docs/reference/engine/datatypes/TweenInfo) curve.
-- [`Motion.Color.Oklab`](src/Motion.luau#L207)
-- [`Motion.Color.Oklab.fromLinear(color: Color3): Vector3`](src/Motion.luau#L156-L158): Converts a Color3 in linear sRGB space to a Vector3 in Oklab space.
-- [`Motion.Color.Oklab.toLinear(color: Vector3, clamped: boolean?): Color3`](src/Motion.luau#L160-L162): Converts a Vector3 in Oklab space to a Color3 in linear sRGB space.
-- [`Motion.Color.Oklab.fromRGB(rgb: Color3): Vector3`](src/Motion.luau#L164-L166): Converts a Color3 in sRGB space to a Vector3 in Oklab space.
-- [`Motion.Color.Oklab.toRGB(lab: Vector3, clamped: boolean?): Color3`](src/Motion.luau#L168-L170): Converts a Vector3 in Oklab space to a Color3 in sRGB space.
-- [`Motion.Color.Oklab.lighten(lab: Vector3, amount: number): Vector3`](src/Motion.luau#L172-L174): Raises Oklab lightness by `amount` (negative darkens).
-- [`Motion.Color.Oklab.saturate(lab: Vector3, amount: number): Vector3`](src/Motion.luau#L176-L179): Raises Oklab chroma by `amount`, preserving hue and lightness (negative desaturates).
-- [`Motion.Color.Oklab.rotateHue(lab: Vector3, degrees: number): Vector3`](src/Motion.luau#L181-L184): Rotates hue by `degrees`, preserving chroma and lightness.
-- [`Motion.Color.Oklab.grayscale(lab: Vector3): Vector3`](src/Motion.luau#L186-L188): Removes all chroma, preserving Oklab lightness.
-- [`Motion.Color.Oklab.mix(lab1: Vector3, lab2: Vector3, alpha: number): Vector3`](src/Motion.luau#L190-L192): Linearly interpolates between `lab1` and `lab2` in Oklab space by `alpha`.
-- [`Motion.Color.sRGB`](src/Motion.luau#L208)
-- [`Motion.Color.sRGB.fromLinear(color: Color3): Color3`](src/Motion.luau#L67-L69): Converts linear sRGB space to sRGB space.
-- [`Motion.Color.sRGB.toLinear(color: Color3): Color3`](src/Motion.luau#L71-L73): Converts sRGB space to linear sRGB space.
-- [`Motion.Color`](src/Motion.luau#L1120)
-- [`Motion.Color.lighten(c: Color3, amount: number): Color3`](src/Motion.luau#L214-L217): Raises the perceptual lightness of `c` in Oklab space by `amount` (negative darkens).
-- [`Motion.Color.saturate(c: Color3, amount: number): Color3`](src/Motion.luau#L223-L227): Raises the chroma of `c` in Oklab space by `amount` while preserving hue and lightness (negative desaturates).
-- [`Motion.Color.rotateHue(c: Color3, degrees: number): Color3`](src/Motion.luau#L233-L237): Rotates the hue of `c` by `degrees` around the Oklab color wheel while preserving chroma and lightness.
-- [`Motion.Color.grayscale(c: Color3): Color3`](src/Motion.luau#L243-L246): Strips all chroma from `c`, returning a neutral gray with the same Oklab perceptual lightness.
-- [`Motion.Color.mix(a: Color3, b: Color3, t: number): Color3`](src/Motion.luau#L252-L256): Blends `a` and `b` in Oklab space by unclamped fraction `t` (`0` = `a`, `1` = `b`).
-- [`Motion.Color.luminance(c: Color3): number`](src/Motion.luau#L262): Returns the WCAG relative luminance of `c` from `0` (black) to `1` (white).
-- [`Motion.Color.contrast(a: Color3, b: Color3): number`](src/Motion.luau#L268-L270): Returns the WCAG contrast ratio between `a` and `b` from `1` (identical) to `21` (black on white).
-- [`Motion.Color.readable(bg: Color3, dark: Color3?, light: Color3?): Color3`](src/Motion.luau#L276-L281): Returns whichever of `dark` (default black) or `light` (default white) has the higher WCAG contrast ratio against `bg`.
-- [`Spring`](src/Motion.luau#L989-L997): Constructors: `Motion.spring`, `Motion.tween`.
-- [`Spring:set<T>(value: T)`](src/Motion.luau#L1011-L1023): Retargets the animation toward `value` from its current position (`motion(value)` does the same).
-- [`Spring:impulse<T>(delta: T)`](src/Motion.luau#L1030-L1035): *(Spring only)* Adds `delta` to the spring's current velocity without changing its goal.
-- [`Spring:setVelocity<T>(velocity: T)`](src/Motion.luau#L1042-L1047): *(Spring only)* Replaces the spring's current velocity with `velocity` without changing its goal.
-- [`Spring:setCurrent<T>(value: T)`](src/Motion.luau#L1054-L1063): *(Spring only)* Sets the spring's current animated value immediately without changing its target or velocity.
-- [`Spring:snap<T>(value: T)`](src/Motion.luau#L1070-L1076): *(Spring only)* Jumps both the target and current value of the spring to `value` and zeroes its velocity.
+- [`type Spring<T>`](src/Motion.luau#L46-L55)
+- [`Motion.step(dt: number?)`](src/Motion.luau#L1131): Advances every active [spring](https://flux.kohl.gg/guide/motion/spring) and [tween](https://flux.kohl.gg/guide/motion/tween) by `dt` seconds (or the time since the last step).
+- [`Motion.spring<A>(target: A, frequency: Reactive<number>?, damping: Reactive<number>?, initialVelocity: any?): Spring<Unwrap<A>>`](src/Motion.luau#L1145-L1191): Creates a [node](https://flux.kohl.gg/guide/concepts/signals) that animates toward `target` using an analytic harmonic oscillator (`frequency` in Hz and `damping` ratio both default to `1` and may be reactive).
+- [`Motion.tween<A>(target: A, tweenInfo: Reactive<TweenInfo>?): Graph.Node<Unwrap<A>>`](src/Motion.luau#L1200-L1240): Creates a [node](https://flux.kohl.gg/guide/concepts/signals) that eases toward `target` over a [`TweenInfo`](https://create.roblox.com/docs/reference/engine/datatypes/TweenInfo) curve.
+- [`Motion.Color.Oklab`](src/Motion.luau#L209)
+- [`Motion.Color.Oklab.fromLinear(color: Color3): Vector3`](src/Motion.luau#L158-L160): Converts a Color3 in linear sRGB space to a Vector3 in Oklab space.
+- [`Motion.Color.Oklab.toLinear(color: Vector3, clamped: boolean?): Color3`](src/Motion.luau#L162-L164): Converts a Vector3 in Oklab space to a Color3 in linear sRGB space.
+- [`Motion.Color.Oklab.fromRGB(rgb: Color3): Vector3`](src/Motion.luau#L166-L168): Converts a Color3 in sRGB space to a Vector3 in Oklab space.
+- [`Motion.Color.Oklab.toRGB(lab: Vector3, clamped: boolean?): Color3`](src/Motion.luau#L170-L172): Converts a Vector3 in Oklab space to a Color3 in sRGB space.
+- [`Motion.Color.Oklab.lighten(lab: Vector3, amount: number): Vector3`](src/Motion.luau#L174-L176): Raises Oklab lightness by `amount` (negative darkens).
+- [`Motion.Color.Oklab.saturate(lab: Vector3, amount: number): Vector3`](src/Motion.luau#L178-L181): Raises Oklab chroma by `amount`, preserving hue and lightness (negative desaturates).
+- [`Motion.Color.Oklab.rotateHue(lab: Vector3, degrees: number): Vector3`](src/Motion.luau#L183-L186): Rotates hue by `degrees`, preserving chroma and lightness.
+- [`Motion.Color.Oklab.grayscale(lab: Vector3): Vector3`](src/Motion.luau#L188-L190): Removes all chroma, preserving Oklab lightness.
+- [`Motion.Color.Oklab.mix(lab1: Vector3, lab2: Vector3, alpha: number): Vector3`](src/Motion.luau#L192-L194): Linearly interpolates between `lab1` and `lab2` in Oklab space by `alpha`.
+- [`Motion.Color.sRGB`](src/Motion.luau#L210)
+- [`Motion.Color.sRGB.fromLinear(color: Color3): Color3`](src/Motion.luau#L69-L71): Converts linear sRGB space to sRGB space.
+- [`Motion.Color.sRGB.toLinear(color: Color3): Color3`](src/Motion.luau#L73-L75): Converts sRGB space to linear sRGB space.
+- [`Motion.Color`](src/Motion.luau#L1117)
+- [`Motion.Color.lighten(c: Color3, amount: number): Color3`](src/Motion.luau#L216-L219): Raises the perceptual lightness of `c` in Oklab space by `amount` (negative darkens).
+- [`Motion.Color.saturate(c: Color3, amount: number): Color3`](src/Motion.luau#L225-L229): Raises the chroma of `c` in Oklab space by `amount` while preserving hue and lightness (negative desaturates).
+- [`Motion.Color.rotateHue(c: Color3, degrees: number): Color3`](src/Motion.luau#L235-L239): Rotates the hue of `c` by `degrees` around the Oklab color wheel while preserving chroma and lightness.
+- [`Motion.Color.grayscale(c: Color3): Color3`](src/Motion.luau#L245-L248): Strips all chroma from `c`, returning a neutral gray with the same Oklab perceptual lightness.
+- [`Motion.Color.mix(a: Color3, b: Color3, t: number): Color3`](src/Motion.luau#L254-L258): Blends `a` and `b` in Oklab space by unclamped fraction `t` (`0` = `a`, `1` = `b`).
+- [`Motion.Color.luminance(c: Color3): number`](src/Motion.luau#L264): Returns the WCAG relative luminance of `c` from `0` (black) to `1` (white).
+- [`Motion.Color.contrast(a: Color3, b: Color3): number`](src/Motion.luau#L270-L272): Returns the WCAG contrast ratio between `a` and `b` from `1` (identical) to `21` (black on white).
+- [`Motion.Color.readable(bg: Color3, dark: Color3?, light: Color3?): Color3`](src/Motion.luau#L278-L283): Returns whichever of `dark` (default black) or `light` (default white) has the higher WCAG contrast ratio against `bg`.
+- [`Spring`](src/Motion.luau#L986-L994): Constructors: `Motion.spring`, `Motion.tween`.
+- [`Spring:set<T>(value: T)`](src/Motion.luau#L1008-L1020): Retargets the animation toward `value` from its current position (`motion(value)` does the same).
+- [`Spring:impulse<T>(delta: T)`](src/Motion.luau#L1027-L1032): *(Spring only)* Adds `delta` to the spring's current velocity without changing its goal.
+- [`Spring:setVelocity<T>(velocity: T)`](src/Motion.luau#L1039-L1044): *(Spring only)* Replaces the spring's current velocity with `velocity` without changing its goal.
+- [`Spring:setCurrent<T>(value: T)`](src/Motion.luau#L1051-L1060): *(Spring only)* Sets the spring's current animated value immediately without changing its target or velocity.
+- [`Spring:snap<T>(value: T)`](src/Motion.luau#L1067-L1073): *(Spring only)* Jumps both the target and current value of the spring to `value` and zeroes its velocity.
 
 ## Responsive
 

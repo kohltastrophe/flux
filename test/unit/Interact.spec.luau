@@ -933,18 +933,8 @@ sert.model(
 					isClient = true,
 					isStudio = true,
 					strict = true,
-					datatypes = {
-						Enum = Enum,
-						UDim2 = UDim2,
-						Vector2 = Vector2,
-						Vector3 = env.Compat.Vector3,
-					},
 				})
-			local services = {
-				GuiService = simEnv.game:GetService("GuiService"),
-				UserInputService = simEnv.game:GetService("UserInputService"),
-				RunService = simEnv.game:GetService("RunService"),
-			}
+			local services = simEnv.services
 			local input = simEnv:input()
 			local screen = simEnv.Instance.new("ScreenGui")
 			screen.Parent = simEnv.LocalPlayer.PlayerGui

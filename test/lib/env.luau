@@ -22,7 +22,6 @@ else
 		isClient = true,
 		isStudio = true,
 		strict = true,
-		datatypes = Compat,
 		host = {
 			clock = HeadlessClock.now,
 			spawn = Compat.task.spawn,
@@ -33,11 +32,7 @@ else
 		},
 	})
 	Compat.Instance = engine.Instance
-	Compat.services = setmetatable({}, {
-		__index = function(_, name: string): any
-			return engine.game:GetService(name)
-		end,
-	})
+	Compat.services = engine.services
 	-- The engine's RunService phases run in Flux's Heartbeat; Clock.reset drops subscribers, so env.reset re-bridges.
 	function bridge()
 		HeadlessClock.connect("Heartbeat", function(dt: number)
