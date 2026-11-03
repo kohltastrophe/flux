@@ -34,7 +34,14 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          fetch-depth: 0
           submodules: recursive
+
+      - name: Conventional Commits and version check
+        uses: kohltastrophe/release@v1.0.0
+        with:
+          mode: check
+          pr-title: ${{ github.event.pull_request.title }}
 
       - uses: kohltastrophe/sert/actions/setup@v0.1.0
 
@@ -93,6 +100,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          fetch-depth: 0
           submodules: recursive
 
       - uses: kohltastrophe/sert/actions/setup@v0.1.0
@@ -115,6 +123,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          fetch-depth: 0
           submodules: recursive
 
       - uses: kohltastrophe/sert/actions/setup@v0.1.0
