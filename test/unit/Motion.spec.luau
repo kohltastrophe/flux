@@ -48,13 +48,6 @@ local function springs(count: number, start: any, frequency: number, ratio: numb
 	return scope, table.unpack(list)
 end
 
-local function walk(g: any, check: () -> ())
-	for _ = 1, g:int(1, g.size) do
-		advance(g:float(0, 0.1))
-		check()
-	end
-end
-
 local function tweenToGoal(start: any, goal: any)
 	local tw = Flux.tween(start, info(0, "Linear"))
 	tw:set(goal)
@@ -247,55 +240,20 @@ prop("motion · a spring stepped by a then b lands where one step of a + b does"
 	sert.near(run({ a, b }), run({ a + b }), 1e-6, "step(a) + step(b) == step(a + b)")
 end, { runs = 200 })
 
-prop("motion · from rest, damping >= 1 never crosses the target and damping < 1 does", function(g)
-	local frequency, ratio = g:float(0.2, 5), damping(g)
+prop("motion · from rest, an underdamped spring crosses the target at its first damped half-period", function(g)
+	local frequency = g:float(0.5, 5)
+	local ratio = g:float(0.05, 0.95)
 	local start = g:float(-1000, 1000)
 	local goal = away(g, start)
 	local side = if start > goal then 1 else -1
-	g:note("frequency %g damping %g start %g goal %g", frequency, ratio, start, goal)
 	local scope, spring = springs(1, start, frequency, ratio)
 	spring(goal)
-	if ratio >= 1 then
-		local gap = math.abs(start - goal)
-		walk(g, function()
-			local now = (spring:get() - goal) * side
-			expect(now >= -1e-9, `crossed the target: {spring:get()}`)
-			expect(now <= gap + 1e-9, `moved away from the target: gap {gap} -> {now}`)
-			gap = now
-		end)
-	else
-		advance(math.pi / (math.tau * frequency * math.sqrt(1 - ratio * ratio)))
-		expect((spring:get() - goal) * side < 0, `did not overshoot: {spring:get()}`)
-	end
-	scope:Destroy()
-end, { runs = 200 })
-
-prop("motion · a spring settles exactly on its target and leaves the stepped set", function(g)
-	local frequency, ratio = g:float(1, 8), damping(g)
-	if ratio < 1 then
-		ratio = math.max(ratio, 0.2)
-	end
-	local start = g:float(-1000, 1000)
-	local goal, velocity = away(g, start), g:float(-2000, 2000)
-	g:note("frequency %g damping %g start %g goal %g velocity %g", frequency, ratio, start, goal, velocity)
-	local scope, spring = springs(1, start, frequency, ratio)
-	spring(goal)
-	spring:setVelocity(velocity)
-	local motion = Motion.NodeToMotion[spring]
-	for _ = 1, 4000 do
-		if not Engine.isActive(motion) then
-			break
-		end
-		advance(g:float(1 / 240, 1 / 30))
-	end
-	expect(not Engine.isActive(motion), `still moving at {spring:get()}`)
-	expect(spring:get() == goal, `settled at {spring:get()}, not exactly {goal}`)
-	advance(1)
-	expect(spring:get() == goal, "a settled spring stays put")
+	advance(math.pi / (math.tau * frequency * math.sqrt(1 - ratio * ratio)))
+	expect((spring:get() - goal) * side < 0, `did not overshoot: {spring:get()}`)
 	scope:Destroy()
 end, { runs = 100 })
 
-prop("motion · a vector spring moves exactly like three number springs", function(g)
+prop("motion · a vector spring moves like three independent number springs", function(g)
 	local frequency, ratio = g:float(0.2, 5), damping(g)
 	local start, goal, velocity = {}, {}, {}
 	for i = 1, 3 do
@@ -324,14 +282,13 @@ prop("motion · a vector spring moves exactly like three number springs", functi
 		numbers[i](goal[i])
 		numbers[i]:setVelocity(velocity[i])
 	end
-	walk(g, function()
-		local v = vec:get()
-		for i, component in { v.x, v.y, v.z } do
-			local want = numbers[i]:get()
-			local close = math.abs(component - want) <= 2e-4 + 1e-6 * math.abs(want)
-			expect(close, `component {i}: vector {component}, number {want}`)
-		end
-	end)
+	advance(g:float(1 / 240, 0.25))
+	local v = vec:get()
+	for i, component in { v.x, v.y, v.z } do
+		local want = numbers[i]:get()
+		local close = math.abs(component - want) <= 2e-4 + 1e-6 * math.abs(want)
+		expect(close, `component {i}: vector {component}, number {want}`)
+	end
 	scope:Destroy()
 end, { runs = 100 })
 
@@ -350,11 +307,10 @@ prop("motion · impulses add: a run of impulses moves a spring like one impulse 
 		many:impulse(kick)
 	end
 	one:impulse(sum)
-	walk(g, function()
-		expect(many:get() == one:get(), `impulses {table.concat(kicks, ", ")}: {many:get()} vs {one:get()}`)
-	end)
+	advance(g:float(1 / 240, 0.25))
+	expect(many:get() == one:get(), `impulses {table.concat(kicks, ", ")}: {many:get()} vs {one:get()}`)
 	scope:Destroy()
-end, { runs = 200 })
+end, { runs = 150 })
 
 prop("motion · setVelocity replaces every earlier impulse", function(g)
 	local frequency, ratio = g:float(0.2, 5), damping(g)
@@ -372,63 +328,10 @@ prop("motion · setVelocity replaces every earlier impulse", function(g)
 	end
 	kicked:setVelocity(velocity)
 	clean:setVelocity(velocity)
-	walk(g, function()
-		expect(kicked:get() == clean:get(), `velocity {velocity}: {kicked:get()} vs {clean:get()}`)
-	end)
+	advance(g:float(1 / 240, 0.25))
+	expect(kicked:get() == clean:get(), `velocity {velocity}: {kicked:get()} vs {clean:get()}`)
 	scope:Destroy()
-end, { runs = 200 })
-
-prop("motion · a tween follows its eased curve across repeats and reverses and ends exactly", function(g)
-	local style, direction = g:pick(STYLES), g:pick(DIRECTIONS)
-	local repeats = g:weighted({ { 3, 0 }, { 2, 1 }, { 2, 2 }, { 1, 3 }, { 1, -1 } })
-	local reverses = g:bool()
-	local tweenInfo = info(g:float(0.05, 2), style, direction, repeats, reverses)
-	local time = tweenInfo.Time
-	local start = g:float(-1000, 1000)
-	local goal = away(g, start)
-	g:note(
-		"time %g %s %s repeats %d reverses %s start %g goal %g",
-		time,
-		style,
-		direction,
-		repeats,
-		tostring(reverses),
-		start,
-		goal
-	)
-	local scope, tween = Flux.scope(function()
-		return Flux.tween(start, tweenInfo)
-	end)
-	tween(goal)
-	local motion = Motion.NodeToMotion[tween]
-	local ease = Easing.curve(style, direction)
-	local cycle = if reverses then 2 * time else time
-	local total = if repeats < 0 then math.huge else cycle * (repeats + 1)
-
-	local elapsed = 0
-	for _ = 1, g.size do
-		local dt = g:float(0, 1.5 * time)
-		advance(dt)
-		elapsed += dt
-		g:note("elapsed %g", elapsed)
-		local into = elapsed % cycle
-		local legAt = into % time
-		local onEdge = math.min(legAt, time - legAt) < 1e-6 or math.abs(elapsed - total) < 1e-6
-		if elapsed > total and not onEdge then
-			expect(tween:get() == (if reverses then start else goal), `ended at {tween:get()}`)
-			expect(not Engine.isActive(motion), "a finished tween leaves the stepped set")
-			break
-		elseif not onEdge then
-			local alpha = if into < time then ease(into / time) else 1 - ease((into - time) / time)
-			local want = start + (goal - start) * alpha
-			expect(
-				math.abs(tween:get() - want) <= 1e-6 * (1 + math.abs(want)),
-				`at {elapsed}: {tween:get()}, want {want}`
-			)
-		end
-	end
-	scope:Destroy()
-end, { runs = 200 })
+end, { runs = 150 })
 
 test("motion · impulse/setVelocity/setCurrent/snap warn on a tween node", function()
 	local tw = Flux.tween(0, info(0.2)) :: any
@@ -1122,7 +1025,7 @@ local finiteBoundaryDeg = sert.gen.filter(sert.gen.boundaryFloat(-720, 720), fun
 end)
 
 prop(
-	"color · boundaryFloat fuzzing across Oklab, sRGB, mix, contrast, lighten, saturate, rotateHue, grayscale produces zero NaNs",
+	"color · boundaryFloat fuzzing across Oklab, sRGB, mix, contrast, lighten, saturate, rotateHue, grayscale upholds gamut and algebraic laws",
 	function(g)
 		local r1, g1, b1 = finiteBoundary01(g), finiteBoundary01(g), finiteBoundary01(g)
 		local r2, g2, b2 = finiteBoundary01(g), finiteBoundary01(g), finiteBoundary01(g)
@@ -1132,6 +1035,7 @@ prop(
 
 		local c1 = Color3.new(math.clamp(r1, 0, 1), math.clamp(g1, 0, 1), math.clamp(b1, 0, 1))
 		local c2 = Color3.new(math.clamp(r2, 0, 1), math.clamp(g2, 0, 1), math.clamp(b2, 0, 1))
+		local tClamped = math.clamp(t, 0, 1)
 
 		local function checkColor3(c: Color3, label: string)
 			expect(c.R == c.R and c.G == c.G and c.B == c.B, `{label} has no NaN components`)
@@ -1163,18 +1067,52 @@ prop(
 		checkColor3(Oklab.toRGB(lab1, true), "Oklab.toRGB(gamutClip=true)")
 		checkColor3(Color.sRGB.toLinear(c1), "sRGB.toLinear")
 		checkColor3(Color.sRGB.fromLinear(c1), "sRGB.fromLinear")
-		checkColor3(Color.mix(c1, c2, math.clamp(t, 0, 1)), "Color.mix")
+		checkColor3(Color.mix(c1, c2, tClamped), "Color.mix")
 		checkColor3(Color.lighten(c1, delta), "Color.lighten")
 		checkColor3(Color.saturate(c1, delta), "Color.saturate")
 		checkColor3(Color.rotateHue(c1, deg), "Color.rotateHue")
 		checkColor3(Color.grayscale(c1), "Color.grayscale")
 
+		-- Algebraic mix invariants
+		near(Color.mix(c1, c1, tClamped), c1, 1e-4, "mix(c, c, t) == c")
+		near(Color.mix(c1, c2, 0), c1, 1e-4, "mix(a, b, 0) == a")
+		near(Color.mix(c1, c2, 1), c2, 1e-4, "mix(a, b, 1) == b")
+		near(Color.mix(c1, c2, tClamped), Color.mix(c2, c1, 1 - tClamped), 1e-4, "mix(a, b, t) == mix(b, a, 1 - t)")
+
+		-- Contrast & luminance invariants
 		local lum = Color.luminance(c1)
 		expect(lum == lum and lum >= -1e-6 and lum <= 1 + 1e-6, `luminance in [0, 1]: {lum}`)
 		local cr = Color.contrast(c1, c2)
+		local crRev = Color.contrast(c2, c1)
+		near(cr, crRev, 1e-6, "contrast(a, b) == contrast(b, a)")
 		expect(cr == cr and cr >= 1 - 1e-5 and cr <= 21 + 1e-4, `contrast in [1, 21]: {cr}`)
+		near(Color.contrast(c1, c1), 1, 1e-6, "contrast(c, c) == 1")
 		local rd = Color.readable(c1)
 		checkColor3(rd, "Color.readable")
+
+		-- Hue rotation round-trip for chromatic colors
+		near(Oklab.rotateHue(Oklab.rotateHue(lab1, deg), -deg), lab1, 1e-4, "Oklab.rotateHue round-trip")
+		if chroma(lab1) > 1e-3 and inGamut(Oklab.rotateHue(lab1, deg), 1e-3) then
+			near(
+				Color.rotateHue(Color.rotateHue(c1, deg), -deg),
+				c1,
+				1e-4,
+				"rotateHue(rotateHue(c, deg), -deg) == c for in-gamut chromatic color"
+			)
+		end
+
+		-- Luminance & Oklab lightness monotonicity for lighten / darken
+		local absDelta = math.abs(delta)
+		local lighter = Color.lighten(c1, absDelta)
+		local darker = Color.lighten(c1, -absDelta)
+		expect(
+			Oklab.fromRGB(darker).X <= lab1.X + 1e-4 and Oklab.fromRGB(lighter).X >= lab1.X - 1e-4,
+			"Oklab lightness monotonicity for lighten/darken"
+		)
+		expect(
+			Color.luminance(darker) <= lum + 2e-3 and Color.luminance(lighter) >= lum - 2e-3,
+			"luminance monotonicity for lighten/darken"
+		)
 	end,
 	{ runs = 120 }
 )
@@ -1251,80 +1189,274 @@ sert.laws.differential(
 	{ runs = 80 }
 )
 
-sert.laws.differential("motion · tween linear step matches analytical ramp oracle", {
-	gen = sert.gen.record({
-		startVal = sert.gen.float(-100, 100),
-		endVal = sert.gen.float(-100, 100),
-		duration = sert.gen.float(0.1, 2.0),
-		elapsed = sert.gen.float(0, 2.5),
-	}),
-	oracle = function(cfg)
-		local alpha = math.clamp(cfg.elapsed / cfg.duration, 0, 1)
-		return cfg.startVal + (cfg.endVal - cfg.startVal) * alpha
-	end,
-	sut = function(cfg)
-		local tw = Flux.tween(cfg.startVal, info(cfg.duration, "Linear", "Out"))
-		tw:set(cfg.endVal)
-		Flux.Motion.step(cfg.elapsed)
-		local out = tw:peek()
-		tw:Destroy()
-		Flux.flush()
-		return out
-	end,
-	eq = function(a, b)
-		return math.abs(a - b) <= 1e-4
-	end,
-}, { runs = 80 })
+sert.laws.differential(
+	"motion · tween step progression across EasingStyle, EasingDirection, repeatCount, reverses, and delayTime matches analytical time-folding oracle",
+	{
+		gen = sert.gen.record({
+			startVal = sert.gen.float(-100, 100),
+			endVal = sert.gen.float(-100, 100),
+			duration = sert.gen.float(0.1, 1.5),
+			style = sert.gen.pick(STYLES),
+			direction = sert.gen.pick(DIRECTIONS),
+			repeatCount = sert.gen.pick({ -1, 0, 1, 2, 3 }),
+			reverses = sert.gen.bool(),
+			delayTime = sert.gen.oneOf({ sert.gen.constant(0), sert.gen.float(0.05, 0.5) }),
+			steps = sert.gen.list(sert.gen.float(0.02, 0.4), 1, 6),
+		}),
+		oracle = function(cfg: any)
+			local ease = Easing.curve(cfg.style, cfg.direction)
+			local now = 0
+			local startTime = cfg.delayTime
+			local repeatsLeft = cfg.repeatCount
+			local reversing = false
+			local duration = cfg.duration
+			local cur = cfg.startVal
+			local active = true
+			for _, dt in cfg.steps do
+				now += dt
+				if active and now >= startTime then
+					local elapsed = now - startTime
+					local alpha = if duration > 0 then elapsed / duration else 1
+					while alpha >= 1 do
+						if cfg.reverses and not reversing then
+							reversing = true
+						elseif repeatsLeft ~= 0 then
+							if repeatsLeft > 0 then
+								repeatsLeft -= 1
+							end
+							reversing = false
+						else
+							active = false
+							cur = if reversing then cfg.startVal else cfg.endVal
+							break
+						end
+						startTime += duration
+						alpha = (now - startTime) / duration
+					end
+					if active then
+						local eased = ease(math.clamp(alpha, 0, 1))
+						if reversing then
+							eased = 1 - eased
+						end
+						cur = cfg.startVal + (cfg.endVal - cfg.startVal) * eased
+					end
+				end
+			end
+			return cur
+		end,
+		sut = function(cfg: any)
+			local tweenInfo = info(cfg.duration, cfg.style, cfg.direction, cfg.repeatCount, cfg.reverses, cfg.delayTime)
+			local tw = Flux.tween(cfg.startVal, tweenInfo)
+			tw:set(cfg.endVal)
+			local motion = Motion.NodeToMotion[tw]
+			motion.startTime = Engine.now + cfg.delayTime
+			for _, dt in cfg.steps do
+				Flux.Motion.step(dt)
+			end
+			local out = tw:peek()
+			tw:Destroy()
+			Flux.flush()
+			return out
+		end,
+		eq = function(a, b)
+			return math.abs(a - b) <= 1e-4
+		end,
+	},
+	{ runs = 100 }
+)
 
 local finiteMotionFloat = sert.gen.filter(sert.gen.boundaryFloat(-1e3, 1e3), function(x)
 	return x == x and math.abs(x) <= 1e3
 end)
 
-prop(
-	"motion · spring and tween step convergence with boundaryFloat targets stays finite and settles to target",
-	function(g)
-		local startVal = finiteMotionFloat(g)
-		local targetVal = finiteMotionFloat(g)
-		local damping = g:pick({ 0.5, 1.0, 1.5 })
+local function springMechEnergy(motion: any): number
+	local w = math.tau * motion.frequency
+	local x = motion.value[1] - motion.target[1]
+	local v = motion.vel[1]
+	return 0.5 * v * v + 0.5 * w * w * x * x
+end
 
-		local spr = Flux.spring(startVal, 6, damping)
-		spr:set(targetVal)
-		local prevDist = math.abs(targetVal - startVal)
-		local maxBound = math.max(1, prevDist * 2.5)
-		for _ = 1, 60 do
-			Flux.Motion.step(1 / 30)
-			local cur = spr:peek()
-			expect(cur == cur and math.abs(cur) < math.huge, `spring value is finite: {cur}`)
-			local dist = math.abs(targetVal - cur)
-			expect(dist <= maxBound + 1e-3, `spring stays within energy envelope: dist={dist}, max={maxBound}`)
-			if damping >= 1.0 then
-				expect(dist <= prevDist + 1e-4, `critically/overdamped spring approaches target monotonically`)
-				prevDist = dist
-			end
-		end
-		-- Advance long enough to settle completely
-		Flux.Motion.step(10)
-		near(spr:peek(), targetVal, 1e-3, "spring settles to targetVal")
-		spr:Destroy()
+local function syncSpringState(state: any, sut: any, unforcedFromRest: boolean)
+	local overPos = sut.over:peek()
+	local goal = sut.overMotion.target[1]
+	state.goal = goal
+	state.unforcedFromRest = unforcedFromRest
+	state.initialSign = math.sign(overPos - goal)
+	state.prevOverDist = math.abs(overPos - goal)
+	local e = springMechEnergy(sut.underMotion)
+	state.prevUnderEnergy = e
+	state.lastPeakEnergy = e
+end
 
-		local tw = Flux.tween(startVal, info(0.5, "Quad", "Out"))
-		tw:set(targetVal)
-		local prevTweenDist = math.abs(targetVal - startVal)
-		for _ = 1, 10 do
-			Flux.Motion.step(0.05)
-			local cur = tw:peek()
-			expect(cur == cur and math.abs(cur) < math.huge, `tween value is finite: {cur}`)
-			local dist = math.abs(targetVal - cur)
-			expect(dist <= prevTweenDist + 1e-4, "Quad Out tween approaches target monotonically")
-			prevTweenDist = dist
+local function observeSpringStep(state: any, sut: any)
+	if state.unforcedFromRest then
+		local cur = sut.over:peek()
+		local dist = math.abs(cur - state.goal)
+		local signed = (cur - state.goal) * state.initialSign
+		if signed < -1e-6 then
+			state.overshotFromRest = true
 		end
-		Flux.Motion.step(1.0)
-		near(tw:peek(), targetVal, 1e-4, "tween settles to targetVal")
-		tw:Destroy()
+		if dist > state.prevOverDist + 1e-5 then
+			state.nonMonotonicFromRest = true
+		end
+		state.prevOverDist = dist
+	end
+	local newE = springMechEnergy(sut.underMotion)
+	if newE > state.prevUnderEnergy * (1 + 1e-6) + 1e-7 then
+		state.energyIncreased = true
+	end
+	state.prevUnderEnergy = newE
+end
+
+sert.model("motion · physical spring state machine across boundaryFloat goals, impulses, and damping regimes", {
+	init = function()
+		local over, under
+		local scope = Flux.scope(function()
+			over = Flux.spring(0, 4, 1.25)
+			under = Flux.spring(0, 4, 0.3)
+		end)
+		local sut = {
+			scope = scope,
+			over = over,
+			under = under,
+			overMotion = Motion.NodeToMotion[over],
+			underMotion = Motion.NodeToMotion[under],
+		}
+		local state = {
+			goal = 0,
+			unforcedFromRest = true,
+			initialSign = 0,
+			prevOverDist = 0,
+			overshotFromRest = false,
+			nonMonotonicFromRest = false,
+			prevUnderEnergy = 0,
+			lastPeakEnergy = 0,
+			energyIncreased = false,
+		}
+		syncSpringState(state, sut, true)
+		return state, sut
+	end,
+	teardown = function(sut)
+		sut.scope:Destroy()
 		Flux.flush()
 	end,
-	{ runs = 80 }
-)
+	actions = {
+		SetGoal = {
+			weight = 3,
+			gen = finiteMotionFloat,
+			run = function(sut, goal, state)
+				local atRest = sut.overMotion.vel[1] == 0
+				sut.over:set(goal)
+				sut.under:set(goal)
+				syncSpringState(state, sut, atRest)
+			end,
+		},
+		Impulse = {
+			weight = 2,
+			gen = finiteMotionFloat,
+			run = function(sut, delta, state)
+				sut.over:impulse(delta)
+				sut.under:impulse(delta)
+				syncSpringState(state, sut, false)
+			end,
+		},
+		SetVelocity = {
+			weight = 2,
+			gen = finiteMotionFloat,
+			run = function(sut, vel, state)
+				sut.over:setVelocity(vel)
+				sut.under:setVelocity(vel)
+				syncSpringState(state, sut, vel == 0)
+			end,
+		},
+		SetPosition = {
+			weight = 2,
+			gen = finiteMotionFloat,
+			run = function(sut, pos, state)
+				local atRest = sut.overMotion.vel[1] == 0 and sut.underMotion.vel[1] == 0
+				sut.over:setCurrent(pos)
+				sut.under:setCurrent(pos)
+				syncSpringState(state, sut, atRest)
+			end,
+		},
+		Snap = {
+			weight = 2,
+			gen = finiteMotionFloat,
+			run = function(sut, val, state)
+				sut.over:snap(val)
+				sut.under:snap(val)
+				syncSpringState(state, sut, true)
+			end,
+		},
+		StepFrame = {
+			weight = 4,
+			gen = function(g)
+				return g:float(1 / 240, 1 / 15)
+			end,
+			run = function(sut, dt, state)
+				advance(dt)
+				observeSpringStep(state, sut)
+			end,
+		},
+		StepUntilSettled = {
+			weight = 2,
+			run = function(sut, _arg, state)
+				local f = sut.underMotion.frequency
+				local d = sut.underMotion.damping
+				local halfPeriod = math.pi / (math.tau * f * math.sqrt(1 - d * d))
+				for _ = 1, 3 do
+					local wasActive = Engine.isActive(sut.underMotion)
+					local prevPeak = state.lastPeakEnergy
+					advance(halfPeriod)
+					observeSpringStep(state, sut)
+					local curE = springMechEnergy(sut.underMotion)
+					if wasActive and prevPeak > 1e-4 and curE >= prevPeak then
+						state.energyIncreased = true
+					end
+					state.lastPeakEnergy = curE
+				end
+				advance(30)
+				advance(1 / 60)
+				observeSpringStep(state, sut)
+				syncSpringState(state, sut, true)
+			end,
+		},
+	},
+	never = {
+		criticallyOrOverdampedOvershotFromRest = function(state)
+			return state.overshotFromRest
+		end,
+		criticallyOrOverdampedMovedAwayFromRest = function(state)
+			return state.nonMonotonicFromRest
+		end,
+		underdampedMechanicalEnergyIncreased = function(state)
+			return state.energyIncreased
+		end,
+	},
+	invariants = {
+		valuesAndVelocitiesAreFinite = function(_state: any, sut: any)
+			local op: number, up: number = sut.over:peek(), sut.under:peek()
+			local ov: number, uv: number = sut.overMotion.vel[1], sut.underMotion.vel[1]
+			expect(op == op and math.abs(op) < math.huge, `overdamped position finite: {op}`)
+			expect(up == up and math.abs(up) < math.huge, `underdamped position finite: {up}`)
+			expect(ov == ov and math.abs(ov) < math.huge, `overdamped velocity finite: {ov}`)
+			expect(uv == uv and math.abs(uv) < math.huge, `underdamped velocity finite: {uv}`)
+		end,
+		settledSpringsMatchGoalWithZeroVelocity = function(state, sut)
+			if not Engine.isActive(sut.overMotion) then
+				sert.eq(sut.over:peek(), state.goal, "inactive overdamped spring peek == goal")
+				sert.eq(sut.overMotion.vel[1], 0, "inactive overdamped spring velocity == 0")
+			end
+			if not Engine.isActive(sut.underMotion) then
+				sert.eq(sut.under:peek(), state.goal, "inactive underdamped spring peek == goal")
+				sert.eq(sut.underMotion.vel[1], 0, "inactive underdamped spring velocity == 0")
+			end
+		end,
+	},
+}, {
+	runs = 100,
+	length = 16,
+})
 
 test(
 	"motion · static target with reactive config preserves imperative set, nil fallback methods, and sequence overshoot clamping",

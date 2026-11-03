@@ -476,79 +476,214 @@ rtest("clock · a manual clock steps subscribers, motion and flush; engine defer
 	end)
 end)
 
-local function firstExecutionTime(entry: { delay: number, seq: number }): number
-	local firedAt = 0
-	manual(function()
-		local tickOrder = 0
-		Clock.delay(0, function()
-			tickOrder += 1
-		end)
-		for _ = 1, entry.seq do
-			Clock.delay(entry.delay, function()
-				tickOrder += 1
-			end)
-		end
-		Clock.delay(entry.delay, function()
-			tickOrder += 1
-			firedAt = Clock.now() * 1e6 + tickOrder
-		end)
-		Clock.step(1.5)
-	end)
-	return firedAt
-end
-
-sert.laws.order("clock · deadline and registration sequence form a strict weak order", {
-	gen = function(g)
-		return {
-			delay = g:int(0, 20) * 0.05,
-			seq = g:int(1, 5),
+local clockModelSpec = {
+	init = function()
+		local wasManual = Clock.isManual()
+		Clock.manual(true)
+		Clock.reset()
+		local baseNow = Clock.now()
+		local state = {
+			now = baseNow,
+			nextSeq = 0,
+			timers = {} :: { [number]: { id: number, due: number, seq: number, cancelled: boolean, fired: boolean } },
+			defers = {} :: { [number]: { id: number, seq: number, cancelled: boolean, fired: boolean } },
+			firedTimers = {} :: { { id: number, due: number, seq: number, at: number } },
+			cancelledFired = false,
+			outOfOrderFired = false,
 		}
+		local sut = {
+			wasManual = wasManual,
+			threads = {} :: { [number]: thread },
+			state = state,
+		}
+		return state, sut
 	end,
-	lt = function(a, b)
-		if a.delay ~= b.delay then
-			return a.delay < b.delay
+	teardown = function(sut)
+		Clock.reset()
+		Compat.setWarnHook(nil)
+		if not sut.wasManual then
+			Clock.manual(false)
 		end
-		return a.seq < b.seq and firstExecutionTime(a) < firstExecutionTime(b)
 	end,
-	eq = function(a, b)
-		return a.delay == b.delay and a.seq == b.seq
-	end,
-})
-
-sert.prop("clock · random delay deadlines fire in non-decreasing (deadline, sequence) order", function(g)
-	manual(function()
-		local count = g:int(2, 16)
-		local fired: { { deadline: number, seq: number, at: number } } = {}
-		local base = Clock.now()
-		for seq = 1, count do
-			local d = g:float(0, 1)
-			local deadline = base + d
-			Clock.delay(d, function()
-				table.insert(fired, {
-					deadline = deadline,
-					seq = seq,
-					at = Clock.now(),
-				})
-			end)
-		end
-		local remaining = 1.2
-		while remaining > 0 do
-			local dt = math.min(remaining, g:float(0.01, 0.25))
-			Clock.step(dt)
-			remaining -= dt
-		end
-		eq(#fired, count, "all scheduled delays fired once total step exceeded max deadline")
-		for i = 1, #fired do
-			local cur = fired[i]
-			expect(cur.at + 1e-9 >= cur.deadline, "callback never fires before its deadline")
-			if i > 1 then
-				local prev = fired[i - 1]
-				local ordered = prev.deadline < cur.deadline - 1e-9
-					or (math.abs(prev.deadline - cur.deadline) <= 1e-9 and prev.seq < cur.seq)
-				expect(ordered, "callbacks fire in non-decreasing (deadline, seq) order")
+	commands = {
+		ScheduleDelay = {
+			gen = function(g)
+				return g:int(0, 12) * 0.025
+			end,
+			run = function(sut, delaySec, state)
+				local id = state.nextSeq + 1
+				local due = state.now + delaySec
+				local th = Clock.delay(delaySec, function()
+					local entry = state.timers[id]
+					if entry == nil or entry.cancelled then
+						state.cancelledFired = true
+						return
+					end
+					entry.fired = true
+					local prev = state.firedTimers[#state.firedTimers]
+					if prev ~= nil then
+						local inOrder = prev.due < entry.due - 1e-9
+							or (math.abs(prev.due - entry.due) <= 1e-9 and prev.seq < entry.seq)
+						if not inOrder then
+							state.outOfOrderFired = true
+						end
+					end
+					table.insert(state.firedTimers, {
+						id = id,
+						due = due,
+						seq = id,
+						at = Clock.now(),
+					})
+				end)
+				sut.threads[id] = th
+				return { id = id, due = due }
+			end,
+			next = function(state, _, res)
+				state.nextSeq = res.id
+				state.timers[res.id] = {
+					id = res.id,
+					due = res.due,
+					seq = res.id,
+					cancelled = false,
+					fired = false,
+				}
+			end,
+		},
+		ScheduleDefer = {
+			run = function(sut, _, state)
+				local id = state.nextSeq + 1
+				local th = Clock.defer(function()
+					local entry = state.defers[id]
+					if entry == nil or entry.cancelled then
+						state.cancelledFired = true
+						return
+					end
+					entry.fired = true
+				end)
+				sut.threads[id] = th
+				return id
+			end,
+			next = function(state, _, id)
+				state.nextSeq = id
+				state.defers[id] = {
+					id = id,
+					seq = id,
+					cancelled = false,
+					fired = false,
+				}
+			end,
+		},
+		CancelTimer = {
+			gen = function(g, state)
+				local active: { number } = {}
+				for id, t in state.timers do
+					if not t.cancelled and not t.fired then
+						table.insert(active, id)
+					end
+				end
+				for id, d in state.defers do
+					if not d.cancelled and not d.fired then
+						table.insert(active, id)
+					end
+				end
+				if #active == 0 then
+					return 0
+				end
+				table.sort(active)
+				return g:pick(active)
+			end,
+			run = function(sut, id)
+				if id > 0 and sut.threads[id] ~= nil then
+					Clock.cancel(sut.threads[id])
+				end
+			end,
+			next = function(state, id)
+				if id > 0 then
+					if state.timers[id] ~= nil then
+						state.timers[id].cancelled = true
+					end
+					if state.defers[id] ~= nil then
+						state.defers[id].cancelled = true
+					end
+				end
+			end,
+		},
+		StepDelta = {
+			gen = function(g)
+				return g:int(0, 8) * 0.025
+			end,
+			run = function(_, dt, state)
+				table.clear(state.firedTimers)
+				Clock.step(dt)
+			end,
+			next = function(state, dt)
+				state.now += dt
+				state.steppedSeq = state.nextSeq
+				for _, d in state.defers do
+					if not d.cancelled then
+						d.fired = true
+					end
+				end
+			end,
+		},
+		Drain = {
+			run = function()
+				Clock.drain()
+			end,
+			next = function(state)
+				for _, d in state.defers do
+					if not d.cancelled then
+						d.fired = true
+					end
+				end
+			end,
+		},
+		Reset = {
+			weight = 1,
+			run = function(sut, _, state)
+				Clock.reset()
+				table.clear(sut.threads)
+				table.clear(state.firedTimers)
+			end,
+			next = function(state)
+				table.clear(state.timers)
+				table.clear(state.defers)
+				state.steppedSeq = nil
+			end,
+		},
+	},
+	never = {
+		cancelledTimerFired = function(state)
+			return state.cancelledFired
+		end,
+		outOfOrderDeadlineFired = function(state)
+			return state.outOfOrderFired
+		end,
+	},
+	invariants = {
+		virtualNowMatchesReference = function(state)
+			near(Clock.now(), state.now, 1e-9, "Clock.now() matches reference virtual time")
+		end,
+		dueTimersFollowReferenceQueue = function(state)
+			for _, f in state.firedTimers do
+				expect(f.at + 1e-9 >= f.due, "fired timer never runs before its deadline")
 			end
-		end
-	end)
-end, { runs = 100 })
+			for _, t in state.timers do
+				if not t.cancelled then
+					if state.steppedSeq ~= nil and t.seq <= state.steppedSeq and t.due <= state.now + 1e-9 then
+						expect(t.fired, `due timer #{t.id} (due={t.due}, now={state.now}) has fired`)
+					elseif t.due > state.now + 1e-7 then
+						expect(not t.fired, `future timer #{t.id} (due={t.due}, now={state.now}) has not fired yet`)
+					end
+				end
+			end
+		end,
+	},
+}
+
+sert.model("clock · priority-queue scheduler matches reference virtual time and (due, seq) order", clockModelSpec, {
+	runs = 120,
+	length = 30,
+})
 
 return {}
