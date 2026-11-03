@@ -5,7 +5,6 @@
 #   studio [--suite core]       the suite in a fresh, unattended Studio
 #   lint / mutate               static checks, compile-time type tests, and mutation testing
 #   coverage --min 90           line coverage after `run --coverage`
-#   release check-version --package flux [--tag TAG]
 #   dist --from REV             the released tree onto the dist branch
 #
 # Work against a sert checkout: put `[override] sert = "../sert"` in sert.local.toml (gitignored).
@@ -53,15 +52,17 @@ registration = { aggregator = "test/unit/init.luau", specs = "test/unit/**/*.spe
 pass = ["test/types"]
 fail = ["test/types/fail"]
 
-[release.packages.flux]
+[release]
 prefix = "v"
-versions = [{ file = "wally.toml", key = "package.version" }]
+versions = [
+	{ file = "wally.toml", key = "package.version" },
+	{ file = ".luaudocs/guide/introduction/getting-started.md", pattern = 'Flux = "kohltastrophe/flux@([^"]+)"' },
+]
 
 [dist]
 paths = ["default.project.json", "src"]
 branch = "dist"
 name = "Flux"
-package = "flux"
 
 [cloud]
 project = "test/default.project.json"

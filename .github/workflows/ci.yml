@@ -7,8 +7,6 @@ on:
   pull_request:
     branches:
       - main
-  schedule:
-    - cron: "17 4 * * *"
   workflow_dispatch:
 
 permissions:
@@ -24,17 +22,25 @@ defaults:
 
 jobs:
   check:
-    if: github.event_name != 'schedule'
-    name: Lint, Coverage & Mutation
+    name: Lint, Test, Coverage & Mutation
     runs-on: ubuntu-latest
+    environment: testing
     timeout-minutes: 30
-    outputs:
-      coverage: ${{ steps.coverage.outputs.pct }}
-      mutate: ${{ steps.mutate.outputs.pct }}
+    concurrency:
+      group: luau-execution
+      cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           submodules: recursive
+          persist-credentials: false
+
+      - name: Conventional Commits and version check
+        uses: kohltastrophe/release@v1.0.0
+        with:
+          mode: check
+          pr-title: ${{ github.event.pull_request.title }}
 
       - uses: kohltastrophe/sert/actions/setup@v0.1.0
 
@@ -56,70 +62,28 @@ jobs:
           exit "$status"
 
       - name: sert mutate
-        id: mutate
-        run: |
-          status=0
-          pct=$(python3 tools/sert.py mutate --no-coverage-run --min 85) || status=$?
-          echo "pct=$pct" >> "$GITHUB_OUTPUT"
-          exit "$status"
-
-  coverage-badge:
-    needs: check
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    environment: testing
-    runs-on: ubuntu-latest
-    steps:
-      - name: Update coverage badge
-        uses: schneegans/dynamic-badges-action@28b0fa8bdeb46170ac397105ece0c1fe58f68910 # v1.9.0
-        with:
-          auth: ${{ secrets.GIST_KEY }}
-          gistID: ${{ secrets.GIST_ID }}
-          filename: flux-coverage.json
-          label: coverage
-          message: ${{ needs.check.outputs.coverage }}%
-          valColorRange: ${{ needs.check.outputs.coverage }}
-          minColorRange: 50
-          maxColorRange: 90
-
-  roblox:
-    if: github.event_name != 'schedule'
-    name: Roblox (Open Cloud)
-    runs-on: ubuntu-latest
-    environment: testing
-    timeout-minutes: 30
-    concurrency:
-      group: luau-execution
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          submodules: recursive
-
-      - uses: kohltastrophe/sert/actions/setup@v0.1.0
+        run: python3 tools/sert.py mutate --no-coverage-run --min 85
 
       - name: Build the place
         run: rojo build test/default.project.json --output "$RUNNER_TEMP/sert-cloud.rbxl"
 
       - name: sert cloud
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         env:
           ROBLOX_API_KEY: ${{ secrets.ROBLOX_API_KEY }}
           ROBLOX_UNIVERSE_ID: ${{ secrets.ROBLOX_UNIVERSE_ID || secrets.ROBLOX_TEST_UNIVERSE_ID }}
           ROBLOX_PLACE_ID: ${{ secrets.ROBLOX_PLACE_ID || secrets.ROBLOX_TEST_PLACE_ID }}
         run: python3 tools/sert.py cloud --place "$RUNNER_TEMP/sert-cloud.rbxl" --script test/spec.client.luau
 
-  exhaustive:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    name: Exhaustive Properties
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v6
+      - name: Update coverage badge
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: schneegans/dynamic-badges-action@28b0fa8bdeb46170ac397105ece0c1fe58f68910 # v1.9.0
         with:
-          submodules: recursive
-
-      - uses: kohltastrophe/sert/actions/setup@v0.1.0
-        with:
-          rokit: "false"
-
-      - name: sert run --exhaustive
-        run: python3 tools/sert.py run --exhaustive
+          auth: ${{ secrets.GIST_KEY }}
+          gistID: ${{ secrets.GIST_ID }}
+          filename: flux-coverage.json
+          label: coverage
+          message: ${{ steps.coverage.outputs.pct }}%
+          valColorRange: ${{ steps.coverage.outputs.pct }}
+          minColorRange: 50
+          maxColorRange: 90

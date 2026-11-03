@@ -1,16 +1,12 @@
-# Release Flux: check the version, wait for CI on the tagged commit, build the .rbxm files, create the GitHub release,
-# then publish to Wally and the Creator Store.
-#
-#   push a v* tag              release (the tag must equal v<wally.toml version>: sert release check-version)
-#   Run workflow (dry_run on)  everything up to the release, including the Wally package check
-#
-# Bump wally.toml's version in the commit you tag. The only write is the Dist job: it commits the released tree
-# (sert.toml [dist].paths: default.project.json, src) onto the `dist` branch.
+# Release Flux. kohltastrophe/release keeps a release PR open on main that bumps wally.toml and guide versions;
+# merging it tags v<version>, builds the .rbxm files, creates the GitHub release, updates the `dist` branch,
+# and publishes to Wally and the Creator Store.
 name: Release
 
 on:
   push:
-    tags: ["v*"]
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       dry_run:
@@ -19,7 +15,9 @@ on:
         default: true
 
 permissions:
-  contents: read
+  contents: write
+  pull-requests: write
+  actions: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -30,57 +28,50 @@ defaults:
     shell: bash
 
 jobs:
-  version:
-    name: Version
+  release:
+    name: Release
     runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.check.outputs.version }}
-      prerelease: ${{ steps.check.outputs.prerelease }}
-      release: ${{ steps.check.outputs.release }}
+    environment: release
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          persist-credentials: false
+          fetch-depth: 0
+          token: ${{ secrets.MY_RELEASE_PLEASE_TOKEN || github.token }}
 
-      - name: Check the version (and the tag)
-        id: check
-        env:
-          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
-        run: |
-          if [ "$GITHUB_REF_TYPE" = tag ]; then
-            version=$(python3 tools/sert.py release check-version --package flux --tag "$GITHUB_REF_NAME")
-          elif [ "$DRY_RUN" = true ]; then
-            version=$(python3 tools/sert.py release check-version --package flux)
-          else
-            echo "::error::Only a v* tag is released: push the tag, or run this workflow on the tag."
-            exit 1
-          fi
-          case "$version" in *-*) prerelease=true ;; *) prerelease=false ;; esac
-          if [ "$DRY_RUN" = true ]; then release=false; else release=true; fi
-          {
-            echo "version=$version"
-            echo "prerelease=$prerelease"
-            echo "release=$release"
-          } >> "$GITHUB_OUTPUT"
-          echo "Flux $version: release=$release prerelease=$prerelease"
+      - name: Release PR or Release
+        id: release
+        uses: kohltastrophe/release@v1.0.0
+        with:
+          token: ${{ secrets.MY_RELEASE_PLEASE_TOKEN || github.token }}
+          dry-run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
 
-  ci:
-    name: Wait for CI
-    needs: version
-    if: needs.version.outputs.release == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    permissions:
-      actions: read
-    steps:
-      - name: Wait for CI to pass on this commit
+      - uses: CompeyDev/setup-rokit@1d9390883f7ebce19d48f5b8d006e11d387c92ab # v0.2.1
+        if: steps.release.outputs.should_release == 'true' || github.event_name == 'workflow_dispatch'
+        with:
+          version: v1.2.0
+
+      - name: Wait for CI
+        if: steps.release.outputs.should_release == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          empty=0
+          api_errors=0
           while true; do
-            RESULT=$(gh api \
+            if ! RESULT=$(gh api \
               "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push" \
-              --jq '.workflow_runs | sort_by(.run_number) | last | "\(.status // "none") \(.conclusion // "none")"') || RESULT="none none"
+              --jq '.workflow_runs | sort_by(.run_number) | last | "\(.status // "none") \(.conclusion // "none")"'); then
+              api_errors=$((api_errors + 1))
+              if [ "$api_errors" -ge 8 ]; then
+                echo "::error::Failed to query CI workflow status after $api_errors consecutive gh api errors"
+                exit 1
+              fi
+              echo "gh api error ($api_errors/8); retrying in 15s..."
+              sleep 15
+              continue
+            fi
+            api_errors=0
             STATUS="${RESULT%% *}"
             CONCLUSION="${RESULT##* }"
             echo "CI status=$STATUS conclusion=$CONCLUSION"
@@ -88,107 +79,71 @@ jobs:
               [ "$CONCLUSION" = "success" ] && exit 0
               echo "::error::CI concluded '$CONCLUSION' for $GITHUB_SHA"
               exit 1
+            elif [ "$STATUS" = "none" ]; then
+              empty=$((empty + 1))
+              if [ "$empty" -ge 8 ]; then
+                echo "::error::No CI workflow run found for $GITHUB_SHA after 2 minutes"
+                exit 1
+              fi
+            else
+              empty=0
             fi
             echo "CI not finished yet; waiting 15s..."
             sleep 15
           done
 
-  package:
-    name: Package
-    needs: version
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      # rojo builds the .rbxm files; wally packages the library. Versions are pinned in rokit.toml.
-      - uses: CompeyDev/setup-rokit@1d9390883f7ebce19d48f5b8d006e11d387c92ab # v0.2.1
-        with:
-          version: v1.2.0
-
       - name: Build the release assets
+        if: steps.release.outputs.should_release == 'true' || github.event_name == 'workflow_dispatch'
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
         run: |
           mkdir -p dist
           rojo build default.project.json --output dist/Flux.rbxm
           rojo build .github/model.project.json --output dist/Flux-Model.rbxm
-
-      - name: Check the Wally package
-        run: |
           wally package --list
           wally package --output "$RUNNER_TEMP/wally.zip"
           size=$(stat -c %s "$RUNNER_TEMP/wally.zip")
           echo "Wally package: $size bytes (the registry refuses more than 2 MiB)"
           [ "$size" -le 2097152 ]
-
-      # The Wally package is also a release asset, so sert.toml [deps] can pin it by digest without the registry.
-      - name: Add the package zip and SHA256SUMS
-        env:
-          VERSION: ${{ needs.version.outputs.version }}
-        run: |
           cp "$RUNNER_TEMP/wally.zip" "dist/Flux-$VERSION-package.zip"
           (cd dist && sha256sum Flux.rbxm "Flux-$VERSION-package.zip" > SHA256SUMS)
           { echo '```'; cat dist/SHA256SUMS; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: steps.release.outputs.should_release == 'true' || github.event_name == 'workflow_dispatch'
         with:
           name: release
           path: dist/
           if-no-files-found: error
           overwrite: true
 
-  release:
-    name: GitHub release
-    needs: [version, ci, package]
-    if: needs.version.outputs.release == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: release
-          path: dist
-
-      - name: Create the release (a re-run refreshes its assets)
+      - name: Create GitHub release
+        if: steps.release.outputs.should_release == 'true'
         working-directory: dist
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          TAG: ${{ github.ref_name }}
-          VERSION: ${{ needs.version.outputs.version }}
-          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+          TAG: ${{ steps.release.outputs.tag }}
+          VERSION: ${{ steps.release.outputs.version }}
+          PRERELEASE: ${{ steps.release.outputs.prerelease }}
+          NOTES_FILE: ${{ steps.release.outputs.notes_file }}
         run: |
           sha256sum --check --strict SHA256SUMS
           assets=(Flux.rbxm "Flux-$VERSION-package.zip" SHA256SUMS)
           if gh release view "$TAG" > /dev/null 2>&1; then
             gh release upload "$TAG" "${assets[@]}" --clobber
+            gh release edit "$TAG" --title "Flux $VERSION" --notes-file "$NOTES_FILE"
           elif [ "$PRERELEASE" = true ]; then
-            gh release create "$TAG" "${assets[@]}" --verify-tag --title "Flux $VERSION" --generate-notes --prerelease
+            gh release create "$TAG" "${assets[@]}" --target "$GITHUB_SHA" --title "Flux $VERSION" --notes-file "$NOTES_FILE" --prerelease
           else
-            gh release create "$TAG" "${assets[@]}" --verify-tag --title "Flux $VERSION" --generate-notes
+            gh release create "$TAG" "${assets[@]}" --target "$GITHUB_SHA" --title "Flux $VERSION" --notes-file "$NOTES_FILE"
           fi
 
-  # The `dist` branch: one commit per release holding only the shipped tree, for consumers that vendor by git
-  # (subtree, submodule) rather than through Wally. `sert dist` builds the commit with plumbing on top of the previous
-  # dist tip and never touches the working tree (sert.toml [dist]; versioned by [release.packages.flux]).
-  dist:
-    name: Dist branch
-    needs: [version, release]
-    if: needs.version.outputs.release == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    concurrency:
-      group: dist
-      cancel-in-progress: false
-    steps:
-      # Credentials stay in this job only: it pushes the dist branch.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-
-      - name: Commit the release onto dist
+      # The `dist` branch: one commit per release holding only the shipped tree, for consumers that vendor by git
+      # (subtree, submodule) rather than through Wally. `sert dist` builds the commit with plumbing on top of the
+      # previous dist tip and never touches the working tree (sert.toml [dist]; versioned by [release]).
+      - name: Update dist branch
+        if: steps.release.outputs.should_release == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -197,29 +152,13 @@ jobs:
           fi
           python3 tools/sert.py dist --from "$GITHUB_SHA"
           git log -1 --format='%H %s' dist
+          git push origin dist
 
-      - name: Push dist
-        run: git push origin dist
-
-  wally:
-    name: Publish to Wally
-    needs: [version, release]
-    if: needs.version.outputs.release == 'true'
-    environment: release
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - uses: CompeyDev/setup-rokit@1d9390883f7ebce19d48f5b8d006e11d387c92ab # v0.2.1
-        with:
-          version: v1.2.0
-
-      - name: Publish kohltastrophe/flux
+      - name: Publish kohltastrophe/flux to Wally
+        if: steps.release.outputs.should_release == 'true'
         env:
           WALLY_AUTH_TOKEN: ${{ secrets.WALLY_AUTH_TOKEN }}
-          VERSION: ${{ needs.version.outputs.version }}
+          VERSION: ${{ steps.release.outputs.version }}
         run: |
           if [ -z "$WALLY_AUTH_TOKEN" ]; then echo "::notice::No WALLY_AUTH_TOKEN secret: Wally publish skipped"; exit 0; fi
           wally login --token "$WALLY_AUTH_TOKEN"
@@ -232,20 +171,9 @@ jobs:
             *) echo "::error::Wally did not accept kohltastrophe/flux@$VERSION"; exit 1 ;;
           esac
 
-  creator-store:
-    name: Publish to the Creator Store
-    needs: [version, release]
-    if: needs.version.outputs.release == 'true'
-    environment: release
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: release
-          path: dist
-
       # Uploading the same model again only adds an asset version, so a re-run is safe.
-      - name: Update the Flux model
+      - name: Update the Flux model on the Creator Store
+        if: steps.release.outputs.should_release == 'true'
         env:
           MODEL_TOKEN: ${{ secrets.MODEL_TOKEN }}
           MODEL_ASSET_ID: 18506925834
