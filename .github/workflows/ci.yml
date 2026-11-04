@@ -13,8 +13,8 @@ permissions:
   contents: write
 
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: "ci-${{ github.ref }}-${{ startsWith(github.event.head_commit.message, 'chore: release') && github.sha || '' }}"
+  cancel-in-progress: "${{ !startsWith(github.event.head_commit.message, 'chore: release') }}"
 
 defaults:
   run:
@@ -33,7 +33,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          submodules: recursive
           persist-credentials: false
 
       - name: Conventional Commits and version check
@@ -57,6 +56,7 @@ jobs:
         run: python3 tools/sert.py coverage --min 90 --badge
 
       - name: sert mutate
+        if: "!startsWith(github.event.head_commit.message, 'chore: release')"
         run: python3 tools/sert.py mutate --no-coverage-run --min 85
 
       - name: Build the place

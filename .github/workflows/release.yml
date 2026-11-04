@@ -45,58 +45,19 @@ jobs:
         with:
           token: ${{ secrets.MY_RELEASE_PLEASE_TOKEN || github.token }}
           dry-run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+          wait-for-ci: ci.yml
 
       - uses: CompeyDev/setup-rokit@1d9390883f7ebce19d48f5b8d006e11d387c92ab # v0.2.1
         if: steps.release.outputs.should_release == 'true' || github.event_name == 'workflow_dispatch'
         with:
           version: v1.2.0
 
-      - name: Wait for CI
-        if: steps.release.outputs.should_release == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          empty=0
-          api_errors=0
-          while true; do
-            if ! RESULT=$(gh api \
-              "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push" \
-              --jq '.workflow_runs | sort_by(.run_number) | last | "\(.status // "none") \(.conclusion // "none")"'); then
-              api_errors=$((api_errors + 1))
-              if [ "$api_errors" -ge 8 ]; then
-                echo "::error::Failed to query CI workflow status after $api_errors consecutive gh api errors"
-                exit 1
-              fi
-              echo "gh api error ($api_errors/8); retrying in 15s..."
-              sleep 15
-              continue
-            fi
-            api_errors=0
-            STATUS="${RESULT%% *}"
-            CONCLUSION="${RESULT##* }"
-            echo "CI status=$STATUS conclusion=$CONCLUSION"
-            if [ "$STATUS" = "completed" ]; then
-              [ "$CONCLUSION" = "success" ] && exit 0
-              echo "::error::CI concluded '$CONCLUSION' for $GITHUB_SHA"
-              exit 1
-            elif [ "$STATUS" = "none" ]; then
-              empty=$((empty + 1))
-              if [ "$empty" -ge 8 ]; then
-                echo "::error::No CI workflow run found for $GITHUB_SHA after 2 minutes"
-                exit 1
-              fi
-            else
-              empty=0
-            fi
-            echo "CI not finished yet; waiting 15s..."
-            sleep 15
-          done
-
       - name: Build the release assets
         if: steps.release.outputs.should_release == 'true' || github.event_name == 'workflow_dispatch'
         env:
           VERSION: ${{ steps.release.outputs.version }}
         run: |
+          VERSION="${VERSION:-$(grep -Po '^version\s*=\s*"\K[^"]+' wally.toml)}"
           mkdir -p dist
           rojo build default.project.json --output dist/Flux.rbxm
           rojo build .github/model.project.json --output dist/Flux-Model.rbxm
@@ -133,6 +94,12 @@ jobs:
           if gh release view "$TAG" > /dev/null 2>&1; then
             gh release upload "$TAG" "${assets[@]}" --clobber
             gh release edit "$TAG" --title "Flux $VERSION" --notes-file "$NOTES_FILE"
+          elif git ls-remote --exit-code --tags origin "refs/tags/$TAG" > /dev/null 2>&1; then
+            if [ "$PRERELEASE" = true ]; then
+              gh release create "$TAG" "${assets[@]}" --title "Flux $VERSION" --notes-file "$NOTES_FILE" --prerelease
+            else
+              gh release create "$TAG" "${assets[@]}" --title "Flux $VERSION" --notes-file "$NOTES_FILE"
+            fi
           elif [ "$PRERELEASE" = true ]; then
             gh release create "$TAG" "${assets[@]}" --target "$GITHUB_SHA" --title "Flux $VERSION" --notes-file "$NOTES_FILE" --prerelease
           else
