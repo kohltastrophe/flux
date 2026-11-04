@@ -623,4 +623,166 @@ sert.model("bind · dynamic DOM hierarchy and two-way Flux.property/Flux.model b
 	exhaustive = { size = 2 },
 })
 
+test("listen · fires only on updates after subscribing and stops when disconnected or destroyed", function()
+	local v = Flux(1)
+	local received = {}
+	local disconnect = Flux.listen(v, function(val)
+		table.insert(received, val)
+	end)
+	expect(type(disconnect) == "function", "listen returns a disconnect function")
+	flush()
+	expect(#received == 0, "listen does not fire on initial flush when value has not changed")
+
+	v(2)
+	flush()
+	expect(#received == 1 and received[1] == 2, "listener receives first update")
+
+	v(3)
+	flush()
+	expect(#received == 2 and received[2] == 3, "listener receives subsequent updates")
+
+	disconnect()
+	disconnect()
+	v(4)
+	flush()
+	expect(#received == 2, "listener stops firing after disconnect")
+
+	local received2 = {}
+	Flux.listen(v, function(val)
+		table.insert(received2, val)
+	end)
+	v:Destroy()
+	v(5)
+	flush()
+	expect(#received2 == 0, "destroyed node clears listeners")
+end)
+
+test("listen · hears immediate mutation before first flush and survives scope teardown on shared node", function()
+	local v = Flux("a")
+	local seen = {}
+	Flux.listen(v, function(val)
+		table.insert(seen, val)
+	end)
+	v("b")
+	flush()
+	expect(#seen == 1 and seen[1] == "b", "mutation immediately after listen before first flush is observed")
+
+	local shared = Flux.signal("one")
+	local out = {}
+	local scopeA = Flux.scope(function()
+		Flux.listen(shared, function() end)
+	end)
+	Flux.listen(shared, function(val)
+		table.insert(out, val)
+	end)
+	shared:set("two")
+	flush()
+	expect(out[#out] == "two", "listener notified while scopeA is alive")
+
+	scopeA:Destroy()
+	shared:set("three")
+	flush()
+	expect(out[#out] == "three", "surviving listener still notified after first listener's scope dies")
+end)
+
+test("listen · callbacks run untracked, ownerless, and safe across mid-flush add/remove and Bind.children", function()
+	local src = Flux(10)
+	local unrelated = Flux(100)
+	local ownerSeen: any = "unset"
+	local reactiveSeen: any = "unset"
+	local innerDisposed = 0
+	local runs = 0
+
+	Flux.listen(src, function(_val)
+		runs += 1
+		ownerSeen = Flux.getOwner()
+		reactiveSeen = Flux.isReactive()
+		local _ = unrelated()
+		local c = Flux.computed(function()
+			return 1
+		end)
+		c:onDestroy(function()
+			innerDisposed += 1
+		end)
+	end)
+
+	src(20)
+	flush()
+	expect(
+		runs == 1 and ownerSeen == nil and reactiveSeen == false,
+		"listener ran untracked and ownerless on src update"
+	)
+
+	unrelated(200)
+	flush()
+	expect(runs == 1, "reading unrelated signal inside listener does not subscribe src's bind effect")
+
+	src(30)
+	flush()
+	expect(runs == 2 and innerDisposed == 0, "listener runs ownerless without bind effect adopting created nodes")
+
+	-- Multi-listener mid-flush add and disconnect safety
+	local multi = Flux(0)
+	local log = {}
+	local discA: () -> ()
+	local discB: () -> ()
+	local function addC()
+		Flux.listen(multi, function(v2)
+			table.insert(log, `C:{v2}`)
+		end)
+	end
+	discA = Flux.listen(multi, function(val)
+		table.insert(log, `A:{val}`)
+		discB()
+		addC()
+	end)
+	discB = Flux.listen(multi, function(val)
+		table.insert(log, `B:{val}`)
+		discA()
+		addC()
+	end)
+
+	multi(1)
+	flush()
+	expect(#log == 1, "disconnecting sibling listener mid-flush prevents it from firing, and newly added C waits")
+	multi(2)
+	flush()
+	expect(table.find(log, "C:2") ~= nil, "listener added mid-flush fires on subsequent update")
+
+	-- Re-attaching Bind.children on a listened node does not falsely trigger listeners
+	local childA = Instance.new("Frame")
+	local childB = Instance.new("Frame")
+	local parent1 = Instance.new("Frame")
+	local parent2 = Instance.new("Frame")
+	local childNode = Flux.signal(childA)
+	local childEvents = 0
+	Flux.listen(childNode, function()
+		childEvents += 1
+	end)
+	local unbind1 = Bind.children(childNode, parent1)
+	flush()
+	local unbind2 = Bind.children(childNode, parent2)
+	flush()
+	expect(
+		childEvents == 0,
+		"attaching or re-parenting Bind.children does not fire listen when node value is unchanged"
+	)
+	childNode:set(childB)
+	flush()
+	expect(childEvents == 1, "listener still fires when childNode updates after Bind.children restart")
+	unbind1()
+	unbind2()
+	childA:Destroy()
+	childB:Destroy()
+	parent1:Destroy()
+	parent2:Destroy()
+
+	expectError(function()
+		Flux.listen("not a node" :: any, function() end)
+	end, "expects a reactive node")
+	expectError(function()
+		Flux.listen(src, "not a function" :: any)
+	end, "expects a function")
+end)
+
 return {}

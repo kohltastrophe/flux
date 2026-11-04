@@ -3,6 +3,7 @@ local Compat = require("./Compat")
 local Graph = require("./Graph")
 local Type = require("./Type")
 
+local compatTask = Compat.task
 local compatTypeof = Compat.typeof
 local warn = Compat.warn
 
@@ -24,6 +25,7 @@ local NOOP = function() end
 
 --- @ignore
 type BindData = {
+	fn: { [(value: any) -> ()]: boolean },
 	rbx: { [Instance]: { { [string]: any }? } },
 	eff: Graph.Node<any>,
 	flushed: boolean,
@@ -313,9 +315,31 @@ local function startBindEffect(node: Graph.Node<any>, data: any): Graph.Node<any
 	-- what they read nor hand it the instances they create (which it would destroy on its next run). Children
 	-- stay tracked: nested child nodes are read while mounting them.
 	local pending: any = nil
+	local notifyListeners = false
 	local function write()
 		local value = pending
+		local shouldNotify = notifyListeners
 		pending = nil
+		notifyListeners = false
+		if shouldNotify then
+			local fns = data.fn
+			local first = next(fns)
+			if first ~= nil then
+				if next(fns, first) == nil then
+					compatTask.spawn(first, value)
+				else
+					local list = table.create(4)
+					for fn in fns do
+						table.insert(list, fn)
+					end
+					for _, fn in list do
+						if fns[fn] then
+							compatTask.spawn(fn, value)
+						end
+					end
+				end
+			end
+		end
 		writeBinds(data, value)
 	end
 	local function isolated()
@@ -323,10 +347,13 @@ local function startBindEffect(node: Graph.Node<any>, data: any): Graph.Node<any
 	end
 	local eff = withOwner(NO_VALUE, function()
 		return effect(function()
+			local notify = data.flushed
 			data.flushed = true
 			local value = get(node)
-			if next(data.rbx) ~= nil then
+			local hasFn = notify and next(data.fn) ~= nil
+			if hasFn or next(data.rbx) ~= nil then
 				pending = value
+				notifyListeners = hasFn
 				withOwner(NO_VALUE, isolated)
 			end
 			applyChildren(data, value)
@@ -338,11 +365,12 @@ end
 local function getBindData<T>(node: Graph.Node<T>)
 	local data: any = bindData[node]
 	if data == nil then
-		data = { rbx = {}, children = nil, eff = nil, flushed = false }
+		data = { fn = {}, rbx = {}, children = nil, eff = nil, flushed = false }
 		bindData[node] = data
 		data.eff = startBindEffect(node, data)
 		node:onDestroy(function()
 			data.eff:Destroy()
+			table.clear(data.fn)
 			table.clear(data.rbx)
 			cleanupChildrenBind(node)
 			bindData[node] = nil
@@ -477,7 +505,8 @@ function Bind.children<T>(node: Graph.Node<T>, parent: Instance, layoutOrder: nu
 	children.parent = parent
 	children.token = token
 
-	if data.flushed then
+	local restart = data.flushed
+	if restart then
 		data.eff:Destroy()
 		data.eff = startBindEffect(node, data)
 	end
@@ -487,7 +516,33 @@ function Bind.children<T>(node: Graph.Node<T>, parent: Instance, layoutOrder: nu
 	else
 		applyChildren(data, raw(node))
 	end
+	if restart and next(data.fn) ~= nil then
+		data.eff:peek()
+	end
 	return disconnectBind
+end
+
+--[[
+Subscribes `fn` to updates of `node` with [`RBXScriptSignal:Connect`](https://create.roblox.com/docs/reference/engine/datatypes/RBXScriptSignal#Connect) semantics and returns an unsubscribe function.
+Fires on each flush after `node` changes, spawning `fn(value)` on its own thread via [`task.spawn`](https://create.roblox.com/docs/reference/engine/libraries/task#spawn) so callbacks may yield freely.
+
+[Open Documentation](https://flux.kohl.gg/guide/concepts/effects#bridging-to-external-systems)
+]]
+function Bind.listen<T>(node: Graph.Node<T>, fn: (value: T) -> ()): () -> ()
+	if not isNode(node) then
+		error(`Flux.listen expects a reactive node, got {compatTypeof(node)}`, 2)
+	elseif type(fn) ~= "function" then
+		error(`Flux.listen expects a function, got {compatTypeof(fn)}`, 2)
+	end
+	local data = getBindData(node)
+	if not data.flushed then
+		data.eff:peek()
+	end
+	local fnData = data.fn
+	fnData[fn] = true
+	return function()
+		fnData[fn] = nil
+	end
 end
 
 --- @ignore

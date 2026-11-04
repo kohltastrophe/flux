@@ -92,7 +92,7 @@ end)
 | **Purity** | Must be pure (no side effects) | Built for side effects and resource setup |
 | **When it runs** | On demand when unobserved, or before effects on flush when observed | Once per frame flush after upstream computeds settle |
 
-## Bridging to External Systems with `Flux.on`{lua}
+## Bridging to External Systems
 
 When an Effect should react **only** to specific nodes while reading other state without subscribing (or skip its initial run until the first change), wrap the callback in [`Flux.on(deps, fn, defer?)`](/guide/concepts/tracking#flux-on):
 
@@ -103,4 +103,15 @@ local volume = Flux.signal(0.5)
 Flux.effect(Flux.on(volume, function(level, previousLevel)
 	SoundService.AmbientReverb = if level > 0.8 then Enum.ReverbType.ConcertHall else Enum.ReverbType.NoReverb
 end, true))
+```
+
+When an external imperative system needs [`RBXScriptSignal:Connect`](https://create.roblox.com/docs/reference/engine/datatypes/RBXScriptSignal#Connect) semantics (firing only on subsequent updates on its own [`task.spawn`](https://create.roblox.com/docs/reference/engine/libraries/task#spawn) thread so callbacks may yield freely), use `Flux.listen(node, fn)`:
+
+```luau
+local disconnect = Flux.listen(volume, function(level)
+	SoundService.AmbientReverb = if level > 0.8 then Enum.ReverbType.ConcertHall else Enum.ReverbType.NoReverb
+end)
+
+-- Later, when no longer needed:
+disconnect()
 ```

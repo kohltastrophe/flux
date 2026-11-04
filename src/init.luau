@@ -220,6 +220,7 @@ local Flux = {
 	isNode = Graph.isNode,
 	isReactive = Graph.isReactive,
 	on = Bind.on,
+	listen = Bind.listen,
 
 	-- State
 	context = Graph.context,

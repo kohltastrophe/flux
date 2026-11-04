@@ -116,17 +116,25 @@ local function InventorySystem()
 end
 ```
 
-## 5. Subscribing Outside Flux (`Flux.effect`{luau} + `Flux.on`{luau})
+## 5. Subscribing Outside Flux (`Flux.listen`{luau} & `Flux.on`{luau})
 
-To bridge a reactive node out to non-Flux imperative code with explicit dependency tracking, wrap [`Flux.on`](/guide/concepts/effects#bridging-to-external-systems-with-flux-on) in [`Flux.effect`](/guide/concepts/effects):
+To subscribe an imperative callback outside the reactive graph with [`RBXScriptSignal:Connect`](https://create.roblox.com/docs/reference/engine/datatypes/RBXScriptSignal#Connect) semantics (firing on subsequent updates on its own thread via [`task.spawn`](https://create.roblox.com/docs/reference/engine/libraries/task#spawn)), use [`Flux.listen`](/guide/concepts/effects#bridging-to-external-systems):
+
+```luau
+local disconnect = Flux.listen(settings.audio.masterVolume, function(volume)
+    SoundService.RespectFilteringEnabled = true
+    masterSoundGroup.Volume = volume
+end)
+
+-- Call disconnect() when you want to stop listening
+```
+
+For synchronous, scope-owned reactions that also run on the initial flush (or receive `prevValue`), wrap [`Flux.on`](/guide/concepts/tracking#flux-on) in [`Flux.effect`](/guide/concepts/effects):
 
 ```luau
 local effectNode = Flux.effect(Flux.on(settings.audio.masterVolume, function(volume, prevVolume)
-    SoundService.RespectFilteringEnabled = true
     masterSoundGroup.Volume = volume
 end))
-
--- Call effectNode:Destroy() when you want to stop listening
 ```
 
 ## Summary
@@ -138,4 +146,4 @@ end))
 | **`ModuleScript`s**   | Client-wide singletons (player settings, session data, round state)    |
 | **`Flux.Sync`**       | Server-to-client synced state (shared, per-player, or validated writes) |
 | **`Flux.scope`**      | Multi-component features with a bounded lifetime (windows, minigames)  |
-| **`Flux.effect` + `Flux.on`** | Bridging reactive changes out to external imperative systems   |
+| **`Flux.listen`**     | Bridging reactive updates out to external or yielding systems          |
