@@ -17,6 +17,7 @@ luau = "0.724"
 
 [test]
 entries = ["test/spec.client.luau"]
+codegen = false
 
 [coverage]
 min = 90
