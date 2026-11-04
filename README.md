@@ -15,7 +15,7 @@
 
 _Flux is a reactive UI library for Luau. It's strictly typed for accurate autocomplete, batches updates once per frame, and keeps syntax terse enough to read like plain Luau._
 
-[![CI](https://img.shields.io/github/actions/workflow/status/kohltastrophe/flux/ci.yml?style=for-the-badge)](https://github.com/kohltastrophe/flux/actions/workflows/ci.yml) [![Coverage](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/kohltastrophe/a15338bf8bb30072e690acf47a8e0266/raw/flux-coverage.json&style=for-the-badge)](https://github.com/kohltastrophe/flux/actions/workflows/ci.yml) [![License](https://img.shields.io/github/license/kohltastrophe/flux?style=for-the-badge)](LICENSE.md) ![GitHub Release](https://img.shields.io/github/v/release/kohltastrophe/flux?style=for-the-badge)
+[![CI](https://img.shields.io/github/actions/workflow/status/kohltastrophe/flux/ci.yml?style=for-the-badge)](https://github.com/kohltastrophe/flux/actions/workflows/ci.yml) [![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/kohltastrophe/flux/badges/coverage.json&style=for-the-badge)](https://github.com/kohltastrophe/flux/actions/workflows/ci.yml) [![License](https://img.shields.io/github/license/kohltastrophe/flux?style=for-the-badge)](LICENSE.md) ![GitHub Release](https://img.shields.io/github/v/release/kohltastrophe/flux?style=for-the-badge)
 
 ---
 

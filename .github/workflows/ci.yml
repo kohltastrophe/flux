@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -54,12 +54,7 @@ jobs:
         run: python3 tools/sert.py run --coverage
 
       - name: sert coverage
-        id: coverage
-        run: |
-          status=0
-          pct=$(python3 tools/sert.py coverage --min 90) || status=$?
-          echo "pct=$pct" >> "$GITHUB_OUTPUT"
-          exit "$status"
+        run: python3 tools/sert.py coverage --min 90 --badge
 
       - name: sert mutate
         run: python3 tools/sert.py mutate --no-coverage-run --min 85
@@ -77,13 +72,6 @@ jobs:
 
       - name: Update coverage badge
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: schneegans/dynamic-badges-action@28b0fa8bdeb46170ac397105ece0c1fe58f68910 # v1.9.0
-        with:
-          auth: ${{ secrets.GIST_KEY }}
-          gistID: ${{ secrets.GIST_ID }}
-          filename: flux-coverage.json
-          label: coverage
-          message: ${{ steps.coverage.outputs.pct }}%
-          valColorRange: ${{ steps.coverage.outputs.pct }}
-          minColorRange: 50
-          maxColorRange: 90
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 tools/sert.py coverage --badge-branch --badge-push

@@ -3,6 +3,7 @@ node_modules
 sourcemap.json
 package-lock.json
 coverage.out
+coverage.json
 coverage-table.txt
 __pycache__/
 
