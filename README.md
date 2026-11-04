@@ -99,7 +99,12 @@ Flux is inspired by:
 
 ## Sponsors
 
-Flux is free and MIT-licensed. If Flux is useful to you or your team, you can support its development through [GitHub Sponsors](https://github.com/sponsors/kohltastrophe).
+Flux is free and MIT-licensed. If Flux is useful to you or your team, you can support its development through [GitHub Sponsors](https://github.com/sponsors/kohltastrophe) or [Ko-fi](https://ko-fi.com/kohltastrophe).
+
+<p align="center">
+  <a href="https://github.com/sponsors/kohltastrophe"><img src="https://raw.githubusercontent.com/kohltastrophe/kohltastrophe/badges/sponsor-github.svg" alt="GitHub Sponsors" /></a>&nbsp;&nbsp;<a href="https://ko-fi.com/kohltastrophe"><img src="https://raw.githubusercontent.com/kohltastrophe/kohltastrophe/badges/sponsor-kofi.svg" alt="Ko-fi" /></a>
+  <a href="https://github.com/sponsors/kohltastrophe"><img src="https://raw.githubusercontent.com/kohltastrophe/kohltastrophe/badges/sponsors.svg" alt="Sponsors" /></a>
+</p>
 
 ## License
 
