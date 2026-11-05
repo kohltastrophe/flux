@@ -536,6 +536,7 @@ export type Editable = Creatable & {
 	FeatureMatchingService: FeatureMatchingService,
 	FeatureMatchingSession: FeatureMatchingSession,
 	FeatureRestrictionManager: FeatureRestrictionManager,
+	FeatureSearchParams: FeatureSearchParams,
 	File: File,
 	FileManagerService: FileManagerService,
 	FileSyncReplicationService: FileSyncReplicationService,
@@ -697,6 +698,7 @@ export type Editable = Creatable & {
 	PhysicsSettings: PhysicsSettings,
 	PinShortcutService: PinShortcutService,
 	PlaceAssetIdsService: PlaceAssetIdsService,
+	PlaceSettings: PlaceSettings,
 	PlaceStatsService: PlaceStatsService,
 	PlacesService: PlacesService,
 	Platform: Platform,
@@ -947,7 +949,6 @@ export type Editable = Creatable & {
 	Workspace: Workspace,
 	WorldRoot: WorldRoot,
 	WrapContentProvider: WrapContentProvider,
-	WrapDeformMeshProvider: WrapDeformMeshProvider,
 }
 
 return nil
