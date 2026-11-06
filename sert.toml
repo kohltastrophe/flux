@@ -48,6 +48,7 @@ exclude = ["src/Type"]
 paths = ["src", "test"]
 solvers = ["new"]
 registration = { aggregator = "test/unit/init.luau", specs = "test/unit/**/*.spec.luau" }
+extra = [["npx", "--yes", "luaudocs@latest", "llms", "--check"]]
 
 [types]
 pass = ["test/types"]
