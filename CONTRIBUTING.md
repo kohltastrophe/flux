@@ -100,7 +100,7 @@ npx --yes luaudocs@latest build   # build static site into .luaudocs/.vitepress/
 npx --yes luaudocs@latest llms    # regenerate the root llms.txt file
 ```
 
-Any change to public API doc comments in `src/` or guide pages in `.luaudocs/guide/` can change the generated `llms.txt` at the repository root. Run `npx --yes luaudocs@latest llms` and commit the updated `llms.txt` in the same pull request so the `luaudocs llms --check` CI step passes.
+Any change to public API doc comments in `src/` or guide pages in `.luaudocs/guide/` can change the generated `llms.txt` at the repository root. Pull request CI verifies that `llms.txt` is up to date with `npx --yes luaudocs@latest llms --check`, while non-release pushes to `main` regenerate and commit `llms.txt` automatically; run `npx --yes luaudocs@latest llms` locally before opening a pull request.
 
 ## Releasing
 
@@ -108,7 +108,7 @@ Any change to public API doc comments in `src/` or guide pages in `.luaudocs/gui
 
 1. **Dry run.** Trigger the **Release** workflow manually from the Actions tab on `main` with `dry_run` enabled. This validates version sync across manifests, builds `Flux.rbxm`, `Flux-Model.rbxm`, and the Wally package zip, enforces the 2 MiB Wally registry limit, and uploads the `release` artifact with `SHA256SUMS` without publishing.
 2. **Release.** Merge the automated `chore: release <version>` pull request (or push a release commit to `main`). Versions with a hyphen suffix (like `-rc.1`) publish as GitHub prereleases.
-3. **Dist branch and registries.** The `dist` job runs `python3 tools/sert.py dist --from "$GITHUB_SHA"` to commit the released tree (`default.project.json` and `src/`) onto the `dist` branch for consumers that vendor Flux via Git subtree or submodule. The `wally` and `creator-store` jobs publish using the `release` environment secrets:
+3. **Dist branch and registries.** After creating the GitHub release, the workflow commits the released tree (`default.project.json` and `src/`) onto the `dist` branch for consumers that vendor Flux via Git subtree or submodule, then publishes to Wally and the Creator Store using the `release` environment secrets:
    - `WALLY_AUTH_TOKEN`: token for the `kohltastrophe` Wally scope.
    - `MODEL_TOKEN`: Roblox Open Cloud API key with write access to asset `18506925834`.
 
