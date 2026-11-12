@@ -20,13 +20,15 @@ Flux.new "ScreenGui" {
 }
 ```
 
+All nodes listen live on the Roblox client and in **Studio edit mode** (so UI storybooks and Studio plugins react as you resize panes or switch input devices). On the server and in headless Luau, they hold static defaults (`1920×1080`, `"desktop"`, `"Medium"` display/text size, `"pc"`, `"keyboard"`, `reducedMotion = false`, and `preferredTransparency = 1`).
+
 For safe areas (the Roblox topbar, device notches, and rounded corners), configure Roblox's built-in [`ScreenGui.ScreenInsets`](https://create.roblox.com/docs/en-us/reference/engine/classes/ScreenGui#ScreenInsets) (`CoreUISafeInsets`{luau} or `DeviceSafeInsets`{luau}) and `ScreenGui.SafeAreaCompatibility`{luau}.
 
 ## Screen & Layout Nodes
 
 ### Viewport {#viewport}
 
-`Flux.Responsive.viewport`{luau} (`Node<Vector2>`{luau}) tracks `workspace.CurrentCamera.ViewportSize`{luau} live on the client (and defaults to `1920×1080`{luau} off-client):
+`Flux.Responsive.viewport`{luau} (`Node<Vector2>`{luau}) tracks `workspace.CurrentCamera.ViewportSize`{luau} live on the client and in Studio edit mode (defaulting to `1920×1080`{luau} on the server or headless CLI):
 
 ```luau
 local isPortrait = Flux.computed(function()
@@ -63,7 +65,7 @@ Flux.switch(Flux.Responsive.breakpoint) {
 
 ### Platform {#platform}
 
-`Flux.Responsive.platform`{luau} (`Node<"pc" | "mobile" | "console" | "vr">`{luau}) reflects the active device class on the client, updating live if the player connects a keyboard/mouse or enters VR (`"pc"`{luau} off-client):
+`Flux.Responsive.platform`{luau} (`Node<"pc" | "mobile" | "console" | "vr">`{luau}) reflects the active device class on the client and in Studio edit mode, updating live if the player connects a keyboard/mouse or enters VR (`"pc"`{luau} on the server or headless CLI):
 
 ```luau
 Flux.new "TextButton" {
@@ -77,7 +79,7 @@ Flux.new "TextButton" {
 
 ### Input {#input}
 
-`Flux.Responsive.input`{luau} (`Node<"keyboard" | "touch" | "gamepad">`{luau}) tracks `UserInputService.PreferredInput`{luau} live on the client, switching automatically when the player picks up a controller, touches the screen, or reaches for the mouse/keyboard:
+`Flux.Responsive.input`{luau} (`Node<"keyboard" | "touch" | "gamepad">`{luau}) tracks `UserInputService.PreferredInput`{luau} and `LastInputTypeChanged`{luau} live (mapping `Gamepad1`{luau}-`Gamepad8`{luau} and `MicroGamepad`{luau} to `"gamepad"`{luau}), switching automatically when the player picks up a controller, touches the screen, or reaches for the mouse and keyboard:
 
 ```luau
 local promptText = Flux.computed(function()

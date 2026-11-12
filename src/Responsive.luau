@@ -154,7 +154,8 @@ Size class (`"phone" | "tablet" | "desktop"`) derived from `viewport` width.
 local breakpoint: Graph.Node<Breakpoint> = breakpointOf()
 
 local RunService = getService("RunService")
-local isClient = RunService ~= nil and RunService:IsClient() and RunService:IsRunning()
+local isClient = RunService ~= nil
+	and ((RunService:IsClient() and RunService:IsRunning()) or (RunService:IsStudio() and not RunService:IsServer()))
 local GuiService = isClient and getService("GuiService")
 local UserInputService = isClient and getService("UserInputService")
 local VRService = isClient and getService("VRService")
@@ -191,6 +192,7 @@ local INPUT_BY_NAME: { [string]: Input } = {
 	MouseWheel = "keyboard",
 	Touch = "touch",
 	Gamepad = "gamepad",
+	MicroGamepad = "gamepad",
 }
 for slot = 1, 8 do
 	INPUT_BY_NAME[`Gamepad{slot}`] = "gamepad"
@@ -250,12 +252,10 @@ if isClient then
 		end
 	end
 
-	local serviceConnections: { RBXScriptConnection } = {}
 	bindCamera(Workspace.CurrentCamera)
-	local cameraConn: RBXScriptConnection = Workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
+	Workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
 		bindCamera(Workspace.CurrentCamera)
 	end)
-	table.insert(serviceConnections, cameraConn)
 	local function mirror(
 		object: Instance,
 		property: string,
@@ -275,8 +275,7 @@ if isClient then
 			end
 		end
 		sync()
-		local conn: RBXScriptConnection = changed:Connect(sync)
-		table.insert(serviceConnections, conn)
+		changed:Connect(sync)
 		return true
 	end
 
@@ -293,21 +292,17 @@ if isClient then
 	local function bindPlatform(object: Instance, property: string)
 		local ok, changed = pcall(object.GetPropertyChangedSignal, object, property)
 		if ok then
-			local conn: RBXScriptConnection = changed:Connect(syncPlatform)
-			table.insert(serviceConnections, conn)
+			changed:Connect(syncPlatform)
 		end
 	end
 
 	if not mirror(UserInputService, "PreferredInput", input, inputOf) then
-		local conn: RBXScriptConnection = UserInputService.LastInputTypeChanged:Connect(
-			function(lastInputType: Enum.UserInputType)
-				local mode = inputFor(lastInputType.Name)
-				if mode ~= nil then
-					input:set(mode)
-				end
+		UserInputService.LastInputTypeChanged:Connect(function(lastInputType: Enum.UserInputType)
+			local mode = inputFor(lastInputType.Name)
+			if mode ~= nil then
+				input:set(mode)
 			end
-		)
-		table.insert(serviceConnections, conn)
+		end)
 	end
 	mirror(GuiService, "PreferredTextSize", textSize, nameOf)
 	mirror(GuiService, "ViewportDisplaySize", displaySize, nameOf)

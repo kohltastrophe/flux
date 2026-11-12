@@ -136,7 +136,12 @@ test("responsive · input modes map every gamepad slot, and sensors leave the mo
 	local inputFor = (if IS_ROBLOX
 		then require((game :: any).ReplicatedStorage.Flux.Responsive) :: any
 		else require("../../src/Responsive") :: any)._inputFor
-	expect(inputFor("Gamepad1") == "gamepad" and inputFor("Gamepad8") == "gamepad", "every gamepad slot")
+	expect(
+		inputFor("Gamepad1") == "gamepad"
+			and inputFor("Gamepad8") == "gamepad"
+			and inputFor("MicroGamepad") == "gamepad",
+		"every gamepad slot including MicroGamepad"
+	)
 	expect(inputFor("Accelerometer") == nil and inputFor("Focus") == nil, "sensors and focus leave the mode alone")
 end)
 
