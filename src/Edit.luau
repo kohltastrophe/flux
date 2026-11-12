@@ -280,95 +280,14 @@ local Find = table.freeze({
 
 -- `T` with every property optional.
 --- @ignore
-export type function Partial(t: type): type
-	if not t:is("table") then
-		return t
-	end
-	local result = types.newtable()
-	for key, prop in t:properties() do
-		local valueType = prop.read or prop.write
-		if valueType then
-			result:setproperty(key, types.optional(valueType))
-		end
-	end
-	local indexer = t:indexer()
-	if indexer then
-		result:setindexer(indexer.index, indexer.readresult)
-	end
-	return result
-end
-
---- @ignore
-type function groupKeys(group: type): type
-	local keys = types.newtable()
-	if group:is("nil") then
-		return keys
-	elseif group:is("union") or group:is("intersection") then
-		for _, part in group:components() do
-			local partKeys = groupKeys(part)
-			if partKeys:is("string") then
-				return partKeys
-			end
-			for key in partKeys:properties() do
-				keys:setproperty(key, key)
-			end
-		end
-		return keys
-	elseif not group:is("table") then
-		return types.string
-	end
-	local indexer = group:indexer()
-	if indexer then
-		local result = indexer.readresult
-		for _, part in if result:is("union") then result:components() else { result } do
-			local name = if part:is("singleton") then part:value() else nil
-			if type(name) == "string" then
-				keys:setproperty(part, part)
-			elseif name ~= true then
-				return types.string
-			end
-		end
-	end
-	for key in group:properties() do
-		keys:setproperty(key, key)
-	end
-	return keys
-end
-
---- @ignore
-type function pickWhere(t: type, group: type, prior: type, inGroup: type): type
-	if not t:is("table") then
-		return t
-	end
-	local wanted, excluded = groupKeys(group), groupKeys(prior)
-	local wantAll = inGroup:is("singleton") and inGroup:value() == false
-	if wanted:is("string") or excluded:is("string") then
-		return Partial(t)
-	end
-	local function has(names: type, key: type): boolean
-		return names:readproperty(key) ~= nil
-	end
-	local result = types.newtable()
-	for key, prop in t:properties() do
-		local valueType = prop.read or prop.write
-		local inWanted = has(wanted, key)
-		if valueType and not has(excluded, key) and inWanted ~= wantAll then
-			result:setproperty(key, valueType)
-		end
-	end
-	local indexer = t:indexer()
-	if indexer and wantAll then
-		result:setindexer(indexer.index, indexer.readresult)
-	end
-	return result
-end
+export type Partial<T> = Type.Partial<T>
 
 -- The members of `T` a `split` group named by `G` receives. Required members stay required. When the names are only known as `string` (an unannotated array), every member is optional.
 --- @ignore
-export type Pick<T, G> = pickWhere<T, G, nil, true>
+export type Pick<T, G> = Type.Pick<T, G>
 -- The members of `T` that no `split` group took: properties forwarded to the root instance.
 --- @ignore
-export type Omit<T, G> = pickWhere<T, nil, G, false>
+export type Omit<T, G> = Type.Omit<T, G>
 
 local function split(props: any, keys: any, ...: any): ...any
 	if keys == nil and select("#", ...) == 0 then
@@ -436,9 +355,32 @@ local function split(props: any, keys: any, ...: any): ...any
 end
 
 type Split =
-	(<T>(props: T?) -> T)
-	& (<T, G>(props: T?, keys: G) -> (Pick<T, G>, Omit<T, G>))
-	& (<T>(props: T?, first: { [any]: any }, second: { [any]: any }, ...{ [any]: any }) -> ...Partial<T>)
+	(<T>(props: T) -> Type.NonNil<T>)
+	& (<T, G>(props: T, keys: G) -> (Pick<T, G>, Omit<T, G>))
+	& (<T>(props: T, first: { [any]: any }, second: { [any]: any }, ...{ [any]: any }) -> ...Partial<T>)
+
+-- Marks a key in a component prop schema at runtime; pair with a type cast (`Flux.prop() :: Flux.Reactive<string>`).
+local function prop(): any
+	return true
+end
+
+type Own = <A, B, C, D>(a: A, b: B?, c: C?, d: D?) -> Type.MergeOwn<A, B, C, D>
+
+local function own(...: { [string]: any }): any
+	local schema = {}
+	for index = 1, select("#", ...) do
+		local part: any = select(index, ...)
+		if part ~= nil then
+			if type(part) ~= "table" then
+				error(`Flux.own expected table at argument #{index}, got {compatTypeof(part)}`, 2)
+			end
+			for key, value in part do
+				schema[key] = value
+			end
+		end
+	end
+	return table.freeze(schema)
+end
 
 -- Edit & Construct ----------------------------------------------------------------------------------------------------
 
@@ -1067,15 +1009,30 @@ return table.freeze({
 	Find = Find,
 	--[[
 	Partitions `props` into one table per `keys` group plus a final table holding every remaining key, leaving `props`
-	untouched. Pass a schema table or an annotated key-literal array (`{ "label" | "onClick" }`) to preserve exact
-	`Pick`/`Omit` types on a single group.
+	untouched. Pass a `Flux.prop()` / `Flux.own()` schema or an annotated key-literal array (`{ "label" | "onClick" }`)
+	to preserve exact `Pick` and `Omit` types on a single group.
 
 	```luau
-	local OWN: { "label" | "onClick" } = { "label", "onClick" }
+	local OWN = {
+		label = Flux.prop() :: Flux.Reactive<string>,
+		onClick = Flux.prop() :: ((...any) -> ())?,
+	}
 	local own, rest = Flux.split(props, OWN)
 	```
 
 	[Open Documentation](https://flux.kohl.gg/guide/concepts/components#splitting-props-with-flux-split)
 	]]
 	split = split :: Split,
+	--[[
+	Marks a key in a component prop schema for `Flux.split`; cast the call to declare the property's `--!strict` type.
+
+	[Open Documentation](https://flux.kohl.gg/guide/concepts/components#splitting-props-with-flux-split)
+	]]
+	prop = prop,
+	--[[
+	Merges one or more component prop schemas into a single frozen schema table for `Flux.Props` and `Flux.split`.
+
+	[Open Documentation](https://flux.kohl.gg/guide/concepts/components#splitting-props-with-flux-split)
+	]]
+	own = own :: Own,
 })

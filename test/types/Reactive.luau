@@ -144,8 +144,22 @@ local own, rest = Flux.split(splitProps, OWN)
 local _own: string = own.label
 local _hint: string? = own.hint
 local _rest: string = rest.Name
+local SCHEMA = { label = Flux.prop() :: string, hint = Flux.prop() :: string? }
+local schemaOwn, schemaRest = Flux.split(splitProps, SCHEMA)
+local _schemaLabel: string = schemaOwn.label
+local _schemaHint: string? = schemaOwn.hint
+local _schemaRest: string = schemaRest.Name
+local inlineOwn = Flux.split({ label = "Inline", Name = "Btn" }, SCHEMA)
+local _inlineLabel: string = inlineOwn.label
+local _inlineHint: string? = inlineOwn.hint
 local loose = Flux.split(splitProps, { "label" })
 local _loose: string? = loose.label
+local cloned: SplitProps = Flux.split(splitProps)
+local _clonedLabel: string = cloned.label
+local g1, g2, gRest = Flux.split(splitProps, { "label" }, { "hint" })
+local _g1: string? = g1.label
+local _g2: string? = g2.hint
+local _gRest: string? = gRest.Name
 
 local state: Flux.State<string> = Flux.signal("idle")
 state:set("busy")

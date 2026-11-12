@@ -1370,6 +1370,24 @@ test("split · a nil props table yields empty groups", function()
 	expect(onlyRest.a == 1, "with no groups, everything is the rest")
 end)
 
+test("prop and own · schema freezing, merging, and schema-driven split", function()
+	local SINGLE = Flux.own({
+		label = Flux.prop() :: string,
+		disabled = Flux.prop() :: boolean?,
+	})
+	expect(SINGLE.label == true and SINGLE.disabled == true and table.isfrozen(SINGLE), "1-arg own freezes schema")
+
+	local EXT = Flux.own(SINGLE, {
+		searchable = Flux.prop() :: boolean?,
+	})
+	expect(EXT.label == true and EXT.disabled == true and EXT.searchable == true, "own merges schema keys")
+	expect(table.isfrozen(EXT), "own freezes the merged schema")
+
+	local own, rest = Flux.split({ label = "Find", searchable = true, Name = "SearchBox" }, EXT)
+	expect(own.label == "Find" and own.searchable == true and own.Name == nil, "schema keys split into own")
+	expect(rest.Name == "SearchBox" and rest.label == nil and rest.searchable == nil, "remaining keys land in rest")
+end)
+
 test("edit · LayoutOrder model/node pinning, Find numeric ordering, and __REF post-children ordering", function()
 	local orderNode = Flux.signal(0)
 	local c1 = Flux.new("Frame")({ Name = "C1", LayoutOrder = orderNode })
@@ -1457,6 +1475,135 @@ test("edit · LayoutOrder model/node pinning, Find numeric ordering, and __REF p
 	childC:Destroy()
 end)
 
+test("edit · defaults, scope cleanup, Parent/model replacement, tag refcounts, and invalid numeric keys", function()
+	local scroll = Flux.new("ScrollingFrame")({})
+	local box = Flux.new("TextBox")({})
+	local label = Flux.new("TextLabel")({})
+	expect(scroll.ScrollBarImageColor3 == Color3.new(0, 0, 0), "ScrollingFrame default ScrollBarImageColor3")
+	expect(box.ClearTextOnFocus == false and box.Text == "", "TextBox default ClearTextOnFocus and empty Text")
+	expect(label.Text == "" and label.TextColor3 == Color3.new(0, 0, 0), "TextLabel default Text and TextColor3")
+	scroll:Destroy()
+	box:Destroy()
+	label:Destroy()
+
+	-- Instance created inside Flux.scope is destroyed when scope tears down
+	local scopedFrame: Frame = nil :: any
+	local sc = Flux.scope(function()
+		scopedFrame = Flux.new("Frame")({ Parent = workspace })
+	end)
+	expect(scopedFrame.Parent == workspace, "scoped Frame mounted")
+	sc:Destroy()
+	expect(scopedFrame.Parent == nil, "scope teardown destroys created Instance")
+
+	-- Replacing reactive Parent with static Parent releases reactive Parent binding
+	local folderA = Instance.new("Folder")
+	local folderB = Instance.new("Folder")
+	local folderC = Instance.new("Folder")
+	folderA.Parent = workspace
+	folderB.Parent = workspace
+	folderC.Parent = workspace
+	local parentSig = Flux.signal(folderA :: Instance?)
+	local movable = Flux.new("Frame")({ Parent = parentSig })
+	expect(movable.Parent == folderA, "initial reactive Parent")
+	Flux.edit(movable)({ Parent = folderB })
+	parentSig:set(folderC)
+	flush()
+	expect(movable.Parent == folderB, "static Parent edit releases prior reactive Parent binding")
+	movable:Destroy()
+	folderA:Destroy()
+	folderB:Destroy()
+	folderC:Destroy()
+
+	-- Replacing Flux.model binding with static property releases model binding
+	local modelSig = Flux.signal("initial")
+	local inputBox = Flux.new("TextBox")({ Parent = workspace, Text = Flux.model(modelSig) })
+	Flux.edit(inputBox)({ Text = "locked" })
+	inputBox.Text = "userTyped"
+	settle()
+	expect(modelSig:peek() == "initial", "static edit releases prior two-way Flux.model listener")
+	modelSig:set("fromSignal")
+	flush()
+	expect(inputBox.Text == "userTyped", "static edit releases prior two-way Flux.model writer")
+
+	-- Property change listener starting with `_A` (not `_attr_`) connects property Changed, not attribute
+	local activeChanges = 0
+	Flux.edit(inputBox)({
+		_Active = function()
+			activeChanges += 1
+		end,
+	})
+	inputBox.Active = not inputBox.Active
+	settle()
+	expect(activeChanges == 1, "_Active connects Active property listener rather than _attr_")
+	inputBox:Destroy()
+
+	-- Multi-source tag refcounting across 3 sources
+	local tagHost = Flux.new("Folder")({ Parent = workspace })
+	local t1 = Flux.signal(true)
+	local t2 = Flux.signal(true)
+	local t3 = Flux.signal(true)
+	Flux.edit(tagHost)({
+		__TAG = { Flux.pick(t1, "SharedTag", nil), Flux.pick(t2, "SharedTag", nil), Flux.pick(t3, "SharedTag", nil) },
+	})
+	expect(tagHost:HasTag("SharedTag"), "tag added when 3 sources claim it")
+	t1:set(false)
+	flush()
+	expect(tagHost:HasTag("SharedTag"), "tag stays when 2 of 3 sources still claim it")
+	t2:set(false)
+	flush()
+	expect(tagHost:HasTag("SharedTag"), "tag stays when 1 of 3 sources still claims it")
+	t3:set(false)
+	flush()
+	expect(not tagHost:HasTag("SharedTag"), "tag removed once all 3 sources release it")
+
+	-- Flux.Defaults base tables and scoped cleanup of function-form tags/attrs
+	expect(
+		Flux.Defaults.Frame.BorderSizePixel == 0
+			and Flux.Defaults.ScrollingFrame.ScrollBarImageColor3 == Color3.new(0, 0, 0)
+			and Flux.Defaults.TextBox.ClearTextOnFocus == false
+			and Flux.Defaults.TextBox.Text == "",
+		"Flux.Defaults populates guiBase and textBase overrides"
+	)
+	local dynSig = Flux.signal(true)
+	local dynFolder: Folder = nil :: any
+	local dynScope = Flux.scope(function()
+		dynFolder = Flux.new("Folder")({
+			_tag_DynTag = function()
+				return dynSig()
+			end,
+			__TAG = {
+				function()
+					return if dynSig() then "ArrTag" else nil
+				end,
+			},
+			_attr_DynNum = function()
+				return if dynSig() then 10 else 20
+			end,
+		})
+	end)
+	expect(
+		dynFolder:HasTag("DynTag") and dynFolder:HasTag("ArrTag") and dynFolder:GetAttribute("DynNum") == 10,
+		"initial function-form tags and attr applied"
+	)
+	dynScope:Destroy()
+	dynSig:set(false)
+	flush()
+	expect(
+		dynFolder:HasTag("DynTag") and dynFolder:HasTag("ArrTag") and dynFolder:GetAttribute("DynNum") == 10,
+		"scope teardown stops reactive tag and attr effects from reacting to later signal writes"
+	)
+	Flux.edit(dynFolder)({ _tag_DynTag = false })
+	expect(not dynFolder:HasTag("DynTag"), "later static _tag_ edit releases claimed tag")
+	dynFolder:Destroy()
+
+	-- Non-integer numeric key is not treated as an integer child key
+	local fracOk = pcall(function()
+		Flux.edit(tagHost)({ [1.5] = "invalid" :: any })
+	end)
+	expect(not fracOk, "fractional numeric key falls through instead of acting as child index")
+	tagHost:Destroy()
+end)
+
 test("edit · forIndex and forValue reorder updates auto LayoutOrder while preserving static 0 and 10 pins", function()
 	local pinZero = Flux.new("Frame")({ Name = "PinZero", LayoutOrder = 0 })
 	local pinTen = Flux.new("Frame")({ Name = "PinTen", LayoutOrder = 10 })
@@ -1500,4 +1647,21 @@ test("edit · forIndex and forValue reorder updates auto LayoutOrder while prese
 	container:Destroy()
 	rows:Destroy()
 	vals:Destroy()
+end)
+
+test("own · ignores nil schema arguments and rejects non-table inputs", function()
+	local a = Flux.own({ alpha = Flux.prop() :: number })
+	local b = Flux.own({ beta = Flux.prop() :: string })
+	local combined = Flux.own(a, nil :: any, b)
+	expect(
+		combined.alpha == true and combined.beta == true and table.isfrozen(combined),
+		"Flux.own skips nil gaps and freezes merged schema"
+	)
+
+	expectError(function()
+		Flux.own(123 :: any)
+	end)
+	expectError(function()
+		Flux.own(a, "invalid" :: any)
+	end)
 end)

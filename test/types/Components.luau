@@ -65,4 +65,44 @@ local _nsFrame: Frame = barrel.Flux.new("Frame")({})
 type Merged = Flux.Merge<{ a: number, b: string }, { b: boolean, c: number }>
 local _merged: Merged = { a = 1, b = true, c = 2 }
 
+local SCHEMA_BASE = Flux.own({
+	label = Flux.prop() :: Flux.Reactive<string>,
+})
+local SCHEMA_OWN = Flux.own(SCHEMA_BASE, {
+	searchable = Flux.prop() :: boolean?,
+	variant = Flux.prop() :: Flux.Reactive<"solid" | "tonal">?,
+})
+type SchemaProps = Flux.Props<"Frame", typeof(SCHEMA_OWN)>
+local function SchemaComp(props: SchemaProps): Frame
+	local own, rest = Flux.split(props, SCHEMA_OWN)
+	local _label: Flux.Reactive<string> = own.label
+	local _searchable: boolean? = own.searchable
+	local _variant: Flux.Reactive<"solid" | "tonal">? = own.variant
+	return Flux.edit(Flux.new("Frame")({}))(rest)
+end
+local _schemaInst: Frame = SchemaComp({ label = "Search", searchable = true, variant = "tonal", Name = "Box" })
+
+-- Optional props (`Props?`) and intersection props (`A & B`) split cleanly without losing field types.
+local function OptSchemaComp(props: SchemaProps?): Frame
+	local own, rest = Flux.split(props, SCHEMA_OWN)
+	local _optLabel: Flux.Reactive<string>? = own.label
+	local _optVariant: Flux.Reactive<"solid" | "tonal">? = own.variant
+	return Flux.edit(Flux.new("Frame")({}))(rest)
+end
+local _optInst: Frame = OptSchemaComp(nil)
+
+type IntersectedProps = Flux.Props<"Frame"> & { label: Flux.Reactive<string>, count: number? }
+local function IntersectComp(props: IntersectedProps): Frame
+	local own, rest = Flux.split(props, { label = true, count = true })
+	local _iLabel: Flux.Reactive<string> = own.label
+	local _iCount: number? = own.count
+	return Flux.edit(Flux.new("Frame")({}))(rest)
+end
+local interInput: IntersectedProps = ({ label = "Hi", count = 2, Name = "Inter" } :: any) :: IntersectedProps
+local _interInst: Frame = IntersectComp(interInput)
+local _partialInter: Flux.Partial<IntersectedProps> = {}
+
+local clonedOpt = Flux.split(nil :: SchemaProps?)
+local _clonedName: Flux.Reactive<string>? = clonedOpt.Name
+
 return nil

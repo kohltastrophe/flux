@@ -104,7 +104,7 @@ If you are upgrading an existing project from `0.2.0` to `0.3.0`, update these r
 | `Flux.listen(inst, prop)` | [`Flux.property(inst, key)`](/guide/concepts/signals#binding-from-an-instance-property) | Also supports `"$Attr"` / `"_attr_Attr"` and `"#Tag"` / `"_tag_Tag"` (or `Flux(inst, key)`). |
 | `Flux(fn, true)` | [`Flux.effect(fn)`](/guide/concepts/effects) | `Flux()` only constructs signals (`Flux(v)`), computeds (`Flux(fn)`), and property nodes (`Flux(inst, key)`). |
 | `Flux.on(deps, fn)` | `Flux.effect(Flux.on(deps, fn))` | [`Flux.on`](/guide/concepts/effects#bridging-to-external-systems-with-flux-on) now returns a tracked effect callback rather than a standalone listener. |
-| `Flux.wrap` / `Flux.props` | [`Flux.split(props, ...)`](/guide/concepts/components#splitting-props-with-flux-split) | Split custom component props from pass-through instance props. Nested tables in `Flux.new` and `Flux.edit` flatten automatically. |
+| `Flux.wrap` / `Flux.props` | [`Flux.split(props, OWN)`](/guide/concepts/components#splitting-props-with-flux-split) | Split custom component props (declared with `Flux.prop()` / `Flux.own()`) from pass-through instance props. Nested tables in `Flux.new` and `Flux.edit` flatten automatically. |
 | `Flux.default` | [`Flux.otherwise`](/guide/concepts/conditionals#switching-between-many-branches) | Default branch key in `Flux.switch`. |
 | `Flux.safe` + `Flux.catch` | [`Flux.safe(tryFn, catchFn)`](/guide/tips/errors) | Combined into a single error-boundary helper. |
 | `Flux.clean(...)` | [`Flux.dispose(...)`](/guide/concepts/scopes) | Immediately tears down any `Cleanable` (use `Flux.cleanup(fn)` to register on the active owner). |

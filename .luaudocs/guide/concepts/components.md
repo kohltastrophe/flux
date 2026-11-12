@@ -84,15 +84,15 @@ Use `Flux.isNode(value)` when you explicitly need to check whether a value is a 
 
 Reusable components often accept both **component-specific props** (like `label` or `variant`) and **pass-through Instance properties** (like `Size`, `Position`, `LayoutOrder`, or children) in a single table.
 
-Combine `Flux.Props<ClassName, Extra>` with `Flux.split(props, keys)` to separate your component's own keys from the rest and forward the remaining table to `Flux.new`:
+Declare your component's own prop schema once with `Flux.prop()`, derive the full prop table type with `Flux.Props<ClassName, typeof(OWN)>`, and separate them at runtime with `Flux.split(props, OWN)`:
 
 ```luau
-type BadgeProps = Flux.Props<"TextLabel", {
-	label: Flux.Reactive<string>,
-	accent: Flux.Reactive<Color3>?,
-}>
+local OWN = {
+	label = Flux.prop() :: Flux.Reactive<string>,
+	accent = Flux.prop() :: Flux.Reactive<Color3>?,
+}
 
-local OWN: { "label" | "accent" } = { "label", "accent" }
+type BadgeProps = Flux.Props<"TextLabel", typeof(OWN)>
 
 local function Badge(props: BadgeProps): TextLabel
 	local own, rest = Flux.split(props, OWN)
@@ -106,9 +106,21 @@ local function Badge(props: BadgeProps): TextLabel
 end
 ```
 
-- **Typed `Pick` and `Omit`:** With a single typed key group (either an annotated literal array like `local OWN: { "label" | "accent" }` or a schema table), `own` is typed as `Flux.Pick<Props, Keys>` and `rest` as `Flux.Omit<Props, Keys>`, keeping required props required.
-- **Multiple groups:** You can pass multiple key groups (`local a, b, rest = Flux.split(props, KEYS_A, KEYS_B)`). Each group receives its matching keys, and the final return holds everything else (including numeric children and `__ATTR`/`__EVENT`/`__TAG`/`__CLEAN` directives).
-- **Non-mutating:** `props` itself is never mutated.
+- **Single source of truth:** `Flux.prop()` returns `true` at runtime to mark the key in `OWN`, while the type cast beside it gives `typeof(OWN)` and `own` (`Flux.Pick<BadgeProps, typeof(OWN)>`) their exact `--!strict` property types (keeping required props required). Annotated key-literal arrays like `local OWN: { "label" | "accent" } = { "label", "accent" }` also preserve exact `Pick` and `Omit` types on a single group (two or more groups widen to `Flux.Partial<T>`).
+- **Pass-through forwarding:** `rest` is typed as `Flux.Omit<BadgeProps, typeof(OWN)>` and holds every remaining property, event, numeric child, and `__ATTR` / `__EVENT` / `__TAG` / `__CLEAN` directive without mutating `props`.
+- **Composing schemas with `Flux.own`:** Freeze a standalone schema or merge several shared schemas into one with `Flux.own(...)`:
+
+```luau
+local BASE_OWN = Flux.own({
+	label = Flux.prop() :: Flux.Reactive<string>,
+})
+
+local SEARCH_OWN = Flux.own(BASE_OWN, {
+	placeholder = Flux.prop() :: Flux.Reactive<string>?,
+})
+
+type SearchBoxProps = Flux.Props<"TextBox", typeof(SEARCH_OWN)>
+```
 
 ## Accepting Children
 

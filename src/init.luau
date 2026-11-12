@@ -195,6 +195,8 @@ local Flux = table.freeze(setmetatable({
 	selector = Conditional.selector,
 	store = Store.new,
 	split = Edit.split,
+	prop = Edit.prop,
+	own = Edit.own,
 	safe = Graph.safe,
 
 	-- Instances and control flow
