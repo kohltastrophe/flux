@@ -10,11 +10,13 @@ sidebar_position: 11
 In a 500-row list where one row is highlighted, having every row read `selectedId() == row.id` wakes all 500 bindings on every selection change. **`Flux.selector(source, equals?)`** reduces single-item selection to **O(1)** so only the row losing selection and the row gaining it re-run.
 
 ```luau
+type Row = { id: number, label: string }
+
 local rows = Flux.signal({
 	{ id = 1, label = "Sword" },
 	{ id = 2, label = "Shield" },
 	{ id = 3, label = "Potion" },
-})
+} :: { Row })
 
 local selectedId = Flux.signal(1)
 local isSelected = Flux.selector(selectedId)
@@ -22,19 +24,29 @@ local isSelected = Flux.selector(selectedId)
 local list = Flux.new "Frame" {
 	Flux.list({ gap = 4 }),
 
-	Flux.forValue(rows, function(_, row)
-		return Flux.new "TextButton" {
-			Text = row.label,
-			BackgroundColor3 = function()
-				return if isSelected(row.id)
-					then Color3.fromRGB(80, 140, 255)
-					else Color3.fromRGB(40, 40, 45)
-			end,
-			Activated = function()
-				selectedId(row.id)
-			end,
-		}
-	end),
+	Flux.forKey(
+		rows,
+		function(row: Row)
+			return row.id
+		end,
+		function(index, row: Flux.Node<Row>)
+			local id = row:peek().id
+			return Flux.new "TextButton" {
+				LayoutOrder = index,
+				Text = function()
+					return row().label
+				end,
+				BackgroundColor3 = function()
+					return if isSelected(id)
+						then Color3.fromRGB(80, 140, 255)
+						else Color3.fromRGB(40, 40, 45)
+				end,
+				Activated = function()
+					selectedId(id)
+				end,
+			}
+		end
+	),
 }
 ```
 

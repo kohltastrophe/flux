@@ -90,6 +90,12 @@ end)
 local _indexed: Node<{ number }> = Flux.forIndex(Flux.signal({ 1, 2 }), function(_index, item: Node<number>)
 	return item() * 2
 end)
+type KeyedRow = { id: number, label: string }
+local _keyed: Node<{ string }> = Flux.forKey(Flux.signal({ { id = 1, label = "A" } } :: { KeyedRow }), function(row)
+	return row.id
+end, function(index, row: Node<KeyedRow>)
+	return `{index()}:{row().label}`
+end)
 local spring = Flux.spring(count, 4)
 local _spring: number = spring()
 spring:impulse(2)

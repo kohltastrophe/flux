@@ -17,7 +17,7 @@ Split distinct values into individual [Signals](/guide/concepts/signals) so each
 
 Creating and destroying Roblox [`Instances`](https://create.roblox.com/docs/en-us/reference/engine/classes/Instance) is one of the most expensive operations in the engine:
 
-- **Lists:** Always render dynamic arrays with [`Flux.forValue` or `Flux.forIndex`](/guide/concepts/mapping) instead of rebuilding children in a plain loop. `forValue`{luau} caches instances by item identity and repositions them in place. `forIndex`{luau} caches slots by index and updates a reactive `value`{luau} Signal per slot.
+- **Lists:** Always render dynamic arrays with [`Flux.forValue`, `Flux.forKey`, or `Flux.forIndex`](/guide/concepts/mapping) instead of rebuilding children in a plain loop. `forValue`{luau} caches instances by item reference and repositions them in place. `forKey`{luau} caches instances by a stable ID (`keyOf(item)`{luau}) while updating both `index`{luau} and `item`{luau} nodes across snapshot replacements. `forIndex`{luau} caches slots by index for primitive lists.
 - **Conditionals:** Prefer [`Flux.show`](/guide/concepts/conditionals#showing-one-of-two-branches) over [`Flux.showKeyed`](/guide/concepts/conditionals#keyed-show) unless you specifically need to tear down and recreate the subtree when a truthy value changes identity.
 - **Selection:** Use [`Flux.selector`](/guide/concepts/selectors) for active-row highlighting in large lists so changing selection is $O(1)$ (waking only the old and new rows) instead of $O(N)$.
 

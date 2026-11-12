@@ -1,6 +1,6 @@
 --!strict
 --[[
-Control flow, list mapping, and keyed selection helpers (`show`, `showKeyed`, `switch`, `presence`, `pick`, `fallback`, `forValue`, `forIndex`, `selector`).
+Control flow, list mapping, and keyed selection helpers (`show`, `showKeyed`, `switch`, `presence`, `pick`, `fallback`, `forValue`, `forKey`, `forIndex`, `selector`).
 
 ```luau
 Flux.show(loggedIn, function() return Profile {} end, function() return SignIn {} end)
@@ -41,6 +41,7 @@ type Truthy<T> = Type.Truthy<T>
 
 local OTHERWISE: any = table.freeze({ type = "SwitchOtherwise" })
 local UNSET = table.freeze({})
+local NAN_KEY: any = table.freeze({ type = "NaNKey" })
 local NO_VALUE: any = nil
 
 -- Conditional (show, showKeyed, switch, presence, pick, fallback) -----------------------------------------------------
@@ -72,21 +73,27 @@ local function mount(
 ): Node<any>
 	local activeKey: any = UNSET
 	local activeBranch: Node<any>? = nil
+	local lastValid: any = NO_VALUE
 	local output = newValue(NO_VALUE)
 
 	local function valueOf()
 		local current = read(source)
-		return current
+		local key = selectBranch(current, argA, argB, argC)
+		if key == activeKey or (key ~= key and activeKey ~= activeKey) then
+			lastValid = current
+			return current
+		end
+		return lastValid
 	end
 
 	local driver = effect(function()
 		local value = read(source)
 		local key, factory = selectBranch(value, argA, argB, argC)
 
-		if key == activeKey then
+		if key == activeKey or (key ~= key and activeKey ~= activeKey) then
+			lastValid = value
 			return
 		end
-		activeKey = key
 
 		untrack()
 		local previous = activeBranch
@@ -94,6 +101,8 @@ local function mount(
 		if previous ~= nil then
 			previous:Destroy()
 		end
+		activeKey = key
+		lastValid = value
 
 		if factory ~= nil then
 			local ok, branch, result = mountBranch(factory, valueOf)
@@ -268,11 +277,59 @@ local function fallback<V, D>(value: V, default: D): Node<NonNil<Graph.Unwrap<V>
 	end)
 end
 
--- For (forIndex, forValue) --------------------------------------------------------------------------------------------
+-- For (forIndex, forValue, forKey) ------------------------------------------------------------------------------------
 
-local function createMapper(list: any, mapFn: any, keyedByValue: boolean): Node<any>
+local function sweepMapperRows(
+	nodes: { [any]: Node<any> },
+	items: { [any]: Node<any> }?,
+	cache: { [any]: any },
+	currentKeys: { [any]: boolean }
+): number
+	local liveN = 0
+	for key, node in nodes do
+		if currentKeys[key] == nil then
+			destroyNode(node)
+			nodes[key] = nil
+			if items ~= nil then
+				destroyNode(items[key])
+				items[key] = nil
+			end
+			dispose(cache[key])
+			cache[key] = nil
+		else
+			liveN += 1
+		end
+	end
+	return liveN
+end
+
+local function destroyMapperRows(
+	nodes: { [any]: Node<any> },
+	items: { [any]: Node<any> }?,
+	cache: { [any]: any },
+	currentKeys: { [any]: boolean }
+)
+	for key, node in nodes do
+		destroyNode(node)
+		if items ~= nil then
+			destroyNode(items[key])
+		end
+		dispose(cache[key])
+	end
+	table.clear(nodes)
+	if items ~= nil then
+		table.clear(items)
+	end
+	table.clear(cache)
+	table.clear(currentKeys)
+end
+
+local function createMapper(list: any, mapFn: any, keyedByValue: boolean, keyOf: ((any) -> any)?): Node<any>
+	local map: (any, any) -> any = mapFn
+	assert(type(mapFn) == "function", "mapFn must be a function")
 	local cache: { [any]: any } = {}
 	local nodes: { [any]: Node<any> } = {}
+	local items: { [any]: Node<any> }? = if keyOf ~= nil then {} else nil
 	local currentKeys: { [any]: boolean } = {}
 	local cacheN = 0
 	local rebuildAborted = false
@@ -281,12 +338,19 @@ local function createMapper(list: any, mapFn: any, keyedByValue: boolean): Node<
 	local function build()
 		local a, b = rowA, rowB
 		rowA, rowB = nil, nil
-		return mapFn(a, b)
+		return map(a, b)
 	end
 
 	local self = computed(function()
 		local current = read(list) :: { any }
 		if type(current) ~= "table" then
+			if cacheN > 0 or rebuildAborted or next(nodes) ~= nil then
+				untrack()
+				destroyMapperRows(nodes, items, cache, currentKeys)
+				cacheN = 0
+				rebuildAborted = false
+				retrack()
+			end
 			return {}
 		end
 
@@ -297,14 +361,32 @@ local function createMapper(list: any, mapFn: any, keyedByValue: boolean): Node<
 		rebuildAborted = true
 		untrack()
 
+		local getKey = keyOf
+		local itemsMap = items
 		local seen, added = 0, 0
 		for index, value in current do
 			local key: any, held: any = index, value
 			if keyedByValue then
-				key, held = value, index
+				if getKey ~= nil then
+					local rawKey = getKey(value)
+					if rawKey ~= rawKey then
+						warn("[Flux] Flux.forKey: NaN key fell back to item identity; keys must not be NaN")
+						key = value
+					else
+						key = if rawKey == nil then value else rawKey
+					end
+				else
+					key = value
+				end
+				if key ~= key then
+					key = NAN_KEY
+				end
+				held = index
 				if currentKeys[key] ~= nil then
 					warn(
-						"[Flux] Flux.forValue: duplicate values share one mapped instance (the value is the cache key); use Flux.forIndex"
+						if getKey ~= nil
+							then "[Flux] Flux.forKey: duplicate keys share one mapped instance; keys must be unique"
+							else "[Flux] Flux.forValue: duplicate values share one mapped instance (the value is the cache key); use Flux.forIndex"
 					)
 					seen -= 1
 				end
@@ -314,10 +396,17 @@ local function createMapper(list: any, mapFn: any, keyedByValue: boolean): Node<
 			local node = nodes[key]
 			if node ~= nil then
 				set(node, held)
+				if itemsMap ~= nil then
+					set(itemsMap[key], value)
+				end
 				out[index] = cache[key]
 			else
 				node = newValue(held)
-				if keyedByValue then
+				if itemsMap ~= nil then
+					local itemNode = newValue(value)
+					rowA, rowB = node, itemNode
+					itemsMap[key] = itemNode
+				elseif keyedByValue then
 					rowA, rowB = node, value
 				else
 					rowA, rowB = index, node
@@ -333,18 +422,7 @@ local function createMapper(list: any, mapFn: any, keyedByValue: boolean): Node<
 		rebuildAborted = false
 
 		if mustScan or seen ~= cacheN + added then
-			local liveN = 0
-			for key, node in nodes do
-				if currentKeys[key] == nil then
-					node:Destroy()
-					nodes[key] = nil
-					dispose(cache[key])
-					cache[key] = nil
-				else
-					liveN += 1
-				end
-			end
-			cacheN = liveN
+			cacheN = sweepMapperRows(nodes, itemsMap, cache, currentKeys)
 		else
 			cacheN += added
 		end
@@ -353,13 +431,7 @@ local function createMapper(list: any, mapFn: any, keyedByValue: boolean): Node<
 	end)
 
 	self:onDestroy(function()
-		for key, node in nodes do
-			node:Destroy()
-			dispose(cache[key])
-		end
-		table.clear(nodes)
-		table.clear(cache)
-		table.clear(currentKeys)
+		destroyMapperRows(nodes, items, cache, currentKeys)
 	end)
 
 	return self
@@ -382,6 +454,21 @@ Values must be unique (use `Flux.forIndex` for primitive or duplicate values).
 ]]
 local function forValue<L, U>(list: L, mapFn: (index: Node<number>, value: Item<L>) -> U): Node<{ U }>
 	return createMapper(list, mapFn, true)
+end
+
+--[[
+Maps `list` by `keyOf(item)`, running `mapFn(index, item)` once per unique key and updating both `index` and `item` in place when entries with that key move or rebuild.
+Entries whose key is `nil` fall back to item identity. Keys must be unique.
+
+[Open Documentation](https://flux.kohl.gg/guide/concepts/mapping#flux-forkey-keyed-by-function)
+]]
+local function forKey<L, U>(
+	list: L,
+	keyOf: (item: Item<L>) -> any,
+	mapFn: (index: Node<number>, item: Node<Item<L>>) -> U
+): Node<{ U }>
+	assert(type(keyOf) == "function", "keyOf must be a function")
+	return createMapper(list, mapFn, true, keyOf)
 end
 
 -- Selector ------------------------------------------------------------------------------------------------------------
@@ -445,7 +532,8 @@ function SelectorMT.get(self: SelectorData, key: any): boolean
 		raw(self._watcher)
 	end
 	local nodes = self._nodes
-	local node = nodes[key]
+	local slot = if key ~= key then NAN_KEY else key
+	local node = nodes[slot]
 	if node ~= nil then
 		return get(node :: Graph.Node<boolean>)
 	end
@@ -461,7 +549,7 @@ function SelectorMT.get(self: SelectorData, key: any): boolean
 		set(self._sweepSignal, true, true)
 	end
 	node = newValue(selected)
-	nodes[key] = node
+	nodes[slot] = node
 	self._count += 1
 	return get(node)
 end
@@ -500,7 +588,7 @@ local function selector<S, K>(source: S, equals: ((sourceValue: Graph.Unwrap<S>,
 	self._watcher = effect(function()
 		local value = read(source)
 		local prev = self._active
-		if equals == nil and prev == value then
+		if equals == nil and (prev == value or (prev ~= prev and value ~= value)) then
 			return
 		end
 		self._active = value
@@ -510,17 +598,17 @@ local function selector<S, K>(source: S, equals: ((sourceValue: Graph.Unwrap<S>,
 
 		untrack()
 		if equals == nil then
-			local prevNode = if prev ~= nil then nodes[prev] else nil
+			local prevNode = if prev ~= nil and prev == prev then nodes[prev] else nil
 			if prevNode ~= nil then
 				set(prevNode, false)
 			end
-			local nextNode = if value ~= nil then nodes[value] else nil
+			local nextNode = if value ~= nil and value == value then nodes[value] else nil
 			if nextNode ~= nil then
 				set(nextNode, true)
 			end
 		else
 			for key, node in nodes do
-				set(node, equals(value, key))
+				set(node, equals(value, if key == NAN_KEY then 0 / 0 else key))
 			end
 		end
 		retrack()
@@ -586,5 +674,6 @@ return table.freeze({
 	fallback = fallback,
 	forIndex = forIndex,
 	forValue = forValue,
+	forKey = forKey,
 	selector = selector,
 })

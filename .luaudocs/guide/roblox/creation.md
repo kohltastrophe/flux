@@ -46,7 +46,7 @@ local button = Flux.new "TextButton" {
 
 ## Creating Hierarchies (Children)
 
-Place child instances (or nested arrays / [`Flux.show`](/guide/concepts/conditionals) / [`Flux.forValue`](/guide/concepts/mapping) nodes) at **numeric indices** inside the properties table:
+Place child instances (or nested arrays, [`Flux.show`](/guide/concepts/conditionals), [`Flux.forValue`](/guide/concepts/mapping), or [`Flux.forKey`](/guide/concepts/mapping#flux-forkey-keyed-by-function) nodes) at **numeric indices** inside the properties table:
 
 ```luau
 local actionButtons = { SaveButton, LoadButton, QuitButton }

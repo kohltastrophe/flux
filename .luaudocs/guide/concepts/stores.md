@@ -35,7 +35,7 @@ Call `Flux.store(initialTable)` with a plain Luau table. Per-key signal nodes an
 
 ## Arrays and Iteration
 
-Iterating over a store (`for k, v in store.list do`) or reading `#store.list` subscribes the running computation to structural changes on that table level.
+Iterating over a store (`for k, v in store.list do`) or reading `#store.list` subscribes the running computation to structural changes on that table level. To render a store array into UI children without rebuilding unchanged rows, pass `function() return store.list end` to [`Flux.forKey`](/guide/concepts/mapping#flux-forkey-keyed-by-function) or [`Flux.forValue`](/guide/concepts/mapping#flux-forvalue-keyed-by-value).
 
 > [!CAUTION] Use `Flux.Store` Array Helpers Instead of `table.insert` / `table.remove`
 > Luau's `table.insert` and `table.remove` bypass metatables. Always mutate store arrays with `Flux.Store.insert`, `Flux.Store.remove`, and `Flux.Store.move`:

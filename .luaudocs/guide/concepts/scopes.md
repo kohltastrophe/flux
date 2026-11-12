@@ -41,7 +41,7 @@ Everything created while a scope is active that holds a subscription or resource
 
 - **Computeds and Effects** (`Flux.computed`, `Flux.effect`, `Flux.createMemo`, `Flux.createEffect`, `Flux(fn)`)
 - **Instances and bindings** from [`Flux.new`](/guide/roblox/creation), [`Flux.edit`](/guide/roblox/hydration), and [`Flux.property`](/guide/concepts/signals#binding-from-an-instance-property)
-- **State helpers:** [Stores](/guide/concepts/stores), [Async](/guide/concepts/async) tasks, [Selectors](/guide/concepts/selectors), [Mapping](/guide/concepts/mapping) (`forValue`, `forIndex`), and [Conditionals](/guide/concepts/conditionals) (`show`, `switch`, `presence`)
+- **State helpers:** [Stores](/guide/concepts/stores), [Async](/guide/concepts/async) tasks, [Selectors](/guide/concepts/selectors), [Mapping](/guide/concepts/mapping) (`forValue`, `forKey`, `forIndex`), and [Conditionals](/guide/concepts/conditionals) (`show`, `switch`, `presence`)
 - **Interaction & motion nodes:** [`Flux.Interact`](/guide/utilities/interact) state nodes (`hover`, `press`, `selected`, `focused`), [`Flux.spring`](/guide/motion/spring), and [`Flux.tween`](/guide/motion/tween)
 - **Custom teardown items** registered with [`Flux.cleanup`](/guide/concepts/effects#cleanup-with-flux-cleanup)
 

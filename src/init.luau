@@ -213,6 +213,7 @@ local Flux = table.freeze(setmetatable({
 	fallback = Conditional.fallback,
 	forValue = Conditional.forValue,
 	forIndex = Conditional.forIndex,
+	forKey = Conditional.forKey,
 	spring = Motion.spring,
 	tween = Motion.tween,
 

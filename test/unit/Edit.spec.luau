@@ -1604,7 +1604,7 @@ test("edit · defaults, scope cleanup, Parent/model replacement, tag refcounts, 
 	tagHost:Destroy()
 end)
 
-test("edit · forIndex and forValue reorder updates auto LayoutOrder while preserving static 0 and 10 pins", function()
+test("edit · forKey and forValue reorder updates auto LayoutOrder while preserving static 0 and 10 pins", function()
 	local pinZero = Flux.new("Frame")({ Name = "PinZero", LayoutOrder = 0 })
 	local pinTen = Flux.new("Frame")({ Name = "PinTen", LayoutOrder = 10 })
 	local rows = Flux.signal({ { id = "a" }, { id = "b" } })
@@ -1612,7 +1612,9 @@ test("edit · forIndex and forValue reorder updates auto LayoutOrder while prese
 
 	local container = Flux.new("Frame")({
 		pinZero,
-		Flux.forIndex(rows, function(_idx, item)
+		Flux.forKey(rows, function(item)
+			return item.id
+		end, function(_idx, item)
 			return Flux.new("Frame")({ Name = `k_{item:peek().id}` })
 		end),
 		Flux.forValue(vals, function(_idx, label)
@@ -1636,12 +1638,18 @@ test("edit · forIndex and forValue reorder updates auto LayoutOrder while prese
 		`initial LayoutOrder pins and auto-order ({ka.LayoutOrder},{kb.LayoutOrder},{vx.LayoutOrder},{vy.LayoutOrder})`
 	)
 
+	rows:set({ { id = "b" }, { id = "a" } })
 	vals:set({ "y", "x" })
 	flush()
 
 	expect(
-		pinZero.LayoutOrder == 0 and pinTen.LayoutOrder == 10 and vy.LayoutOrder == 2 and vx.LayoutOrder == 3,
-		`reordered LayoutOrder updates while static 0/10 pins stay untouched ({vy.LayoutOrder},{vx.LayoutOrder})`
+		pinZero.LayoutOrder == 0
+			and pinTen.LayoutOrder == 10
+			and kb.LayoutOrder == 1
+			and ka.LayoutOrder == 2
+			and vy.LayoutOrder == 2
+			and vx.LayoutOrder == 3,
+		`reordered LayoutOrder updates while static 0/10 pins stay untouched ({kb.LayoutOrder},{ka.LayoutOrder},{vy.LayoutOrder},{vx.LayoutOrder})`
 	)
 
 	container:Destroy()

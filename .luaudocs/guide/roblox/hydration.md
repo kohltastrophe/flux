@@ -146,7 +146,7 @@ Flux.edit(existingFrame) {
 ## Array Elements (Children & Deferred Actions)
 
 Elements at numeric indices inside `Flux.edit` (or `Flux.new`) are processed in order:
-1. **`Instance`s, arrays, or child-binding nodes** (`Flux.show`, `Flux.forValue`, `Flux.forIndex`) are parented to the target instance with automatic sequential `LayoutOrder`.
+1. **`Instance`s, arrays, or child-binding nodes** (`Flux.show`, `Flux.forValue`, `Flux.forKey`, `Flux.forIndex`) are parented to the target instance with automatic sequential `LayoutOrder`.
 2. **Functions** `(instance) -> ()` are scheduled via `task.defer` to run with the target instance after all properties and children are applied.
 3. **`Flux.Find` selectors** locate related instances and apply nested `Flux.edit` tables to them.
 

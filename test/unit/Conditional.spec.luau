@@ -2001,3 +2001,412 @@ sert.laws.differential("conditional · forValue and forIndex reconciliation matc
 		return `{table.concat(gotVal, ",")}|{table.concat(gotIdx, ",")}`
 	end,
 }, { runs = 60 })
+
+test(
+	"forKey · maps by key once per item, keeps untouched rows asleep, warns on duplicate keys, and cleans up scopes",
+	function()
+		type Entry = { id: string?, label: string }
+		local rowA: Entry = { id = "a", label = "Alpha" }
+		local rowB: Entry = { id = "b", label = "Beta" }
+		local list = Flux.signal({ rowA, rowB })
+		local builds = 0
+		local keyCalls = 0
+		local evalsByKey: { [string]: number } = { a = 0, b = 0 }
+		local unmounted = 0
+
+		local scope, mapped = Flux.scope(function()
+			return Flux.forKey(list, function(entry: Entry)
+				keyCalls += 1
+				return entry.id
+			end, function(index, item)
+				builds += 1
+				Flux.cleanup(function()
+					unmounted += 1
+				end)
+				local labelComp = Flux.computed(function()
+					local cur = item()
+					if cur.id then
+						evalsByKey[cur.id] = (evalsByKey[cur.id] or 0) + 1
+					end
+					return cur.label
+				end)
+				return Flux.computed(function()
+					return `{index()}:{labelComp()}`
+				end)
+			end)
+		end)
+
+		flush()
+		expect(mapped()[1]() == "1:Alpha" and mapped()[2]() == "2:Beta", "initial mapped rows")
+		expect(builds == 2, "two unique keys built initially")
+		expect(keyCalls == 2, "keyOf called exactly once per item on initial pass")
+		expect(evalsByKey.a == 1 and evalsByKey.b == 1, "each row evaluated once")
+
+		-- Update only rowB (keeping rowA identical reference) -> rowA's item signal stays asleep!
+		keyCalls = 0
+		local uniqueWarnings = env.warnings(function()
+			list:set({ rowA, { id = "b", label = "Beta2" } })
+			expect(mapped()[1]() == "1:Alpha" and mapped()[2]() == "2:Beta2", "updated rowB label")
+		end)
+		expect(#uniqueWarnings == 0, "unique keys emit zero warnings")
+		expect(keyCalls == 2, "keyOf called once per item on update")
+		expect(builds == 2, "no rows rebuilt")
+		expect(evalsByKey.a == 1 and evalsByKey.b == 2, "unchanged sibling rowA stays asleep in O(1)")
+
+		-- Reorder and rebuild both tables
+		list:set({
+			{ id = "b", label = "Beta3" },
+			{ id = "a", label = "Alpha2" },
+		})
+		flush()
+		expect(builds == 2, "rebuilt item tables with existing keys update in place without rebuilding rows")
+		expect(mapped()[1]() == "1:Beta3" and mapped()[2]() == "2:Alpha2", "updated labels and reordered indices")
+
+		-- Replacing one of two unique keys with a duplicate of the other still sweeps the evicted key ('b') even though #list == 2
+		local dupSweepWarnings = env.warnings(function()
+			list:set({
+				{ id = "a", label = "Alpha3" },
+				{ id = "a", label = "AlphaDup" },
+			})
+			mapped()
+			flush()
+		end)
+		expect(
+			#dupSweepWarnings == 1 and unmounted == 1,
+			"evicted key 'b' unmounts even when duplicate keeps #list == 2"
+		)
+
+		-- Duplicate keys warn with Flux.forKey prefix
+		local warned = env.warnings(function()
+			list:set({
+				{ id = "dup", label = "First" },
+				{ id = "dup", label = "Second" },
+			})
+			mapped()
+			flush()
+		end)
+		expect(#warned == 1 and string.find(warned[1], "Flux.forKey", 1, true) ~= nil, "duplicate keys warn accurately")
+		expect(unmounted == 2, "leaving key 'a' unmounts and runs row cleanups")
+
+		-- Item with nil key falls back to item identity, and itemNode destroys on eviction and mapper Destroy
+		local rawItem: Entry = { id = nil, label = "NilKey" }
+		local itemDestroyed = 0
+		local itemScope, mappedItems = Flux.scope(function()
+			return Flux.forKey(list, function(e: Entry)
+				return e.id
+			end, function(_idx, itemNode)
+				itemNode:onDestroy(function()
+					itemDestroyed += 1
+				end)
+				return "row"
+			end)
+		end)
+		list:set({ rawItem, { id = "keep", label = "Keep" } })
+		mapped()
+		mappedItems()
+		flush()
+		expect(mapped()[1]() == "1:NilKey" and builds == 5 and unmounted == 3, "nil key falls back to item identity")
+		list:set({ { id = "keep", label = "Keep" } })
+		mapped()
+		mappedItems()
+		flush()
+		expect(itemDestroyed == 1, "evicting a keyed row destroys its item signal")
+		itemScope:Destroy()
+		expect(itemDestroyed == 2, "destroying forKey destroys remaining item signals")
+
+		scope:Destroy()
+		expect(unmounted == 5, "destroying outer scope tears down remaining mapped row")
+	end
+)
+
+test("conditional · show/presence error recovery, stale exit done guard, and selector sweep/Destroy", function()
+	-- show: factory reads are untracked; throwing directly from a mounted branch resets output from non-nil to nil and resets activeKey
+	local cond = Flux.signal(0 :: any)
+	local innerUntracked = Flux.signal("a")
+	local showBuilds = 0
+	local showScope, shown = Flux.scope(function()
+		return Flux.showKeyed(cond, function(val)
+			showBuilds += 1
+			innerUntracked() -- must be untracked by driver
+			local v = val()
+			if v == 1 then
+				error("branch boom")
+			end
+			return `ok:{tostring(v)}`
+		end)
+	end)
+	flush()
+	expect(shown() == "ok:0" and showBuilds == 1, "initial showKeyed value")
+	innerUntracked:set("b")
+	flush()
+	expect(showBuilds == 1, "reads inside show factory do not re-trigger driver")
+	cond:set(1) -- transition directly from mounted "ok:0" to throwing branch so set(output, nil) is exercised
+	local warned = env.warnings(flush)
+	expect(#warned == 1 and shown() == nil, "throwing branch warns and resets non-nil output to nil")
+	-- Also verify non-keyed show resets activeKey so a subsequent truthy value re-mounts
+	local boolCond = Flux.signal(1 :: any)
+	local boolShow = Flux.show(boolCond, function(val)
+		local v = val()
+		if v == 1 then
+			error("bool boom")
+		end
+		return `ok:{tostring(v)}`
+	end)
+	env.warnings(flush)
+	boolCond:set(2)
+	flush()
+	expect(boolShow() == "ok:2", "healing on next truthy value re-mounts cleanly")
+	boolShow:Destroy()
+	showScope:Destroy()
+
+	-- presence: throwing mount destroys exit node and resets output; factory reads are untracked; premature done() is ignored
+	local badExitDestroyed = 0
+	local badPresCond = Flux.signal(false)
+	local badPres = Flux.presence(badPresCond, function(exiting)
+		exiting:onDestroy(function()
+			badExitDestroyed += 1
+		end)
+		error("presence boom")
+	end)
+	flush()
+	badPresCond:set(true)
+	local presWarned = env.warnings(flush)
+	expect(
+		#presWarned == 1 and badPres() == nil and badExitDestroyed == 1,
+		"throwing presence destroys exit node and leaves output nil"
+	)
+	badPres:Destroy()
+
+	local presCond = Flux.signal(true)
+	local presUntracked = Flux.signal(1)
+	local presMounts = 0
+	local capturedDone: (() -> ())? = nil
+	local capturedExiting: any = nil
+	local exitNodeDestroyed = 0
+	local presScope, pres = Flux.scope(function()
+		return Flux.presence(presCond, function(exiting, done)
+			presMounts += 1
+			presUntracked()
+			capturedExiting = exiting
+			capturedDone = done
+			exiting:onDestroy(function()
+				exitNodeDestroyed += 1
+			end)
+			return "mounted"
+		end)
+	end)
+	flush()
+	presUntracked:set(2)
+	flush()
+	expect(pres() == "mounted" and presMounts == 1 and capturedExiting() == false, "presence mounted untracked");
+	(capturedDone :: () -> ())() -- premature done while present: must be ignored
+	flush()
+	expect(pres() == "mounted", "premature done() while not exiting is ignored")
+
+	presCond:set(false)
+	flush()
+	expect(capturedExiting() == true and pres() == "mounted", "first exit started")
+	presCond:set(true)
+	flush()
+	expect(capturedExiting() == false and pres() == "mounted", "re-entry cancels first exit")
+	presCond:set(false)
+	flush()
+	expect(capturedExiting() == true, "second exit started");
+	(capturedDone :: () -> ())()
+	flush()
+	expect(pres() == nil and exitNodeDestroyed == 1, "completing second exit unmounts and destroys exiting node")
+	presScope:Destroy()
+
+	-- selector: >40 unobserved keys sweep cleanly while keeping 20 observed keys, and Destroy tears down per-key nodes
+	local selSrc = Flux.signal(1)
+	local sel = Flux.selector(selSrc)
+	local obsScopes = {}
+	local destroyedKeys = 0
+	for i = 1, 20 do
+		local k = i
+		obsScopes[i] = Flux.scope(function()
+			Flux.effect(function()
+				sel(k)
+			end)
+		end)
+	end
+	for i = 21, 70 do
+		local k = i
+		local tempScope = Flux.scope(function()
+			Flux.effect(function()
+				sel(k)
+			end)
+		end)
+		flush()
+		tempScope:Destroy() -- drops observer so _nodes[k] becomes eligible for sweep
+	end
+	selSrc:set(2)
+	flush()
+	expect(sel(2) == true and sel(1) == false, "observed keys stay accurate across >SWEEP_MIN sweep");
+	(sel :: any)._nodes[2]:onDestroy(function()
+		destroyedKeys += 1
+	end)
+	sel:Destroy()
+	expect(destroyedKeys == 1, "selector:Destroy destroys internal per-key nodes")
+	for _, pair in obsScopes do
+		pair:Destroy()
+	end
+end)
+
+test("show · value accessor keeps lastValid during branch switch and onDestroy", function()
+	local user = Flux.signal({ name = "Ada" } :: { name: string }?)
+	local onDestroyVal: any = nil
+	local seenName: string? = nil
+
+	local node = Flux.show(user, function(value)
+		local upper = Flux.computed(function()
+			return string.upper(value().name)
+		end)
+		Flux.effect(function()
+			seenName = upper()
+		end)
+		Flux.cleanup(function()
+			onDestroyVal = value()
+		end)
+		return upper
+	end)
+
+	flush()
+	expect(seenName == "ADA", "initial mounted branch computes name")
+
+	user:set({ name = "Grace" })
+	flush()
+	expect(seenName == "GRACE", "truthy update keeps branch alive and updates derived value")
+
+	local warnings = env.warnings(function()
+		user:set(nil)
+		flush()
+	end)
+	expect(#warnings == 0, `switching away from branch should not error on inner computed, got {#warnings}`)
+	expect(onDestroyVal ~= nil and onDestroyVal.name == "Grace", "onDestroy reads last valid branch value")
+	expect(node() == nil, "show output clears to nil after branch unmounts")
+
+	node:Destroy()
+end)
+
+test("forIndex / forValue / forKey · non-table transitions clean up rows and recover from aborted builds", function()
+	local destroyed = 0
+	local list = Flux.signal({ "a", "b" } :: any)
+	local mapped = Flux.forIndex(list, function(_, item)
+		Flux.cleanup(function()
+			destroyed += 1
+		end)
+		return item
+	end)
+
+	local first = mapped()
+	expect(#first == 2, "forIndex maps initial rows")
+	list:set(nil :: any)
+	local cleared = mapped()
+	expect(#cleared == 0, "forIndex returns empty array on nil source")
+	expect(destroyed == 2, `forIndex destroys previous rows on non-table transition, got {destroyed}`)
+
+	list:set({ "c" })
+	expect(#mapped() == 1 and mapped()[1]() == "c", "forIndex rebuilds cleanly after nil source")
+	mapped:Destroy()
+
+	-- Aborted rebuild + non-table transition resets cache and recovers
+	local shouldThrow = true
+	local keyedSource = Flux.signal({ { id = 1 }, { id = 2 } } :: any)
+	local partialCleaned = 0
+	local keyed = Flux.forKey(keyedSource, function(item)
+		return item.id
+	end, function(_, item)
+		if shouldThrow and item:peek().id == 2 then
+			error("row 2 boom")
+		end
+		Flux.cleanup(function()
+			partialCleaned += 1
+		end)
+		return item
+	end)
+
+	local ok = pcall(function()
+		return keyed()
+	end)
+	expect(not ok, "aborted row build raises on read")
+
+	shouldThrow = false
+	keyedSource:set("not-a-table" :: any)
+	expect(#keyed() == 0, "non-table transition after aborted rebuild returns empty table")
+	expect(partialCleaned == 1, `non-table transition cleans up surviving partial row, got {partialCleaned}`)
+
+	keyedSource:set({ { id = 3 } })
+	local recovered = keyed()
+	expect(#recovered == 1 and recovered[1]().id == 3, "forKey recovers cleanly after non-table reset")
+	keyed:Destroy()
+end)
+
+test("forIndex / forValue / forKey · rejects non-function callbacks eagerly", function()
+	expect(not pcall(Flux.forIndex, {}, 123 :: any), "forIndex rejects non-function mapFn")
+	expect(not pcall(Flux.forValue, {}, "bad" :: any), "forValue rejects non-function mapFn")
+	expect(not pcall(Flux.forKey, {}, "bad" :: any, function()
+		return 1
+	end), "forKey rejects non-function keyOf")
+	expect(not pcall(Flux.forKey, {}, function(v: any)
+		return v
+	end, "bad" :: any), "forKey rejects non-function mapFn")
+end)
+
+test("forValue / forKey / selector · handles NaN safely without table index errors", function()
+	local nan = 0 / 0
+
+	local valWarnings = env.warnings(function()
+		local mapped = Flux.forValue({ nan, nan }, function(idx)
+			return idx
+		end)
+		expect(#mapped() == 2, "forValue maps array containing duplicate NaN without crashing")
+		mapped:Destroy()
+	end)
+	expect(#valWarnings == 1, `forValue warns once on duplicate NaN items, got {#valWarnings}`)
+
+	local keyWarnings = env.warnings(function()
+		local mapped = Flux.forKey({ nan }, function(item)
+			return item
+		end, function(_, item)
+			return item
+		end)
+		local rows = mapped()
+		expect(#rows == 1 and rows[1]() ~= rows[1](), "forKey maps NaN entry with identity fallback")
+		mapped:Destroy()
+	end)
+	expect(#keyWarnings == 1, `forKey warns once on NaN key fallback, got {#keyWarnings}`)
+
+	local src = Flux.signal(nan :: any)
+	local defaultSel = Flux.selector(src)
+	local defaultSeen: boolean? = nil
+	local e1 = Flux.effect(function()
+		defaultSeen = defaultSel(nan)
+	end)
+	flush()
+	expect(defaultSeen == false, "default selector treats NaN == NaN as false without table index error")
+	src:set(1)
+	flush()
+	expect(defaultSeen == false and defaultSel(1) == true, "default selector still matches non-NaN keys")
+
+	local nanSel = Flux.selector(src, function(a, b)
+		return (a ~= a and b ~= b) or a == b
+	end)
+	local nanSeen: boolean? = nil
+	local e2 = Flux.effect(function()
+		nanSeen = nanSel(nan)
+	end)
+	flush()
+	expect(nanSeen == false, "custom selector reads initial non-NaN state for NaN key")
+	src:set(nan)
+	flush()
+	expect(nanSeen == true, "custom selector flips observed NaN slot to true when source becomes NaN")
+	src:set(2)
+	flush()
+	expect(nanSeen == false, "custom selector flips observed NaN slot back to false when leaving NaN")
+
+	e1:Destroy()
+	e2:Destroy()
+	defaultSel:Destroy()
+	nanSel:Destroy()
+end)

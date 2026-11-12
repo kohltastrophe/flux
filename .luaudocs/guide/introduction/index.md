@@ -52,7 +52,7 @@ Components in Flux are plain Luau functions that **run once** to create [`Instan
 - **Networked State:** Replicate server-authoritative and per-player signals to clients with [`Flux.Sync`](/guide/concepts/sync).
 - **Declarative Instances:** Build trees with [`Flux.new`](/guide/roblox/creation) or wire up existing templates with [`Flux.edit`](/guide/roblox/hydration).
 - **Scoped Cleanup:** Wrap a tree in [`Flux.scope`](/guide/concepts/scopes) to tear down all of its instances and reactions with a single `:Destroy()` call.
-- **Control Flow & Lists:** Render conditional branches with [`Flux.show`](/guide/concepts/conditionals) and [`Flux.switch`](/guide/concepts/conditionals#switching-between-many-branches), or map dynamic lists with [`Flux.forValue`](/guide/concepts/mapping).
+- **Control Flow & Lists:** Render conditional branches with [`Flux.show`](/guide/concepts/conditionals) and [`Flux.switch`](/guide/concepts/conditionals#switching-between-many-branches), or map dynamic lists with [`Flux.forValue`](/guide/concepts/mapping) and [`Flux.forKey`](/guide/concepts/mapping#flux-forkey-keyed-by-function).
 - **Built-in Motion:** Animate any state with physics [springs](/guide/motion/spring), [tweens](/guide/motion/tween), or perceptual [color](/guide/motion/color) blending.
 - **UI Utilities:** Read screen [breakpoints](/guide/utilities/responsive), track [pointer and gamepad interactions](/guide/utilities/interact), and drop in terse [layout constraints](/guide/utilities/layout).
 - **Async & Testing:** Run cancellable [`Flux.async`](/guide/concepts/async) tasks, catch failures with [`Flux.safe`](/guide/tips/errors), and step a virtual [`Flux.Clock`](/guide/tips/testing) in tests.
