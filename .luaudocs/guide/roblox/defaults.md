@@ -7,7 +7,7 @@ sidebar_position: 3
 
 # Defaults
 
-`Flux.new` applies default property overrides right after creating an [`Instance`](https://create.roblox.com/docs/en-us/reference/engine/datatypes/Instance) and before applying your properties table. Parts start anchored in `SmoothPlastic`, GUI objects have `BorderSizePixel = 0`, buttons disable `AutoButtonColor`, and layouts sort by `LayoutOrder`.
+`Flux.new` applies default property overrides right after creating an [`Instance`](https://create.roblox.com/docs/reference/engine/classes/Instance) and before applying your properties table. Parts start anchored in `SmoothPlastic`, GUI objects have `BorderSizePixel = 0`, buttons disable `AutoButtonColor`, and layouts sort by `LayoutOrder`.
 
 Your own properties always override these defaults, and [`Flux.edit`](/guide/roblox/hydration) never applies defaults to existing instances.
 
@@ -37,7 +37,7 @@ Flux.Flags.defaults = false
 ```
 
 > [!NOTE] AutoButtonColor Remains Disabled
-> `AutoButtonColor = false` on `TextButton` and `ImageButton` is applied even when `Flux.Flags.defaults = false`, since it controls button behavior rather than visual styling. Pass `AutoButtonColor = true` in the properties table when you want the engine's default tinting.
+> `Flux.new` sets `AutoButtonColor = false` on `TextButton` and `ImageButton` unconditionally before applying `Flux.Defaults`, so it remains `false` even when `Flux.Flags.defaults = false` or `Flux.Defaults.TextButton.AutoButtonColor = nil`. Pass `AutoButtonColor = true` in the properties table (or set `Flux.Defaults.TextButton.AutoButtonColor = true` while `Flux.Flags.defaults` is `true`) when you want the engine's default hover tinting.
 
 ## Customizing Defaults
 

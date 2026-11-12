@@ -2,12 +2,12 @@
 title: Tracking
 description: Controlling dependency tracking with read, raw, untrack, retrack, and on in Flux.
 outline: deep
-sidebar_position: 12
+sidebar_position: 5
 ---
 
 # Tracking
 
-Whenever a [Computed](/guide/concepts/computeds), [Effect](/guide/concepts/effects), or property binding runs, Flux automatically subscribes it to every node it reads. These utilities let you read values that may or may not be reactive, peek at state without subscribing, or lock a reaction to an explicit dependency list.
+Whenever a [Computed](/guide/concepts/computeds), [Effect](/guide/concepts/effects), or property binding runs, Flux subscribes it to every node it reads. These utilities let you read values that may or may not be reactive, peek at state without subscribing, or lock a reaction to an explicit dependency list.
 
 | Utility | Subscribes Caller? | Accepts | Typical Use |
 | :--- | :--- | :--- | :--- |
@@ -16,12 +16,13 @@ Whenever a [Computed](/guide/concepts/computeds), [Effect](/guide/concepts/effec
 | **`Flux.untrack(fn)`** | No | `() -> ...T` | Running a block of code without tracking reads |
 | **`Flux.untrack()` / `Flux.retrack()`** | No | None | Allocation-free untracked fence in hot paths or around `task.spawn` |
 | **`Flux.on(deps, fn, defer?)`** | Declared `deps` only | Node/getter or array of them | Running `fn` untracked whenever `deps` change |
+| **`Flux.isNode(value)`** | No | `any` | Checking whether a value is a reactive Flux `Node` |
 | **`Flux.isReactive()`** | - | None | Checking whether code is currently running inside a tracked reaction |
 
 > [!CAUTION] Reactive Bodies Must Be Synchronous
-> Never yield (`task.wait`, `:GetAsync()`, `:WaitForChild()`) inside a Computed or Effect body. Use [`Flux.async`](/guide/concepts/async) for yielding work, or spawn a thread fenced by `Flux.untrack()` / `Flux.retrack()`.
+> Never yield (`task.wait`, `:GetAsync()`, `:WaitForChild()`) inside a Computed or Effect body. Use [`Flux.async`](/guide/concepts/async) for yielding work, or spawn a thread fenced by `Flux.untrack()` and `Flux.retrack()`.
 
-## `Flux.read`{lua}
+## `Flux.read`
 
 Reads a `Flux.Reactive<T>` **with** tracking. It returns `node()` for a Node, calls `fn()` for a getter, and returns plain values unchanged. Its return type is `Flux.Unwrap<T>`:
 
@@ -35,7 +36,7 @@ local function StatusLabel(props: { text: Flux.Reactive<string> })
 end
 ```
 
-## `Flux.raw`{lua}
+## `Flux.raw`
 
 Reads a `Flux.Reactive<T>` **without** tracking. It returns `node:peek()` for a Node, runs a getter with tracking suspended, and returns plain values unchanged:
 
@@ -49,9 +50,9 @@ Flux.effect(function()
 end)
 ```
 
-## `Flux.untrack`{lua}
+## `Flux.untrack`
 
-`Flux.untrack(fn)` runs `fn` with dependency tracking suspended and returns all of its results, while preserving the current [Scope](/guide/concepts/scopes) owner so `Flux.cleanup` still attaches to the enclosing reaction:
+`Flux.untrack(fn)` runs `fn` with dependency tracking suspended and returns all of its results. It preserves the current [Scope](/guide/concepts/scopes) owner so `Flux.cleanup` still attaches to the enclosing reaction:
 
 ```luau
 local selectedId = Flux.signal(1)
@@ -66,9 +67,9 @@ Flux.effect(function()
 end)
 ```
 
-## Imperative Pairing: `Flux.untrack()`{luau} / `Flux.retrack()`{luau}
+## Imperative Pairing: `Flux.untrack()` / `Flux.retrack()`
 
-Calling `Flux.untrack()` with no arguments suspends tracking for the rest of the current function run or until `Flux.retrack()` is called. It allocates no closure and is the idiomatic way to fence a `task.spawn` call inside an Effect (since a spawned thread runs synchronously up to its first yield):
+Calling `Flux.untrack()` with no arguments suspends tracking for the rest of the current function run or until `Flux.retrack()` is called (using a single non-nesting slot per evaluation run; inside `Flux.untrack(fn)`, `Flux.retrack()` is a no-op). It allocates no closure and gives you a clean way to fence a `task.spawn` call inside an Effect (since a spawned thread runs synchronously up to its first yield):
 
 ```luau
 local destination = Flux.signal(Vector3.zero)
@@ -84,9 +85,11 @@ Flux.effect(function()
 end)
 ```
 
-## `Flux.on`{lua}
+## `Flux.on`
 
-`Flux.on(deps, fn, defer?)` wraps `fn` so only `deps` (a single Node/getter or an array of them) are tracked, while `fn` itself runs untracked. `fn` receives `(input, previousInput, previousResult)`. When `deps` is an array, `input` and `previousInput` are arrays of their values:
+`Flux.on(deps, fn, defer?)` wraps `fn` so only `deps` (a single Node/getter or an array of them) are tracked, while `fn` itself runs untracked and returns `(prevResult: R?) -> R?` (`Node<R?>` in `Flux.computed`).
+
+`fn` receives `(input, previousInput, previousResult)` with `previousInput` set to `nil` on the initial run. It preserves dependency types in `--!strict`. When `deps` is an array, `input` (and `previousInput` on later runs) is an array of their unwrapped values.
 
 ```luau
 local trigger = Flux.signal(1)
@@ -102,8 +105,9 @@ Pass `true` as the third argument (`defer`) to skip the first run and execute `f
 
 ```luau
 local health = Flux.signal(100)
+local armor = Flux.signal(50)
 
-Flux.effect(Flux.on(health, function(current, previous)
-	print(`Health changed from {previous} to {current}`)
+Flux.effect(Flux.on({ health, armor }, function(current, previous)
+	print(`Stats changed: {current[1]} HP, {current[2]} armor`)
 end, true))
 ```

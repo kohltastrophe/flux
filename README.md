@@ -53,7 +53,7 @@ new "ScreenGui" {
 }
 ```
 
-Every reactive node supports `__call` and <b>operator overloading</b>, so reading and writing state takes no extra ceremony. Call `count()` to read and `count(1)` to write. Arithmetic, comparison, and string interpolation track dependencies automatically, so reactive expressions read like normal Luau.
+Every reactive node supports `__call` and <b>operator overloading</b>, so reading and writing state takes no extra ceremony. Call `count()` to read and `count(1)` to write. Arithmetic and string interpolation track dependencies automatically, so reactive expressions read like normal Luau (use explicit `count() == 0` or `count() < 5` reads in comparisons).
 
 </div>
 
@@ -73,14 +73,14 @@ Dormant computations sleep with zero subscriptions until something observes them
 
 Flux includes the building blocks you need for Roblox interfaces:
 
-- **Reactive State:** Track values with [`signal`](https://flux.kohl.gg/guide/concepts/signals), [`computed`](https://flux.kohl.gg/guide/concepts/computeds), [`effect`](https://flux.kohl.gg/guide/concepts/effects), and nested [`store`](https://flux.kohl.gg/guide/concepts/stores) proxies.
+- **Reactive State:** Track values with [`signal`](https://flux.kohl.gg/guide/concepts/signals), [`fromSignal`](https://flux.kohl.gg/guide/concepts/signals#bridging-signals), [`computed`](https://flux.kohl.gg/guide/concepts/computeds), [`effect`](https://flux.kohl.gg/guide/concepts/effects), and nested [`store`](https://flux.kohl.gg/guide/concepts/stores) proxies.
 - **Networked State:** Replicate server-authoritative and per-player signals to clients with [`Flux.Sync`](https://flux.kohl.gg/guide/concepts/sync).
-- **Declarative Instances:** Build trees with [`new`](https://flux.kohl.gg/guide/roblox/creation) or wire up existing templates with [`edit`](https://flux.kohl.gg/guide/roblox/hydration).
+- **Declarative Instances & Components:** Build trees with [`new`](https://flux.kohl.gg/guide/roblox/creation), [`mount`](https://flux.kohl.gg/guide/roblox/creation#mounting-a-root-flux-mount) into roots, target external parents with [`portal`](https://flux.kohl.gg/guide/roblox/creation#portals-flux-portal), wire up templates with [`edit`](https://flux.kohl.gg/guide/roblox/hydration), and compose props with [`split`](https://flux.kohl.gg/guide/concepts/components#splitting-props-with-flux-split) and [`merge`](https://flux.kohl.gg/guide/concepts/components#merging-props-with-flux-merge).
 - **Scoped Cleanup:** Wrap a tree in [`scope`](https://flux.kohl.gg/guide/concepts/scopes) to tear down all of its instances and reactions with one `Destroy` call.
-- **Control Flow & Lists:** Render conditional branches with [`show`](https://flux.kohl.gg/guide/concepts/conditionals) and [`switch`](https://flux.kohl.gg/guide/concepts/conditionals#switching-between-many-branches), or map dynamic lists with [`forValue`](https://flux.kohl.gg/guide/concepts/mapping).
+- **Control Flow & Lists:** Render conditional branches with [`show`](https://flux.kohl.gg/guide/concepts/conditionals) and [`switch`](https://flux.kohl.gg/guide/concepts/conditionals#switching-between-many-branches), or map dynamic lists with [`forValue`](https://flux.kohl.gg/guide/concepts/mapping), [`forKey`](https://flux.kohl.gg/guide/concepts/mapping#flux-forkey-keyed-by-function), and [`forIndex`](https://flux.kohl.gg/guide/concepts/mapping#flux-forindex-keyed-by-index).
 - **Built-in Motion:** Animate any state with physics [springs](https://flux.kohl.gg/guide/motion/spring), [tweens](https://flux.kohl.gg/guide/motion/tween), or perceptual [color](https://flux.kohl.gg/guide/motion/color) blending.
-- **UI Utilities:** Read screen [breakpoints](https://flux.kohl.gg/guide/utilities/responsive), track [pointer and gamepad interactions](https://flux.kohl.gg/guide/utilities/interact), and drop in terse [layout constraints](https://flux.kohl.gg/guide/utilities/layout).
-- **Async & Testing:** Run cancellable [`async`](https://flux.kohl.gg/guide/concepts/async) tasks, catch failures with [`safe`](https://flux.kohl.gg/guide/tips/errors), and step a virtual [`Clock`](https://flux.kohl.gg/guide/tips/testing) in tests.
+- **UI Utilities:** Read screen [breakpoints](https://flux.kohl.gg/guide/utilities/responsive), track [pointer and gamepad interactions](https://flux.kohl.gg/guide/utilities/interact), and drop in terse `flex` and `scale` [layout helpers](https://flux.kohl.gg/guide/utilities/layout).
+- **Async & Testing:** Run race-safe [`async`](https://flux.kohl.gg/guide/concepts/async) fetches, catch failures with [`safe`](https://flux.kohl.gg/guide/tips/errors), and step a virtual [`Clock`](https://flux.kohl.gg/guide/tips/testing) in tests.
 
 ## Installation
 

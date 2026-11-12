@@ -1,13 +1,13 @@
 ---
-title: Conditional rendering
+title: Conditional Rendering
 description: Mounting subtrees and selecting values reactively with show, switch, presence, pick, and fallback.
 outline: deep
-sidebar_position: 6
+sidebar_position: 11
 ---
 
-# Conditional rendering
+# Conditional Rendering
 
-Because Flux [components](/guide/concepts/components) run once, structural conditionals use dedicated helpers that mount and unmount branches in their own child [Scopes](/guide/concepts/scopes), while value-level conditionals derive nodes without mounting subtrees.
+Because Flux [components](/guide/concepts/components) run once, structural conditionals use dedicated helpers that mount and unmount branches in their own child [Scopes](/guide/concepts/scopes). Value-level conditionals derive nodes without mounting subtrees.
 
 | Helper | Purpose | Mounts a branch Scope? |
 | :--- | :--- | :--- |
@@ -40,13 +40,13 @@ local screen = Flux.new "Frame" {
 }
 ```
 
-- **Keyed on truthiness:** Changing between two truthy values (e.g. `{ name = "Ada" }` to `{ name = "Grace" }`) keeps the mounted branch alive without rebuilding its Instances.
-- **Live `value` accessor:** The truthy branch function receives a `value` getter (`() -> T`) that reads the current truthy condition reactively inside bindings.
+- **Keyed on truthiness:** Changing between two truthy values (for example, `{ name = "Ada" }` to `{ name = "Grace" }`) keeps the mounted branch alive without rebuilding its Instances.
+- **Live `value` accessor:** `component` receives `value: () -> Truthy<Flux.Unwrap<S>>` (narrowing out `nil` and `false` under `--!strict`), and `fallback` receives `value: () -> Flux.Unwrap<S>`, reading `condition`'s current value reactively inside bindings.
 - **Branch scope:** Every branch runs inside its own child [Scope](/guide/concepts/scopes). When the condition flips, the outgoing branch's instances, effects, and cleanups are destroyed automatically.
 
 ### Remounting on Identity Change {#keyed-show}
 
-Use `Flux.showKeyed(source, component, fallback?)` when you want the branch to **tear down and rebuild** on every change of `source` (not just truthy/falsy transitions), which is useful for resetting per-item local state like an input draft:
+Use `Flux.showKeyed(source, component, fallback?)` when you want the branch to **tear down and rebuild** on every identity change of `source` (including `false` <-> `nil` transitions on `fallback`, not only truthy/falsy flips). This resets per-item local state like an input draft whenever `source` switches:
 
 ```luau
 local selectedUser = Flux.signal(firstUser)
@@ -59,27 +59,37 @@ end)
 
 ## Switching Between Many Branches
 
-`Flux.switch(source)(map)` keys on `source`'s value and mounts the matching factory from `map`:
+`Flux.switch(source)(map)` keys on `source`'s value and mounts the matching `(value: () -> S) -> T` factory from `map`. Wrap components that expect a `props` table (or `0` arguments) in `function() return Panel(...) end` so `switch`'s `value` getter isn't forwarded as `props`:
 
 ```luau
 local activeTab = Flux.signal("home")
 
 local view = Flux.switch(activeTab)({
-	home = HomePanel,
-	settings = SettingsPanel,
-	profile = ProfilePanel,
+	home = function(): GuiObject
+		return HomePanel()
+	end,
+	settings = function(): GuiObject
+		return SettingsPanel()
+	end,
+	profile = function(): GuiObject
+		return ProfilePanel()
+	end,
 })
 ```
 
 ### A Catch-All Branch
 
-Use `[Flux.otherwise]` in the branch table to provide a fallback factory when `source` matches no explicit key:
+Use `[Flux.otherwise]` in the branch table to provide a fallback factory when `source` matches no explicit key. Under `--!strict`, annotate the branch return type as `GuiObject` when branches return different classes:
 
 ```luau
 local view = Flux.switch(activeTab)({
-	home = HomePanel,
-	settings = SettingsPanel,
-	[Flux.otherwise] = function(value)
+	home = function(): GuiObject
+		return HomePanel()
+	end,
+	settings = function(): GuiObject
+		return SettingsPanel()
+	end,
+	[Flux.otherwise] = function(value): GuiObject
 		return Flux.new "TextLabel" {
 			Text = function()
 				return `Unknown tab: {value()}`
@@ -91,9 +101,9 @@ local view = Flux.switch(activeTab)({
 
 Switching between two different unmatched keys reuses the single `Flux.otherwise` mount and updates its `value()` accessor in place.
 
-## Animating Exits with `presence`{lua}
+## Animating Exits with `presence`
 
-`Flux.show` and `Flux.switch` destroy an outgoing branch immediately when its condition turns falsy. To play an exit [spring](/guide/motion/spring) or [tween](/guide/motion/tween) before unmounting, use `Flux.presence(source, child)`:
+`Flux.show` and `Flux.switch` destroy an outgoing branch right away when its condition turns falsy. To play an exit [spring](/guide/motion/spring) or [tween](/guide/motion/tween) before unmounting, use `Flux.presence(source, child)`:
 
 ```luau
 local open = Flux.signal(true)
@@ -119,7 +129,7 @@ end)
 
 - While `source` is truthy, `child(exiting, done)` mounts with `exiting()` set to `false`.
 - When `source` turns falsy, the branch **stays mounted** and `exiting()` flips to `true`.
-- Calling `done()` finishes the exit and destroys the branch scope (and if `source` becomes truthy again before `done()` is called, `exiting()` flips back to `false` and the same mount stays alive).
+- Calling `done()` finishes the exit and destroys the branch scope. If `source` turns truthy again before `done()` runs, `exiting()` flips back to `false` and the same mount stays alive.
 
 ## Picking Between Values
 
@@ -139,7 +149,7 @@ All three arguments can be plain values, nodes, or getters. Only the chosen bran
 
 ## Defaulting a `nil` Value
 
-Luau's `value or default` idiom treats `false` as falsy, which breaks boolean props like `enabled = false`. `Flux.fallback(value, default)` derives a node that returns `value` whenever it is non-`nil` (including `false`) and falls back to `default` only on `nil`:
+Luau's `value or default` idiom treats `false` as falsy, which breaks boolean props like `enabled = false`. `Flux.fallback(value, default)` derives a node that returns `value` whenever it's non-`nil` (including `false`) and falls back to `default` only on `nil`:
 
 ```luau
 local function Toggle(props: { enabled: Flux.Reactive<boolean>? })

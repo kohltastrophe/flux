@@ -31,7 +31,7 @@ local isVisible = Flux.signal(true)
 local score = Flux(0)
 ```
 
-In hot code where you don't need node methods or operator overloading, `local count, setCount = Flux.createSignal(0)` returns a plain `(getter, setter)` function pair with no table wrapper overhead. See [Optimization](/guide/tips/optimization#zero-wrapper-primitives).
+In hot code where you don't need node methods or operator overloading, `local count, setCount = Flux.createSignal(0)` returns a plain `(getter, setter)` function pair with no table wrapper overhead (or extract `Flux.getter(node)` and `Flux.setter(node)` from an existing signal). See [Optimization](/guide/tips/optimization#zero-wrapper-primitives).
 
 ## Reading a Signal
 
@@ -47,7 +47,7 @@ print(count:peek()) --> 5 (untracked read)
 
 ## Updating a Signal
 
-Call a node with a new value (`count(10)`) or use `count:set(10)` to write to it. If the new value equals the current value (`==`, or a [custom `equals` comparator](#custom-equality)), propagation is skipped.
+Call a node with a new value (`count(10)`) or use `count:set(10)` to write to it. If the new value equals the current value (`==`, or a [custom `equals` comparator](#custom-equality)), propagation stops right there.
 
 ```luau
 local count = Flux.signal(0)
@@ -64,25 +64,30 @@ count(count + 1) -- read via operator overloading, then write 6
 | **Write value** | `node(value)` | `node:set(value)` | Notifies if `value ~= old` |
 | **Write `nil`** | `node(nil, true)` | `node:set(nil)` | Notifies if old value was non-`nil` |
 | **Force write** | `node(value, true)` | `node:set(value, true)` | Always notifies dependents |
+| **Transform value** | - | `node:update(fn)` | Computes `fn(current)` untracked and writes if changed |
 | **In-place update** | - | `node:update()` | Re-fires dependents without writing |
 
 > [!NOTE] Writing `nil`
 > Calling `node(nil)` is indistinguishable from `node()` and performs a **read**. To clear a signal to `nil`, call `node:set(nil)` or pass the `force` flag: `node(nil, true)`.
 
-### Forcing an Update
+### Transforming or Forcing an Update
 
-When you mutate a table in place and want to push the same reference through the graph, call `:update()` (or pass `true` as the second argument of `:set`):
+Pass an updater function `node:update(fn)` to derive the next value from the current one without subscribing an active reaction, returning `node` for chaining. When you mutate a table in place instead, call `node:update()` with no arguments to push the same reference through the graph:
 
 ```luau
-local items = Flux.signal({ "Sword" })
+local count = Flux.signal(0)
+count:update(function(current)
+	return current + 1
+end)
 
+local items = Flux.signal({ "Sword" })
 table.insert(items:peek(), "Shield")
 items:update() -- re-fires dependents with the mutated table
 ```
 
 ## Operator Overloading
 
-Every node overloads Luau's arithmetic (`+`, `-`, `*`, `/`, `//`, `%`, `^`, unary `-`) and concatenation (`..`) operators, reading the node with tracking automatically:
+Every node overloads Luau's arithmetic (`+`, `-`, `*`, `/`, `//`, `%`, `^`, unary `-`) and concatenation (`..`) operators, reading the node with tracking automatically. It also implements `__tostring`, so `tostring(node)` and string interpolation (`` `{count}` ``) subscribe the caller too:
 
 ```luau
 local count = Flux(5)
@@ -91,17 +96,18 @@ print(count * 2)    --> 10
 print(count + 10)   --> 15
 print(-count)       --> -5
 print(count .. "x") --> "5x"
+print(`{count}x`)   --> "5x"
 
 print(count > 3)    --> error: attempt to compare number < table [!code error]
 print(count == 5)   --> false (compares table identity, not value) [!code warning]
 ```
 
 > [!WARNING] Comparisons Require Reading First
-> Luau only invokes `__lt`/`__le` when **both** operands share the metamethod, and never invokes `__eq` across different types. Always read the node when comparing against a plain value: `count() > 3` or `count() == 5`.
+> Luau only invokes `__lt` and `__le` when **both** operands share the same metatable (such as comparing two untyped `Flux()` nodes), and never invokes `__eq` across different types. Always read the node when comparing against a plain value: `count() > 3` or `count() == 5`.
 
 ## Custom Equality
 
-Pass an `equals(old, new)` function as the second argument to `Flux.signal` (or `Flux.computed`) to customize when a write counts as unchanged:
+Pass an `equals(old, new)` function as the second argument to `Flux.signal` (or `Flux.computed`) to customize when a write counts as unchanged (`old == new` short-circuits first, and passing `force = true` to `:set(value, true)` bypasses `equals`):
 
 ```luau
 -- Only propagate when the position moves beyond 1e-3 studs
@@ -130,11 +136,11 @@ local button = Flux.new "TextButton" {
 
 ### When a Write Fails
 
-If Roblox rejects a bound property or attribute assignment (such as assigning the wrong type), Flux catches the failure, logs a warning with the full instance path and property name (`[Flux] failed to set property "Text" of ...`), and still applies the node's remaining bindings so one bad property never starves sibling updates.
+If Roblox rejects a bound property or attribute assignment (such as assigning the wrong type), Flux catches the failure and logs a warning with the full instance path and property name (`[Flux] failed to set property "Text" of ...`). Remaining bindings on the node still run, so one bad property never starves sibling updates.
 
 ## Binding from an Instance Property
 
-To mirror a Roblox [`Instance`](https://create.roblox.com/docs/en-us/reference/engine/datatypes/Instance) property, attribute, or [`CollectionService`](https://create.roblox.com/docs/en-us/reference/engine/classes/CollectionService) tag into a reactive node, use `Flux.property(instance, key)` for a strictly typed node, or `Flux(instance, key)` for an untyped shorthand. Prefix `key` with `$` or `_attr_` to follow an attribute (`Node<any>`), or with `#` or `_tag_` to follow a tag (`Node<boolean>`):
+To mirror a Roblox [`Instance`](https://create.roblox.com/docs/reference/engine/classes/Instance) property, attribute, or [`CollectionService`](https://create.roblox.com/docs/reference/engine/classes/CollectionService) tag into a reactive node, use `Flux.property(instance, key)` for a strictly typed node, or `Flux(instance, key)` for an untyped shorthand. Prefix `key` with `$` or `_attr_` to follow an attribute (`Node<any>`), or with `#` or `_tag_` to follow a tag (`Node<boolean>`):
 
 ```luau
 -- Typed Node<string> mirroring TextBox.Text
@@ -151,7 +157,23 @@ Flux.effect(function()
 end)
 ```
 
-The underlying `GetPropertyChangedSignal`, `GetAttributeChangedSignal`, or `CollectionService` tag connections are cleaned up automatically when the node or its owning [Scope](/guide/concepts/scopes) is destroyed.
+The underlying `GetPropertyChangedSignal`, `GetAttributeChangedSignal`, or `CollectionService` tag connections clean up automatically when `instance`, the node, or its owning [Scope](/guide/concepts/scopes) is destroyed.
+
+## Bridging Signals {#bridging-signals}
+
+Use `Flux.fromSignal(signal, initial?)` (or the `Flux(signal, initial?)` shorthand) to turn any [`RBXScriptSignal`](https://create.roblox.com/docs/reference/engine/datatypes/RBXScriptSignal) or custom table signal exposing `:Connect()` or `:connect()` into a read-only reactive node. Without `initial`, the node starts at `nil` (`Node<Payload?>`); pass `initial` to seed it with a non-`nil` value (`Node<Payload | Initial>`):
+
+```luau
+local lastPress = Flux.fromSignal(button.Activated)
+local pressedCount = Flux.signal(0)
+
+local statusText = Flux.computed(function()
+	local input = lastPress()
+	return if input then `Activated via {input.UserInputType.Name}` else "Waiting..."
+end)
+```
+
+The signal connection disconnects automatically when the node or its enclosing [Scope](/guide/concepts/scopes) is destroyed.
 
 ## Observer Lifecycle Hooks
 
@@ -189,4 +211,4 @@ end)
 count:Destroy()
 ```
 
-A plain signal is **not** owned by an enclosing [Scope](/guide/concepts/scopes). Once nothing references it, Luau's garbage collector reclaims it automatically. `onDestroy` on a signal fires only when you call `:Destroy()` explicitly (whereas Computeds and Effects also fire `onDestroy` when their owning Scope is destroyed).
+Plain signals aren't owned by an enclosing [Scope](/guide/concepts/scopes). Once nothing references a signal, Luau's garbage collector reclaims it automatically. `onDestroy` on a signal fires only when you call `:Destroy()` explicitly (whereas Computeds and Effects also fire `onDestroy` when their owning Scope is destroyed).

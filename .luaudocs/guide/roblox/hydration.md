@@ -1,5 +1,5 @@
 ---
-title: Hydration (Editing)
+title: Hydration
 description: Attaching reactive state and behavior to existing Roblox instances in Flux.
 outline: deep
 sidebar_position: 2
@@ -7,11 +7,11 @@ sidebar_position: 2
 
 # Hydration
 
-When you build UI layouts visually in Roblox Studio, **`Flux.edit(instance) { ... }`** hydrates pre-existing [`Instances`](https://create.roblox.com/docs/en-us/reference/engine/datatypes/Instance) with reactive property bindings, event listeners, children, and deep selectors.
+When you build UI layouts visually in Roblox Studio, **`Flux.edit(instance) { ... }`** hydrates existing [`Instances`](https://create.roblox.com/docs/reference/engine/classes/Instance) with reactive property bindings, event listeners, children, and deep selectors.
 
 ```luau
 local count = Flux.signal(0)
-local existingButton = script.Parent.CounterButton
+local existingButton = hudFrame:WaitForChild("CounterButton") :: TextButton
 
 Flux.edit(existingButton) {
 	BackgroundColor3 = Color3.fromRGB(45, 45, 50),
@@ -24,41 +24,53 @@ Flux.edit(existingButton) {
 }
 ```
 
-## The `Flux.edit`{lua} Function
+## The `Flux.edit` Function
 
 `Flux.edit(instance)` returns a function that applies a properties table to `instance` and returns `instance`. Unlike `Flux.new`, `Flux.edit` never applies class [defaults](/guide/roblox/defaults). It only touches the properties, events, and children you specify.
 
-- All bindings and event connections are automatically cleaned up when `instance.Destroying` fires.
-- If `Flux.edit` is called inside a [`Flux.scope`](/guide/concepts/scopes), the bindings are also owned by that scope and disconnect when `scope:Destroy()` is called (without destroying `instance` itself).
+- All bindings and event connections clean up automatically when `instance.Destroying` fires.
+- If you call `Flux.edit` inside a [`Flux.scope`](/guide/concepts/scopes), that scope also owns the bindings and disconnects them when `scope:Destroy()` runs (without destroying `instance` itself).
 
 ## Prefix Keys & Special Directives
 
-Both `Flux.edit` and [`Flux.new`](/guide/roblox/creation) support bare `_`-prefixed **prefix keys** (`_Prop`, `_attr_Name`, `__attr_Name`, `_tag_Name`, `__tag_Name`) alongside grouped `__` directive tables (`__ATTR`, `__TAG`, `__EVENT`, `__REF`, `__CLEAN`).
+Both `Flux.edit` and [`Flux.new`](/guide/roblox/creation) support grouped `__` directive tables (`__ATTR`, `__TAG`, `__EVENT`, `__REF`, `__CLEAN`), which type-check under `--!strict`, alongside bare `_`-prefixed **prefix keys** (`_Prop` in `--!strict`, plus `_attr_Name`, `_tag_Name`, `__attr_Name`, and `__tag_Name` in `--!nonstrict` or cast tables).
 
-### `_attr_Name` and `__ATTR` (Attributes)
+### `__ATTR` and `_attr_Name` (Attributes)
 
-Prefix a key with `_attr_` (or group multiple attributes under `__ATTR`) to assign static values, reactive nodes, getters, or [`Flux.model`](/guide/roblox/creation#flux-model-two-way-binding-in-one-key) two-way bindings to Roblox instance attributes:
+Group attributes under `__ATTR` (or prefix a key with `_attr_` in `--!nonstrict` mode) to assign static values, reactive nodes, getters, or [`Flux.model`](/guide/roblox/creation#flux-model-two-way-binding-in-one-key) two-way bindings to Roblox instance attributes:
 
 ```luau
 Flux.edit(character) {
-	_attr_IsStunned = false,
-	_attr_Health = healthNode,
-	_attr_Mana = Flux.model(manaNode),
-
-	-- Or grouped in __ATTR:
 	__ATTR = {
+		IsStunned = false,
+		Health = healthNode,
+		Mana = Flux.model(manaNode),
 		Class = "Warrior",
 	},
 }
+
+-- In --!nonstrict files (or cast tables), _attr_Name works directly on the table:
+-- _attr_Health = healthNode,
 ```
 
-### `_tag_Name` and `__TAG` (`CollectionService` Tags)
+### `__TAG` and `_tag_Name` (`CollectionService` Tags)
 
-Prefix a tag name with `_tag_` to toggle that tag on or off from a boolean, reactive node, getter function, or [`Flux.model`](/guide/roblox/creation#flux-model-two-way-binding-in-one-key) two-way binding. When a single node holds a dynamic tag name (or an array of tag names), pass it to `__TAG`:
+Pass a dynamic tag name (or an array of static/reactive tag names) to `__TAG` under `--!strict`. In `--!nonstrict` files, prefix a tag name with `_tag_` to toggle it from a boolean, node, getter, or [`Flux.model`](/guide/roblox/creation#flux-model-two-way-binding-in-one-key) binding:
 
 ```luau
-local isBoss = Flux.signal(true)
 local statusTag = Flux.signal("Idle")
+local lowHealthTag = function(): string?
+	return if healthNode() < 25 then "LowHealth" else nil
+end
+
+Flux.edit(npcModel) {
+	__TAG = { "Enemy", statusTag, lowHealthTag },
+}
+```
+
+```luau
+--!nonstrict
+local isBoss = Flux.signal(true)
 
 Flux.edit(npcModel) {
 	_tag_Enemy = true,
@@ -66,17 +78,14 @@ Flux.edit(npcModel) {
 	_tag_LowHealth = function()
 		return healthNode() < 25
 	end,
-
-	-- Dynamic tag names or arrays use __TAG:
-	__TAG = { statusTag },
 }
 ```
 
-Tags are reference-counted per instance so reactive tags never clobber static sibling tags, while an explicit initial `_tag_Name = false` on `Flux.edit` strips an unmanaged pre-existing tag.
+Tags are reference-counted per instance so reactive tags never clobber static sibling tags. Setting an explicit initial `_tag_Name = false` (or falsy node/getter) on mount strips an unmanaged pre-existing tag on that instance.
 
-### `_Prop`, `__attr_Name`, `__tag_Name`, and `__EVENT` (Change Listeners)
+### `_Prop`, `__EVENT`, `__attr_Name`, and `__tag_Name` (Change Listeners)
 
-Prefix a property name with `_` (or an attribute name with `__attr_` / a tag name with `__tag_`) to connect a `GetPropertyChangedSignal`, `GetAttributeChangedSignal`, or `CollectionService` tag-changed listener called with the new value. Every readable property on the class appears as `_PropertyName` in autocomplete with its exact parameter type:
+Prefix any readable property on the class with `_` (or group property, attribute, and tag listeners under `__EVENT`) to connect a `GetPropertyChangedSignal`, `GetAttributeChangedSignal`, or [`CollectionService`](https://create.roblox.com/docs/reference/engine/classes/CollectionService) tag-changed listener called with the new value on **subsequent changes** (not on mount). Every readable property appears as `_PropertyName` in `--!strict` autocomplete with its exact parameter type:
 
 ```luau
 Flux.edit(existingTextBox) {
@@ -85,17 +94,7 @@ Flux.edit(existingTextBox) {
 		print("Text changed to:", newText)
 	end,
 
-	-- Connects to GetAttributeChangedSignal("IsStunned"):
-	__attr_IsStunned = function(stunning)
-		print("Stunned:", stunning)
-	end,
-
-	-- Connects to CollectionService tag signals for "Focused" (`hasTag` is `boolean`):
-	__tag_Focused = function(hasTag)
-		print("Focused tag:", hasTag)
-	end,
-
-	-- Or grouped under __EVENT:
+	-- Property, attribute, and tag listeners grouped under __EVENT (--!strict):
 	__EVENT = {
 		BackgroundColor3 = function(color)
 			print("Color changed:", color)
@@ -112,13 +111,17 @@ Flux.edit(existingTextBox) {
 		},
 	},
 }
+
+-- In --!nonstrict files, __attr_Name and __tag_Name also work as bare keys:
+-- __attr_IsStunned = function(stunning) print("Stunned:", stunning) end,
+-- __tag_Focused = function(hasTag) print("Focused tag:", hasTag) end,
 ```
 
-To two-way bind a property, attribute, or tag to a signal node, use [`Flux.model(node)`](/guide/roblox/creation#flux-model-two-way-binding-in-one-key) (`Text = Flux.model(textNode)`, `_attr_Score = Flux.model(scoreNode)`, or `_tag_Selected = Flux.model(selectedNode)`). To follow an instance property, attribute, or tag as a read-only node, use [`Flux.property(instance, key)`](/guide/concepts/signals#binding-from-an-instance-property).
+`__EVENT` only accepts change callbacks; passing a `Node` or `RBXScriptSignal` inside `__EVENT` throws an error. Connect `RBXScriptSignal` events (`Activated`, `FocusLost`, etc.) directly at the top level of the table. To two-way bind a property, attribute, or tag to a signal node, use [`Flux.model(node)`](/guide/roblox/creation#flux-model-two-way-binding-in-one-key) (`Text = Flux.model(textNode)`, `__ATTR = { Score = Flux.model(scoreNode) }`, or `_tag_Selected = Flux.model(selectedNode)`). To follow an instance property, attribute, or tag as a read-only node, use [`Flux.property(instance, key)`](/guide/concepts/signals#binding-from-an-instance-property).
 
 ### `__REF` (Instance Reference)
 
-Capture the target instance into a writable Node or pass it to a callback. If a `__REF` callback returns a `Cleanable` (a connection, function, instance, or array), Flux ties that cleanup to the instance's lifetime:
+Capture the target instance into a writable Node or pass it to a callback. Passing a signal node writes the instance on mount and leaves the node's value untouched on destroy. If a `__REF` callback returns a `Cleanable` (a connection, function, instance, or array), Flux ties that cleanup to the instance's lifetime:
 
 ```luau
 local frameRef = Flux.signal(nil :: Frame?)
@@ -145,12 +148,13 @@ Flux.edit(existingFrame) {
 
 ## Array Elements (Children & Deferred Actions)
 
-Elements at numeric indices inside `Flux.edit` (or `Flux.new`) are processed in order:
-1. **`Instance`s, arrays, or child-binding nodes** (`Flux.show`, `Flux.forValue`, `Flux.forKey`, `Flux.forIndex`) are parented to the target instance with automatic sequential `LayoutOrder`.
-2. **Functions** `(instance) -> ()` are scheduled via `task.defer` to run with the target instance after all properties and children are applied.
-3. **`Flux.Find` selectors** locate related instances and apply nested `Flux.edit` tables to them.
+Elements at numeric indices inside `Flux.edit` (or `Flux.new`) run in order:
+1. **`Instance`s, arrays, or child-binding nodes** (`Flux.show`, `Flux.switch`, `Flux.forValue`, `Flux.forKey`, `Flux.forIndex`) are parented to the target instance with automatic sequential `LayoutOrder` for unpinned `GuiObject`s.
+2. **Nested property or directive tables** flatten into the enclosing `Flux.edit` / `Flux.new` table (outer keys win when both set the same property, while `__ATTR`, `__TAG`, `__EVENT`, `__REF`, and `__CLEAN` compose).
+3. **Functions** `(instance) -> ()` schedule via `Flux.Clock.defer` to run with the target instance after `Parent` is set.
+4. **`Flux.Find` selectors** locate related instances and apply nested `Flux.edit` tables to them.
 
-## Instance Selectors (`Flux.Find`{lua})
+## Instance Selectors (`Flux.Find`)
 
 When hydrating a Studio hierarchy, place `Flux.Find` selectors at numeric indices to target children, descendants, or ancestors inline without separate `FindFirstChild` boilerplate:
 
@@ -199,3 +203,5 @@ Flux.edit(settingsMenu) {
 | **`Find.Path(path)`** | Walks `.`-separated child names (`^` or `Parent` climbs up one level) |
 | **`Find.Query(selector)`** | `instance:QueryDescendants(selector)` (applies to all matches) |
 | **`Find.QueryFirst(selector)`** | `instance:QueryDescendants(selector)[1]` |
+
+Class-typed selectors (`ChildClass`, `ChildIsA`, `AncestorClass`, `AncestorIsA`) preserve strict `EditProperties<ClassName>` checking on their property table, while name, path, and query selectors accept any property table. When a single-target selector resolves to `nil`, Flux logs a warning (`Find.Query` silently skips when `0` descendants match).

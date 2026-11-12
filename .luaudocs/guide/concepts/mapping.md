@@ -2,7 +2,7 @@
 title: Mapping
 description: Efficiently rendering and updating dynamic lists in Flux.
 outline: deep
-sidebar_position: 7
+sidebar_position: 12
 ---
 
 # Mapping
@@ -11,15 +11,15 @@ Mapping over a reactive array inside a plain Computed or property binding rebuil
 
 | Helper | Keyed By | Mapper Signature | Best For |
 | :--- | :--- | :--- | :--- |
-| **`Flux.forValue(list, fn)`** | Item identity (`value`) | `(index: Node<number>, value: T)` | Unique object references or instances that reorder, insert, or remove |
-| **`Flux.forKey(list, keyOf, fn)`** | `keyOf(item)` | `(index: Node<number>, item: Node<T>)` | Immutable records or snapshots keyed by a stable ID (`item.id`, `userId`) |
-| **`Flux.forIndex(list, fn)`** | Array index (`number`) | `(index: number, item: Node<T>)` | Primitive values (strings, numbers) or fixed-slot lists |
+| **`Flux.forValue(list, fn, fallback?)`** | Item identity (`value`) | `(index: Node<number>, value: T)` | Unique object references or instances that reorder, insert, or remove |
+| **`Flux.forKey(list, keyOf, fn, fallback?)`** | `keyOf(item)` | `(index: Node<number>, item: Node<T>)` | Immutable records or snapshots keyed by a stable ID (`item.id`, `userId`) |
+| **`Flux.forIndex(list, fn, fallback?)`** | Array index (`number`) | `(index: number, item: Node<T>)` | Primitive values (strings, numbers) or fixed-slot lists |
 
 Place the returned node at a numeric index inside [`Flux.new`](/guide/roblox/creation) or [`Flux.edit`](/guide/roblox/hydration) to bind its results as children.
 
-## `Flux.forValue`{lua} (Keyed by Value)
+## `Flux.forValue` (Keyed by Value)
 
-`Flux.forValue` caches each mapped subtree by its **item value**. When an array is sorted or an item shifts position, its Instance is kept and its `index` node updates in place:
+`Flux.forValue` caches each mapped subtree by its **item value**. When an array is sorted or an item shifts position, its Instance stays mounted and its `index` node updates in place:
 
 ```luau
 local players = Flux.signal({
@@ -42,7 +42,7 @@ local list = Flux.new "Frame" {
 
 Values in `forValue` must be **unique** (duplicate values share one entry). Bind `LayoutOrder = index` on the returned `GuiObject` so Roblox's layout container reorders existing instances visually when their array position changes.
 
-## `Flux.forKey`{lua} (Keyed by Function)
+## `Flux.forKey` (Keyed by Function)
 
 When a server snapshot or immutable update replaces `{ id = 1, score = 10 }` with a fresh `{ id = 1, score = 20 }` table, `forValue` sees a new table reference and rebuilds that row. `Flux.forKey(list, keyOf, fn)` keys each entry by `keyOf(item)` instead, keeping the row's Instance mounted while updating both `index` (`Node<number>`) and `item` (`Node<T>`) in place:
 
@@ -78,7 +78,7 @@ local board = Flux.new "Frame" {
 
 Keys returned by `keyOf` must be unique across the list. If `keyOf(item)` returns `nil`, Flux falls back to keying that entry by `item` itself.
 
-## `Flux.forIndex`{lua} (Keyed by Index)
+## `Flux.forIndex` (Keyed by Index)
 
 `Flux.forIndex` caches each mapped subtree by its **numeric slot**. When the item at index `1` changes, the Instance at slot `1` stays mounted and its `item` node updates:
 
@@ -98,4 +98,24 @@ local tagList = Flux.new "Frame" {
 }
 ```
 
-All three mappers run their callback untracked once per entry and destroy that entry's child scope when the item, key, or slot leaves the array. For O(1) single-item selection across a mapped list, pair mapping with [`Flux.selector`](/guide/concepts/selectors).
+All three mappers run their callback untracked once per entry and destroy that entry's child scope when the item, key, or slot leaves the array. For `O(1)` single-item selection across a mapped list, pair mapping with [`Flux.selector`](/guide/concepts/selectors).
+
+## Empty-List Fallback
+
+Pass an optional trailing `fallback` function (`() -> F`) to render placeholder content whenever `list` is an empty table (`{}`):
+
+```luau
+local items = Flux.signal({} :: { string })
+
+local container = Flux.new "Frame" {
+	Flux.list({ gap = 4 }),
+
+	Flux.forIndex(items, function(_index, item)
+		return Flux.new "TextLabel" { Text = item }
+	end, function()
+		return Flux.new "TextLabel" { Text = "Nothing here yet." }
+	end),
+}
+```
+
+`fallback` runs untracked inside its own child [Scope](/guide/concepts/scopes) when `list` becomes empty and stays cached across repeated empty updates. As soon as items arrive or `list` is no longer a table, Flux disposes the fallback scope automatically and swaps in the mapped elements.

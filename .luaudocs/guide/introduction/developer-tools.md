@@ -7,13 +7,13 @@ sidebar_position: 3
 
 # Developer Tools
 
-Flux works out of the box in Roblox Studio and pairs cleanly with external Luau tooling for type checking, linting, headless testing, and UI storybooks.
+Flux runs directly in Roblox Studio with zero extra tooling and pairs cleanly with external Luau tools for type checking, linting, headless testing, and UI storybooks.
 
 ## Editor & Static Analysis
 
 ### Luau Language Server (`luau-lsp`)
 
-[luau-lsp](https://github.com/JohnnyMorganz/luau-lsp) powers autocomplete, go-to-definition, and inline type diagnostics in VS Code, Cursor, and Neovim. Because Flux is written in `--!strict` mode with typed class constructors and `State<T>` / `Node<T>` inference, `luau-lsp` gives you exact property and event autocomplete inside `Flux.new` and `Flux.edit`.
+[luau-lsp](https://github.com/JohnnyMorganz/luau-lsp) powers autocomplete, go-to-definition, and inline type diagnostics in VS Code, Cursor, and Neovim. Flux uses Luau type functions (`Flux.new`, `Flux.edit`, `Flux.Props`, `Flux.split`, `Flux.Unwrap`), so enable Luau's **New Type Solver** (`"luau-lsp.types.newSolver": true` in editor settings, `--flag:LuauSolverV2=true` on the CLI, and the New Luau Type Solver in Roblox Studio) for full `--!strict` inference.
 
 Generate a [Rojo](https://rojo.space/) sourcemap so the language server can resolve module paths:
 
@@ -29,15 +29,16 @@ rojo sourcemap --output sourcemap.json
 
 ## Headless & Virtual-Time Testing
 
-Flux's reactive graph and [`Flux.Clock`](/guide/tips/testing) run under the standalone [`luau` CLI](https://github.com/luau-lang/luau) with zero Roblox dependencies. You can step timers, springs, tweens, and frame flushes deterministically in unit tests without launching Studio. See **[Testing](/guide/tips/testing)** for details.
+Flux's core graph (`Graph`, `Clock`) has zero Roblox globals, and the full `Flux` package runs under the standalone [`luau` CLI](https://github.com/luau-lang/luau) once lightweight Roblox datatype shims (`Color3`, `Enum`, `TweenInfo`, `Vector2`, `UDim`, etc., such as [`sert`](https://github.com/kohltastrophe/sert)'s headless environment) are installed before `require(Flux)`. You can step timers, springs, tweens, and frame flushes deterministically in unit tests without launching Studio. See **[Testing](/guide/tips/testing)** for details.
 
 ## UI Previewing (Storybooks)
 
-Roblox storybook plugins mount a component into a `target` container and return a cleanup callback. You can wrap the component in [`Flux.scope`](/guide/concepts/scopes) and return `scope:Destroy()`.
+Roblox storybook plugins mount a component into a `target` container and return a cleanup callback. Wrap the component in [`Flux.scope`](/guide/concepts/scopes) and return a cleanup function that calls `scope:Destroy()`. [`Flux.Responsive`](/guide/utilities/responsive) and [`Flux.Interact`](/guide/utilities/interact) stay live in Studio edit mode and inside `PluginGui` docks, so breakpoints, UI scaling, and hover or press states work directly inside storybooks and Studio plugins without pressing Play.
 
 Given a reusable `Counter` component:
 
 ```luau
+--!strict
 -- Counter.luau
 local Flux = require(ReplicatedStorage.Flux)
 
@@ -62,12 +63,15 @@ return Counter
 A bare `function(target)` story works in [Hoarcekat](https://github.com/Kampfkarren/hoarcekat), [UI Labs](https://github.com/PepeElToro41/ui-labs), and [Flipbook](https://github.com/flipbook-labs/flipbook):
 
 ```luau
+--!strict
 -- Counter.story.luau
 local Flux = require(ReplicatedStorage.Flux)
 local Counter = require(script.Parent.Counter)
 
 return function(target: Instance)
-	local scope, root = Flux.scope(Counter)
+	local scope, root = Flux.scope(function()
+		return Counter()
+	end)
 	root.Parent = target
 	return function()
 		scope:Destroy()
@@ -80,13 +84,20 @@ end
 [UI Labs](https://ui-labs.luau.page/docs/stories/advanced/generic) mounts once and streams control edits through `props.subscribe`, which you can forward into a Flux signal:
 
 ```luau
+--!strict
 -- Counter.story.luau
 local Flux = require(ReplicatedStorage.Flux)
 local Counter = require(script.Parent.Counter)
 
+type StoryProps = {
+	target: Instance,
+	controls: { step: number },
+	subscribe: (listener: (values: { step: number }) -> ()) -> (),
+}
+
 return {
 	controls = { step = 1 },
-	render = function(props)
+	render = function(props: StoryProps)
 		local step = Flux.signal(props.controls.step)
 		props.subscribe(function(values)
 			step(values.step)
@@ -107,6 +118,7 @@ return {
 [Flipbook](https://github.com/flipbook-labs/flipbook) re-runs `story` when a control changes:
 
 ```luau
+--!strict
 -- Counter.story.luau
 local Flux = require(ReplicatedStorage.Flux)
 local Counter = require(script.Parent.Counter)
@@ -114,7 +126,7 @@ local Counter = require(script.Parent.Counter)
 return {
 	summary = "A reactive counter",
 	controls = { step = 1 },
-	story = function(props)
+	story = function(props: { container: Instance, controls: { step: number } })
 		local scope, root = Flux.scope(function()
 			return Counter(props.controls.step)
 		end)

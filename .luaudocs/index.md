@@ -37,7 +37,7 @@ Flux leans on Luau's type checker so your editor does the heavy lifting. When yo
 
 <h1 align="center">Do more <text style="opacity: 0.26">with less</text></h1>
 
-Every reactive node supports `__call` and <b>operator overloading</b>, so reading and writing state takes no extra ceremony. Call `count()` to read and `count(1)` to write. Arithmetic, comparison, and string interpolation track dependencies automatically, so reactive expressions read like normal Luau.
+Every reactive node supports `__call` and <b>operator overloading</b>, so reading and writing state takes no extra ceremony. Call `count()` to read and `count(1)` to write. Arithmetic and string interpolation track dependencies automatically, so reactive expressions read like normal Luau (use explicit `count() == 0` or `count() < 5` reads in comparisons).
 
 ```luau
 local ReplicatedStorage = game:GetService("ReplicatedStorage")

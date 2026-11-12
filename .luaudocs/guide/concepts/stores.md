@@ -2,7 +2,7 @@
 title: Stores
 description: Managing deeply reactive, nested tables and arrays in Flux.
 outline: deep
-sidebar_position: 8
+sidebar_position: 6
 ---
 
 # Stores
@@ -31,20 +31,21 @@ state.settings.volume = 0.8 -- Does NOT wake the health effect
 
 ## Creating a Store
 
-Call `Flux.store(initialTable)` with a plain Luau table. Per-key signal nodes and nested proxies are allocated lazily on first access. Values that already have metatables (such as Flux nodes or class instances) are left untouched.
+Call `Flux.store(initialTable)` with a plain Luau table. Per-key signal nodes and nested proxies allocate lazily on first access. Values that already have metatables (such as Flux nodes or class instances) stay untouched.
 
 ## Arrays and Iteration
 
 Iterating over a store (`for k, v in store.list do`) or reading `#store.list` subscribes the running computation to structural changes on that table level. To render a store array into UI children without rebuilding unchanged rows, pass `function() return store.list end` to [`Flux.forKey`](/guide/concepts/mapping#flux-forkey-keyed-by-function) or [`Flux.forValue`](/guide/concepts/mapping#flux-forvalue-keyed-by-value).
 
-> [!CAUTION] Use `Flux.Store` Array Helpers Instead of `table.insert` / `table.remove`
-> Luau's `table.insert` and `table.remove` bypass metatables. Always mutate store arrays with `Flux.Store.insert`, `Flux.Store.remove`, and `Flux.Store.move`:
+> [!CAUTION] Luau `table.*`, `pairs`, and `ipairs` Bypass Store Proxies
+> Luau's `table.*` library (`insert`, `remove`, `concat`, `sort`, `find`, `move`, `unpack`, `clone`, `clear`), `pairs()`, and `ipairs()` bypass proxy metatables. Iterate with generalized `for k, v in store.list do`, mutate store arrays with `Flux.Store.insert(arr, [pos,] value)`, `Flux.Store.remove(arr, pos?)`, and `Flux.Store.move`, and unwrap via `Flux.Store.unwrap` before calling `table.concat` or `HttpService:JSONEncode`:
 
 ```luau
 local Store = Flux.Store
 
 Flux.effect(function()
-	print(`Items ({#state.player.inventory}): {table.concat(state.player.inventory, ", ")}`)
+	local count = #state.player.inventory -- subscribes to array changes
+	print(`Items ({count}): {table.concat(Store.unwrap(state.player.inventory), ", ")}`)
 end)
 
 Store.insert(state.player.inventory, "Potion") -- appends and notifies
@@ -81,7 +82,7 @@ PlayerDataStore:SetAsync(tostring(userId), rawTable)
 
 ## Destroying a Store
 
-A store created inside a [`Flux.scope`](/guide/concepts/scopes) is torn down automatically when the scope is destroyed (or via [`Flux.dispose(store)`](/guide/concepts/scopes#disposing-by-hand-with-flux-dispose)). To tear down an unowned store manually, call `Flux.Store.Destroy(store)`:
+A store created inside a [`Flux.scope`](/guide/concepts/scopes) tears down automatically when the scope is destroyed (or via [`Flux.dispose(store)`](/guide/concepts/scopes#disposing-by-hand-with-flux-dispose)). To tear down an unowned store manually, call `Flux.Store.Destroy(store)`:
 
 ```luau
 Flux.Store.Destroy(state)

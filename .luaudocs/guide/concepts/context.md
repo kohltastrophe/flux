@@ -1,8 +1,8 @@
 ---
 title: Context
-description: Passing dependencies down a component tree with dynamically-scoped values.
+description: Passing dependencies down a component tree with dynamically scoped values.
 outline: deep
-sidebar_position: 9
+sidebar_position: 7
 ---
 
 # Context
@@ -40,10 +40,10 @@ Call `Flux.context(default)` with a fallback value returned whenever no `provide
 
 ## Providing and Reading
 
-- **`context:provide(value, fn)`** runs `fn` with this context set to `value`, then restores the previous value when `fn` returns (or throws).
+- **`context:provide(value, fn)`** runs `fn` with this context set to `value`, restores the previous value when `fn` returns (or throws), and returns `fn()`'s return value.
 - **`context:get()`** returns the value from the innermost active `provide`, or `context.default` if none is active.
 
-Every [Computed](/guide/concepts/computeds), [Effect](/guide/concepts/effects), [Scope](/guide/concepts/scopes), property binding, and event handler in `Flux.new` / `Flux.edit` **remembers the context values active where it was created**, so later re-runs keep reading the provided value:
+Every [Computed](/guide/concepts/computeds), [Effect](/guide/concepts/effects), [Scope](/guide/concepts/scopes), inline property getter, and event handler created inside `provide` **remembers the context values active where it was created**, so later re-runs and [`Flux.withOwner`](/guide/concepts/scopes#capturing-the-active-scope) calls keep reading that value. A pre-existing `Computed` node created outside `provide` keeps the context from its own creation site:
 
 ```luau
 local Theme = Flux.context("dark")
@@ -77,7 +77,7 @@ end
 
 ## Deferred Code
 
-Computeds, Effects, Scopes, and event handlers declared inside `Flux.new` / `Flux.edit` capture the active context automatically.
+Computeds, Effects, Scopes, and event handlers declared inside `Flux.new` or `Flux.edit` capture the active context automatically.
 
 When you register a callback **outside** Flux (such as a manual `RBXScriptSignal:Connect`, a `task.delay` timer, or a callback handed to a third-party module), wrap it with `Flux.bindContext(fn)` (or [`Flux.withOwner`](/guide/concepts/scopes#capturing-the-active-scope)) so it runs with the context active where it was wrapped:
 

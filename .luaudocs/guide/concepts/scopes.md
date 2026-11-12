@@ -31,7 +31,7 @@ scope:Destroy()
 
 ## Creating a Scope
 
-`Flux.scope(fn)` runs `fn(scope)` inside a new owner scope and returns `(scope, result)`. You use the same `Flux.signal`, `Flux.computed`, `Flux.effect`, and `Flux.new` calls inside a scope as outside. Ownership is tracked automatically.
+`Flux.scope(fn)` runs `fn(scope)` inside a new owner scope and returns `(scope, result)`. You use the same `Flux.signal`, `Flux.computed`, `Flux.effect`, and `Flux.new` calls inside a scope as outside. Ownership attaches automatically.
 
 `Flux.scope` combines a reactive root (like SolidJS's `createRoot`) with a resource cleanup container (like Roblox's Maid or Trove patterns).
 
@@ -40,8 +40,8 @@ scope:Destroy()
 Everything created while a scope is active that holds a subscription or resource attaches to that scope automatically:
 
 - **Computeds and Effects** (`Flux.computed`, `Flux.effect`, `Flux.createMemo`, `Flux.createEffect`, `Flux(fn)`)
-- **Instances and bindings** from [`Flux.new`](/guide/roblox/creation), [`Flux.edit`](/guide/roblox/hydration), and [`Flux.property`](/guide/concepts/signals#binding-from-an-instance-property)
-- **State helpers:** [Stores](/guide/concepts/stores), [Async](/guide/concepts/async) tasks, [Selectors](/guide/concepts/selectors), [Mapping](/guide/concepts/mapping) (`forValue`, `forKey`, `forIndex`), and [Conditionals](/guide/concepts/conditionals) (`show`, `switch`, `presence`)
+- **Instances and bindings** from [`Flux.new`](/guide/roblox/creation) (destroying the created `Instance`), plus bindings and listeners attached by [`Flux.edit`](/guide/roblox/hydration) and [`Flux.property`](/guide/concepts/signals#binding-from-an-instance-property) (which disconnect without destroying the target `Instance`)
+- **State helpers:** [Stores](/guide/concepts/stores), [Async](/guide/concepts/async) tasks, [Selectors](/guide/concepts/selectors), [Mapping](/guide/concepts/mapping) (`forValue`, `forKey`, `forIndex`), and [Conditionals](/guide/concepts/conditionals) (`show`, `showKeyed`, `switch`, `presence`)
 - **Interaction & motion nodes:** [`Flux.Interact`](/guide/utilities/interact) state nodes (`hover`, `press`, `selected`, `focused`), [`Flux.spring`](/guide/motion/spring), and [`Flux.tween`](/guide/motion/tween)
 - **Custom teardown items** registered with [`Flux.cleanup`](/guide/concepts/effects#cleanup-with-flux-cleanup)
 
@@ -53,11 +53,11 @@ Calling `Flux.scope` inside another scope creates a **child scope**. Destroying 
 
 ```luau
 local session = Flux.scope(function()
-	local modal = Flux.scope(function()
+	local modal, modalFrame = Flux.scope(function()
 		return Flux.new "Frame" { Name = "Modal", Parent = playerGui }
 	end)
 
-	-- Close just the modal while keeping `session` alive:
+	-- Close just `modalFrame` and its bindings while keeping `session` alive:
 	modal:Destroy()
 end)
 
@@ -67,7 +67,7 @@ session:Destroy()
 
 ## Capturing the Active Scope
 
-When creating reactions or cleanups inside an asynchronous callback (`task.delay`, a promise, or a remote callback), capture the active owner with `Flux.getOwner()` and restore it with `Flux.withOwner(owner, fn)`:
+When creating reactions or cleanups inside an asynchronous callback (`task.delay`, a promise, or a remote callback), capture the active owner with `Flux.getOwner()` and restore it with `Flux.withOwner(owner, fn, ...)` (which forwards extra arguments and returns `fn`'s results):
 
 ```luau
 local owner = Flux.getOwner()
@@ -82,11 +82,11 @@ end)
 
 - `Flux.withOwner(owner, fn)` restores both ownership and any [Context](/guide/concepts/context) values active where `owner` was created, without enabling dependency tracking.
 - Pass `nil` as `owner` to create unowned root reactions from inside an existing scope.
-- If `owner` was **already destroyed** before `withOwner` runs (for example, a late timer callback firing after a modal closed), `withOwner` immediately disposes everything created inside `fn` as soon as `fn` returns.
+- If `owner` was **already destroyed** before `withOwner` runs (for example, a late timer callback firing after a modal closed), `withOwner` disposes everything created inside `fn` as soon as `fn` returns.
 
-## Disposing by Hand with `Flux.dispose`{lua}
+## Disposing by Hand with `Flux.dispose`
 
-`Flux.dispose(obj)` runs the same teardown engine immediately on any `Cleanable` (a function, `Instance`, `RBXScriptConnection`, suspended `thread`, object with a `Destroy`/`destroy`/`Disconnect`/`disconnect` method, or an array of them):
+`Flux.dispose(obj)` runs the same teardown engine right away on any `Cleanable`. It accepts a 0-arg function `() -> ()`, `Instance`, `RBXScriptConnection`, suspended `thread`, `Flux.store` proxy, table with a `Destroy`/`destroy`/`Disconnect`/`disconnect` method, or an array of them:
 
 ```luau
 local connections = {

@@ -21,9 +21,9 @@ count(1) -- Queues the effect to run on the next frame flush
 
 ## Creating an Effect
 
-Call `Flux.effect(fn)` to schedule a reactive observer. It runs on the next flush, automatically subscribes to every reactive node read during its execution, and re-runs whenever any of those dependencies change.
+Call `Flux.effect(fn)` to schedule a reactive observer. It runs on the next flush, subscribes to every reactive node read during its execution, and re-runs whenever any of those dependencies change.
 
-- `Flux.effect(fn)` returns a `Node` handle so you can stop it early with `effectNode:Destroy()` (it is also destroyed automatically with its enclosing [Scope](/guide/concepts/scopes)).
+- `Flux.effect(fn)` returns a `Node` handle so you can stop it early with `effectNode:Destroy()` (it also tears down automatically with its enclosing [Scope](/guide/concepts/scopes)).
 - If you don't need a node handle, `Flux.createEffect(fn)` schedules the same scoped effect with zero wrapper allocation.
 
 ## Heartbeat Deferral and Flushing
@@ -49,11 +49,11 @@ count(3)
 -- > "Effect ran! Count is 3"
 ```
 
-In tests (or when you need synchronous execution), call [`Flux.flush()`](/guide/tips/testing#deterministic-effects-with-flux-flush) or step [`Flux.Clock`](/guide/tips/testing) to drain pending effects immediately.
+In tests (or when you need synchronous execution), call [`Flux.flush()`](/guide/tips/testing#deterministic-effects-with-flux-flush) or step [`Flux.Clock`](/guide/tips/testing) to drain pending effects right away.
 
-If an Effect writes to a signal that it also read during the same run, Flux re-queues it. If a single Effect re-triggers itself more than **100 times** in one flush, Flux warns with its `source:line` and disposes the Effect automatically so it can't freeze the client.
+If an Effect writes to a signal that it also read during the same run, Flux re-queues it. If a single Effect runs **100 times** in one flush (re-triggering itself on the 100th run), Flux warns with its `source:line` and disposes the Effect automatically so it can't freeze the client.
 
-## Cleanup with `Flux.cleanup`{lua}
+## Cleanup with `Flux.cleanup`
 
 Register resources inside an Effect (or Computed/Scope) with `Flux.cleanup(cleanable)`. Inside an Effect, registered cleanups run **right before the next re-run** and **when the Effect is destroyed**:
 
@@ -76,11 +76,12 @@ end)
 ```
 
 `Flux.cleanup` accepts any `Cleanable`:
-- A **function** `() -> ()` or `(oldValue, destroyed) -> ()`
+- A **function** `() -> ()` or `(oldValue, destroyed) -> ()` (`oldValue` is the previous return value in a Computed and `nil` in an Effect or Scope)
 - An **`Instance`** (destroyed via `:Destroy()`)
 - An **`RBXScriptConnection`** (disconnected)
 - A suspended **`thread`** (canceled via `task.cancel`)
-- Any **table** with a `:Destroy()`, `:destroy()`, `:Disconnect()`, or `:disconnect()` method (including Flux nodes, scopes, stores, and async tasks)
+- A **`Flux.store` proxy** (torn down via internal registration; manual teardown uses `Flux.Store.Destroy(store)`)
+- Any **table** with a `:Destroy()`, `:destroy()`, `:Disconnect()`, or `:disconnect()` method (including Flux nodes, scopes, selectors, and async tasks)
 - An **array** of cleanables
 
 ## Effects vs. Computeds
@@ -105,7 +106,7 @@ Flux.effect(Flux.on(volume, function(level, previousLevel)
 end, true))
 ```
 
-When an external imperative system needs [`RBXScriptSignal:Connect`](https://create.roblox.com/docs/reference/engine/datatypes/RBXScriptSignal#Connect) semantics (firing only on subsequent updates on its own [`task.spawn`](https://create.roblox.com/docs/reference/engine/libraries/task#spawn) thread so callbacks may yield freely), use `Flux.listen(node, fn)`:
+When an external imperative system needs [`RBXScriptSignal:Connect`](https://create.roblox.com/docs/reference/engine/datatypes/RBXScriptSignal#Connect) semantics, pass a `Node` to `Flux.listen(node, fn)`. It fires during the frame flush only on updates after subscribing, running on its own [`task.spawn`](https://create.roblox.com/docs/reference/engine/libraries/task#spawn) thread so callbacks can yield freely. Unlike `Flux.effect`, `Flux.listen` does not attach to an enclosing [Scope](/guide/concepts/scopes) unless wrapped in `Flux.cleanup(Flux.listen(node, fn))`:
 
 ```luau
 local disconnect = Flux.listen(volume, function(level)
