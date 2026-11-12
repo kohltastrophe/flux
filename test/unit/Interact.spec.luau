@@ -43,10 +43,23 @@ local function claimers(x: number, y: number, object: GuiObject): string
 	return table.concat(names, ", ")
 end
 
-local function render()
+local function renderAt(target: GuiObject): (number, number)
 	local run = game:GetService("RunService")
-	run.RenderStepped:Wait()
-	run.Heartbeat:Wait()
+	local playerGui = game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui")
+	local x, y = 0, 0
+	for _ = 1, 30 do
+		run.RenderStepped:Wait()
+		run.Heartbeat:Wait()
+		local pos, size = target.AbsolutePosition, target.AbsoluteSize
+		if size.X > 0 and size.Y > 0 then
+			x = math.floor(pos.X + size.X * 0.5)
+			y = math.floor(pos.Y + size.Y * 0.5)
+			if table.find(playerGui:GetGuiObjectsAtPosition(x, y), target) ~= nil then
+				return x, y
+			end
+		end
+	end
+	return x, y
 end
 
 ctest("interact · sunk detects an input-claiming gui above the object", function()
@@ -57,7 +70,7 @@ ctest("interact · sunk detects an input-claiming gui above the object", functio
 		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
 		Parent = player:WaitForChild("PlayerGui"),
 	})
-	local position = UDim2.new(0.5, -50, 0.5, -50)
+	local position = UDim2.fromOffset(80, 120)
 	local under = Flux.new("Frame")({ Parent = gui, Position = position, Size = UDim2.fromOffset(100, 100) })
 	local over = Flux.new("Frame")({
 		Parent = gui,
@@ -67,9 +80,7 @@ ctest("interact · sunk detects an input-claiming gui above the object", functio
 		ZIndex = 2,
 	})
 
-	render()
-	local corner = under.AbsolutePosition
-	local x, y = corner.X + 10, corner.Y + 10
+	local x, y = renderAt(over)
 	expect(
 		Flux.Interact.sunk(x, y, under) == true,
 		`an All sink above sinks the point (at {x}, {y}; claimed by {claimers(x, y, under)})`
@@ -87,7 +98,7 @@ ctest("interact · sunk detects an input-claiming gui above the object", functio
 	button.Position = position
 	button.Size = under.Size
 	button.ZIndex = 3
-	render()
+	x, y = renderAt(button)
 	expect.eq(Flux.Interact.sunk(x, y, under), true, "a native button (Activate by default) claims the press")
 	button.InputSink = Enum.InputSink.None
 	button.Active = false
@@ -110,12 +121,10 @@ ctest("interact · covered ignores the object's own buttons and hears only what 
 		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
 		Parent = player:WaitForChild("PlayerGui"),
 	})
-	local position = UDim2.new(0.5, -50, 0.5, -50)
+	local position = UDim2.fromOffset(80, 120)
 	local list = Flux.new("Frame")({ Parent = gui, Position = position, Size = UDim2.fromOffset(100, 100) })
-	Flux.new("TextButton")({ Parent = list, Size = UDim2.fromScale(1, 1), Text = "" })
-	render()
-	local corner = list.AbsolutePosition
-	local x, y = corner.X + 10, corner.Y + 10
+	local rowButton = Flux.new("TextButton")({ Parent = list, Size = UDim2.fromScale(1, 1), Text = "" })
+	local x, y = renderAt(rowButton)
 	expect(
 		Flux.Interact.sunk(x, y, list) == true,
 		`its own row sinks the point for sunk (at {x}, {y}; claimed by {claimers(x, y, list)})`
@@ -129,8 +138,11 @@ ctest("interact · covered ignores the object's own buttons and hears only what 
 		InputSink = SINK_ALL,
 		ZIndex = 5,
 	})
-	render()
-	expect(Flux.Interact.covered(x, y, list) == true, "a panel on top covers it")
+	x, y = renderAt(panel)
+	expect(
+		Flux.Interact.covered(x, y, list) == true,
+		`a panel on top covers it (at {x}, {y}; claimed by {claimers(x, y, list)})`
+	)
 	panel.InputSink = SINK_NONE
 	expect(Flux.Interact.covered(x, y, list) == false, "unless the panel doesn't claim input")
 
@@ -189,6 +201,24 @@ end
 local pointerTest = if virtualInput ~= nil then sert.test.client else sert.test.client.skip
 pointerTest("interact · native InputSink None Activate All and release outside bounds", function()
 	local playerGui = game:GetService("Players").LocalPlayer.PlayerGui
+	local run = game:GetService("RunService")
+	local function stepFrames(count: number)
+		for _ = 1, count do
+			run.RenderStepped:Wait()
+			run.Heartbeat:Wait()
+		end
+		Flux.flush()
+	end
+	local function waitFramesUntil(pred: () -> boolean, maxFrames: number)
+		for _ = 1, maxFrames do
+			run.RenderStepped:Wait()
+			run.Heartbeat:Wait()
+			Flux.flush()
+			if pred() then
+				return
+			end
+		end
+	end
 	local gui = Instance.new("ScreenGui")
 	gui.Name = "InputSinkRegression"
 	gui.DisplayOrder = 1000000
@@ -197,7 +227,7 @@ pointerTest("interact · native InputSink None Activate All and release outside 
 	gui.Parent = playerGui
 	local button = Instance.new("TextButton")
 	button.Size = UDim2.fromOffset(160, 100)
-	button.Position = UDim2.new(0.5, -80, 0.5, -50)
+	button.Position = UDim2.fromOffset(80, 120)
 	button.InputSink = Enum.InputSink.Activate
 	button.Parent = gui
 	local cover = Instance.new("Frame")
@@ -210,51 +240,55 @@ pointerTest("interact · native InputSink None Activate All and release outside 
 		hovering = Flux.Interact.hover(button)
 		pressing = Flux.Interact.press(button)
 	end)
-	local began, entered, activated = 0, 0, 0
-	button.InputBegan:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseButton1 then
-			began += 1
-		end
-	end)
-	button.MouseEnter:Connect(function()
-		entered += 1
-	end)
-	button.Activated:Connect(function()
-		activated += 1
+	local left = 0
+	button.MouseLeave:Connect(function()
+		left += 1
 	end)
 	local ok, failure = pcall(function()
-		task.wait(0.1)
+		renderAt(cover)
 		local at = button.AbsolutePosition + Vector2.new(32, 32) + game:GetService("GuiService"):GetGuiInset()
+		local outside = at + Vector2.new(220, 0)
+		virtualInput:SendMousePosition(outside)
+		stepFrames(3)
 		for _, sink in { Enum.InputSink.All, Enum.InputSink.Activate } do
 			cover.InputSink = sink
 			virtualInput:SendMousePosition(at)
-			task.wait(0.1)
-			Flux.flush()
+			stepFrames(4)
 			expect.eq(hovering:peek(), false, `{sink.Name} cover suppresses Flux hover`)
 			virtualInput:SendMouseButton(at, Enum.UserInputType.MouseButton1, true)
-			task.wait(0.05)
-			Flux.flush()
+			stepFrames(3)
 			expect.eq(pressing:peek(), false, `{sink.Name} cover suppresses Flux press`)
 			virtualInput:SendMouseButton(at, Enum.UserInputType.MouseButton1, false)
-			task.wait(0.05)
+			stepFrames(2)
 		end
 		cover.InputSink = Enum.InputSink.None
-		virtualInput:SendMousePosition(at + Vector2.new(180, 0))
-		task.wait(0.05)
+		local leftBefore = left
+		virtualInput:SendMousePosition(outside)
+		stepFrames(3)
+		if left == leftBefore then
+			waitFramesUntil(function()
+				return left > leftBefore
+			end, 10)
+		end
 		virtualInput:SendMousePosition(at)
-		task.wait(0.1)
-		Flux.flush()
+		stepFrames(2)
+		waitFramesUntil(function()
+			return hovering:peek() == true
+		end, 20)
 		expect.eq(hovering:peek(), true, "None decoration permits hover")
 		virtualInput:SendMouseButton(at, Enum.UserInputType.MouseButton1, true)
-		task.wait(0.05)
-		Flux.flush()
+		stepFrames(2)
+		waitFramesUntil(function()
+			return pressing:peek() == true
+		end, 15)
 		expect.eq(pressing:peek(), true, "None decoration permits a press")
-		local outside = at + Vector2.new(180, 0)
 		virtualInput:SendMousePosition(outside)
-		task.wait(0.05)
+		stepFrames(3)
 		virtualInput:SendMouseButton(outside, Enum.UserInputType.MouseButton1, false)
-		task.wait(0.05)
-		Flux.flush()
+		stepFrames(2)
+		waitFramesUntil(function()
+			return pressing:peek() == false
+		end, 15)
 		expect.eq(pressing:peek(), false, "release outside the button settles the press")
 	end)
 	scope:Destroy()
@@ -1485,4 +1519,312 @@ test("interact · multi-touch hover isolation and nil-services press/selected fa
 	expect(pressed:get() == false, "press without services releases on object.InputEnded")
 	pressed:Destroy()
 	sel:Destroy()
+end)
+
+test("interact · LayerCollector / PluginGui fallback isolates dock widget cursor from ScreenGui viewport", function()
+	local cursor = Vector2.new(25, 35)
+	local over = {
+		Active = false,
+		InputSink = SINK_NONE,
+		IsA = function()
+			return false
+		end,
+		IsDescendantOf = function()
+			return false
+		end,
+	}
+	local gui: any = {
+		Active = true,
+		InputSink = SINK_ACTIVATE,
+		InputBegan = fakeSignal(),
+		InputChanged = fakeSignal(),
+		InputEnded = fakeSignal(),
+		MouseEnter = fakeSignal(),
+		MouseLeave = fakeSignal(),
+		Destroying = fakeSignal(),
+	}
+	local dockWidget = {
+		WindowFocusReleased = fakeSignal(),
+		IsA = function(_, className: string)
+			return className == "PluginGui" or className == "LayerCollector"
+		end,
+		GetRelativeMousePosition = function()
+			return cursor
+		end,
+		GetGuiObjectsAtPosition = function(_, x: number, y: number)
+			if (x == 25 and y == 35) or (x == 400 and y == 500) then
+				return { over, gui }
+			end
+			return {}
+		end,
+	}
+	function gui:FindFirstAncestorWhichIsA(className: string)
+		if className == "BasePlayerGui" then
+			return nil
+		elseif className == "LayerCollector" then
+			return dockWidget
+		end
+		return nil
+	end
+	expect.eq(Flux.Interact.sunk(25, 35, gui), false, "uncovered dock widget control is not sunk")
+	over.InputSink = SINK_ALL
+	expect.eq(Flux.Interact.sunk(25, 35, gui), true, "LayerCollector fallback detects claiming overlay in dock widget")
+	over.InputSink = SINK_NONE
+
+	-- Main-viewport ScreenGui button tracked concurrently in the same HoverServices tracker
+	local screenBtn: any = {
+		Active = true,
+		InputSink = SINK_ACTIVATE,
+		InputBegan = fakeSignal(),
+		InputChanged = fakeSignal(),
+		InputEnded = fakeSignal(),
+		MouseEnter = fakeSignal(),
+		MouseLeave = fakeSignal(),
+		Destroying = fakeSignal(),
+	}
+	local playerGui = {
+		IsA = function(_, className: string)
+			return className == "BasePlayerGui"
+		end,
+		GetGuiObjectsAtPosition = function(_, x: number, y: number)
+			if x == 400 and y == 500 then
+				return { screenBtn }
+			end
+			return {}
+		end,
+	}
+	function screenBtn:FindFirstAncestorWhichIsA(className: string)
+		return if className == "BasePlayerGui" then playerGui else nil
+	end
+
+	local heartbeat = fakeSignal()
+	local services = {
+		GuiService = {
+			MenuIsOpen = false,
+			GetGuiInset = function()
+				return Vector2.new(0, 0)
+			end,
+		},
+		UserInputService = {
+			InputChanged = fakeSignal(),
+			InputEnded = fakeSignal(),
+			LastInputTypeChanged = fakeSignal(),
+			WindowFocusReleased = fakeSignal(),
+			GetLastInputType = function()
+				return Enum.UserInputType.MouseMovement
+			end,
+			GetMouseLocation = function()
+				return Vector2.new(400, 500)
+			end,
+		},
+		RunService = { Heartbeat = heartbeat },
+	}
+	local hovering = InteractModule._hoverWith(gui, services)
+	local screenHovering = InteractModule._hoverWith(screenBtn, services)
+
+	-- Entering and moving inside PluginGui must NOT overwrite main-viewport tracker.x/y
+	gui.MouseEnter:Fire()
+	gui.InputChanged:Fire({
+		UserInputType = Enum.UserInputType.MouseMovement,
+		Position = Vector2.new(25, 35),
+	} :: any)
+	screenBtn.MouseEnter:Fire()
+	heartbeat:Fire()
+	expect.eq(
+		hovering:get(),
+		true,
+		"PluginGui MouseEnter + GetRelativeMousePosition enables hover without BasePlayerGui"
+	)
+	expect.eq(
+		screenHovering:get(),
+		true,
+		"PluginGui local cursor does not contaminate concurrent ScreenGui viewport hit-testing"
+	)
+
+	over.InputSink = SINK_ALL
+	heartbeat:Fire()
+	expect.eq(hovering:get(), false, "modal claiming input inside PluginGui clears hover")
+	expect.eq(screenHovering:get(), true, "PluginGui modal does not affect ScreenGui hover")
+
+	over.InputSink = SINK_NONE
+	heartbeat:Fire()
+	expect.eq(hovering:get(), true, "PluginGui hover returns once modal clears")
+
+	cursor = nil :: any
+	heartbeat:Fire()
+	expect.eq(hovering:get(), false, "nil PluginGui cursor clears active hover without falling back to viewport coords")
+
+	cursor = Vector2.new(25, 35)
+	heartbeat:Fire()
+	expect.eq(hovering:get(), true, "PluginGui hover resumes when cursor returns")
+
+	expect.eq(dockWidget.WindowFocusReleased:listeners(), 1, "active PluginGui hover listens for WindowFocusReleased")
+	dockWidget.WindowFocusReleased:Fire()
+	expect.eq(hovering:get(), false, "PluginGui WindowFocusReleased clears that PluginGui's hover")
+	expect.eq(screenHovering:get(), true, "PluginGui WindowFocusReleased leaves ScreenGui hover untouched")
+	expect.eq(dockWidget.WindowFocusReleased:listeners(), 0, "WindowFocusReleased listener disconnects on leave")
+
+	cursor = Vector2.new(25, 35)
+	gui.MouseEnter:Fire()
+	heartbeat:Fire()
+	expect.eq(hovering:get(), true, "re-entering PluginGui restores hover")
+
+	cursor = Vector2.new(200, 200)
+	heartbeat:Fire()
+	expect.eq(hovering:get(), false, "moving outside PluginGui control leaves tracker")
+	hovering:Destroy()
+	screenHovering:Destroy()
+end)
+
+test("interact · BillboardGui / SurfaceGuiBase excluded and dynamic root reparenting tracks focus", function()
+	for _, className in { "BillboardGui", "SurfaceGuiBase" } do
+		local over = {
+			Active = true,
+			InputSink = SINK_ALL,
+			IsA = function()
+				return false
+			end,
+			IsDescendantOf = function()
+				return false
+			end,
+		}
+		local worldRoot = {
+			IsA = function(_, c: string)
+				return c == "LayerCollector" or c == className
+			end,
+			GetGuiObjectsAtPosition = function()
+				return { over }
+			end,
+		}
+		local playerGui = {
+			IsA = function(_, c: string)
+				return c == "BasePlayerGui"
+			end,
+			GetGuiObjectsAtPosition = function()
+				return { over }
+			end,
+		}
+		local gui: any = {
+			FindFirstAncestorWhichIsA = function(_, c: string)
+				if c == "LayerCollector" then
+					return worldRoot
+				elseif c == "BasePlayerGui" then
+					-- Also verify exclusion even when parented inside PlayerGui.
+					return playerGui
+				end
+				return nil
+			end,
+		}
+		expect.eq(Flux.Interact.sunk(10, 10, gui), false, `{className} is excluded from 2D LayerCollector hit-testing`)
+	end
+
+	local cursorA = Vector2.new(10, 10)
+	local cursorB = Vector2.new(20, 20)
+	local activeRoot: any = nil
+	local btn: any = {
+		Active = true,
+		InputSink = SINK_ACTIVATE,
+		InputBegan = fakeSignal(),
+		InputChanged = fakeSignal(),
+		InputEnded = fakeSignal(),
+		MouseEnter = fakeSignal(),
+		MouseLeave = fakeSignal(),
+		Destroying = fakeSignal(),
+	}
+	local dockA = {
+		WindowFocusReleased = fakeSignal(),
+		IsA = function(_, c: string)
+			return c == "PluginGui" or c == "LayerCollector"
+		end,
+		GetRelativeMousePosition = function()
+			return cursorA
+		end,
+		GetGuiObjectsAtPosition = function(_, x: number, y: number)
+			return if x == 10 and y == 10 then { btn } else {}
+		end,
+	}
+	local dockB = {
+		WindowFocusReleased = fakeSignal(),
+		IsA = function(_, c: string)
+			return c == "PluginGui" or c == "LayerCollector"
+		end,
+		GetRelativeMousePosition = function()
+			return cursorB
+		end,
+		GetGuiObjectsAtPosition = function(_, x: number, y: number)
+			return if x == 20 and y == 20 then { btn } else {}
+		end,
+	}
+	activeRoot = dockA
+	function btn:FindFirstAncestorWhichIsA(c: string)
+		return if c == "LayerCollector" then activeRoot else nil
+	end
+
+	local heartbeat = fakeSignal()
+	local services = {
+		GuiService = { MenuIsOpen = false },
+		UserInputService = {
+			InputChanged = fakeSignal(),
+			InputEnded = fakeSignal(),
+			LastInputTypeChanged = fakeSignal(),
+			WindowFocusReleased = fakeSignal(),
+			GetLastInputType = function()
+				return Enum.UserInputType.MouseMovement
+			end,
+		},
+		RunService = { Heartbeat = heartbeat },
+	}
+	local hovering = InteractModule._hoverWith(btn, services)
+	btn.MouseEnter:Fire()
+	heartbeat:Fire()
+	expect.eq(hovering:get(), true, "hover starts inside dockA")
+	expect.eq(dockA.WindowFocusReleased:listeners(), 1, "dockA focus listener attached")
+
+	activeRoot = dockB
+	heartbeat:Fire()
+	expect.eq(hovering:get(), true, "reparenting from dockA to dockB re-queries dockB")
+	expect.eq(dockA.WindowFocusReleased:listeners(), 0, "dockA focus listener detached on reparent")
+	expect.eq(dockB.WindowFocusReleased:listeners(), 1, "dockB focus listener attached on reparent")
+
+	activeRoot = nil
+	heartbeat:Fire()
+	expect.eq(hovering:get(), false, "reparenting out to nil leaves tracker and clears hover")
+	expect.eq(dockB.WindowFocusReleased:listeners(), 0, "dockB focus listener detached after leave")
+	hovering:Destroy()
+end)
+
+test("interact · MouseEnter seeds inset-adjusted cursor coordinates on an idle tracker", function()
+	local world = hoverWorld()
+	local card = world.gui()
+	local queriedX, queriedY = nil, nil
+	local mouseLocation = Vector2.new(999, 999)
+	world.env.GuiService.GetGuiInset = function()
+		return Vector2.new(10, 60)
+	end
+	world.env.UserInputService.GetMouseLocation = function()
+		return mouseLocation
+	end
+	world.at = function(x, y)
+		queriedX, queriedY = x, y
+		return if x == 5 and y == 5 then { card } else {}
+	end
+
+	local hovering = InteractModule._hoverWith(card, world.env)
+	card.MouseEnter:Fire(15, 65)
+	world.frame()
+	expect.eq(queriedX, 5, "MouseEnter x subtracts gui inset when seeding idle tracker")
+	expect.eq(queriedY, 5, "MouseEnter y subtracts gui inset when seeding idle tracker")
+	expect.eq(hovering:get(), true, "MouseEnter coordinates hover without waiting for GetMouseLocation")
+
+	card.MouseLeave:Fire()
+	expect.eq(hovering:get(), false, "MouseLeave clears hover and drops tracker")
+
+	queriedX, queriedY = nil, nil
+	mouseLocation = Vector2.new(15, 65)
+	card.MouseEnter:Fire()
+	world.frame()
+	expect.eq(queriedX, 5, "nil MouseEnter x falls back to GetMouseLocation minus gui inset")
+	expect.eq(queriedY, 5, "nil MouseEnter y falls back to GetMouseLocation minus gui inset")
+	expect.eq(hovering:get(), true, "fallback GetMouseLocation hovers on nil MouseEnter coordinates")
+	hovering:Destroy()
 end)

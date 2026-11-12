@@ -32,6 +32,8 @@ Flux.edit(button) {
 
 Every state node starts listening immediately and cleans up automatically when the node, its owning [Scope](/guide/concepts/scopes), or `object`{luau} is destroyed, settling to `false`{luau}.
 
+Occlusion hit-testing (`hover`{luau}, `sunk`{luau}, and `covered`{luau}) resolves the enclosing 2D screen-space [`BasePlayerGui`](https://create.roblox.com/docs/reference/engine/classes/BasePlayerGui) (`PlayerGui` / `StarterGui`) or Studio [`PluginGui`](https://create.roblox.com/docs/reference/engine/classes/PluginGui) (`DockWidgetPluginGui`{luau}). Inside plugin docks, `hover`{luau} queries widget-local coordinates via `PluginGui:GetRelativeMousePosition()`{luau} isolated from the main viewport (`SurfaceGui`{luau} and `BillboardGui`{luau} containers in 3D `Workspace`{luau} are not supported).
+
 ## `hover` {#hover}
 
 `Flux.Interact.hover(object, options?)`{luau} returns a `Node<boolean>`{luau} that is `true`{luau} while a mouse pointer or touch contact is inside `object`{luau} with no input-claiming GUI drawn above it (checked via [`sunk`](#sunk)).
@@ -82,7 +84,7 @@ local isFocused = Flux.Interact.focused(searchInput)
 
 ### `pointIn` {#pointin}
 
-`Flux.Interact.pointIn(x, y, object)`{luau} returns `true`{luau} if the inset-relative coordinate `(x, y)`{luau} lies within `object`{luau}'s `AbsolutePosition`{luau} and `AbsoluteSize`{luau} bounds (inclusive, ignoring rotation):
+`Flux.Interact.pointIn(x, y, object)`{luau} returns `true`{luau} if the top-bar-inset-relative GUI coordinate `(x, y)`{luau} (such as `input.Position.X, input.Position.Y`{luau} rather than raw `UserInputService:GetMouseLocation()`{luau}) lies within `object`{luau}'s `AbsolutePosition`{luau} and `AbsoluteSize`{luau} bounds (inclusive, ignoring rotation):
 
 ```luau
 if not Flux.Interact.pointIn(input.Position.X, input.Position.Y, dropdownMenu) then
@@ -92,7 +94,7 @@ end
 
 ### `sunk` {#sunk}
 
-`Flux.Interact.sunk(x, y, object, token?)`{luau} returns `true`{luau} if input at `(x, y)`{luau} would be claimed by an `Active`{luau} or input-sinking `GuiObject`{luau} rendered **above** `object`{luau} (or if the Roblox escape menu is open). Pass `input`{luau} as `token`{luau} to memoize the underlying `GetGuiObjectsAtPosition`{luau} query across multiple controls on the same input event:
+`Flux.Interact.sunk(x, y, object, token?)`{luau} returns `true`{luau} if input at the GUI-relative coordinate `(x, y)`{luau} would be claimed by an `Active`{luau} or input-sinking `GuiObject`{luau} rendered **above** `object`{luau} inside the same `BasePlayerGui`{luau} or `PluginGui`{luau} (or if the Roblox escape menu is open). `sunk`{luau} checks occlusion only and does not check [`pointIn`](#pointin). Pass `input`{luau} as `token`{luau} to memoize the underlying `GetGuiObjectsAtPosition`{luau} query across multiple controls on the same input event:
 
 ```luau
 if not Flux.Interact.sunk(input.Position.X, input.Position.Y, control, input) then
