@@ -9,6 +9,7 @@ Flux.show(loggedIn, function() return Profile {} end, function() return SignIn {
 
 local Compat = require("./Compat")
 local Graph = require("./Graph")
+local Type = require("./Type")
 
 local warn = Compat.warn
 local computed = Graph.computed
@@ -34,20 +35,9 @@ type Node<T> = Graph.Node<T>
 type Item<L> = index<Graph.Unwrap<L>, number>
 
 --- @ignore
-type function NonNil(t: type): type
-	if t:is("nil") then
-		return types.never
-	elseif not t:is("union") then
-		return t
-	end
-	local parts = {}
-	for _, part in t:components() do
-		if not part:is("nil") then
-			table.insert(parts, part)
-		end
-	end
-	return if #parts == 0 then types.never elseif #parts == 1 then parts[1] else types.unionof(table.unpack(parts))
-end
+type NonNil<T> = Type.NonNil<T>
+--- @ignore
+type Truthy<T> = Type.Truthy<T>
 
 local OTHERWISE: any = table.freeze({ type = "SwitchOtherwise" })
 local UNSET = table.freeze({})
@@ -575,20 +565,20 @@ return table.freeze({
 
 	[Open Documentation](https://flux.kohl.gg/guide/concepts/conditionals#showing-one-of-two-branches)
 	]]
-	show = show :: (<T>(condition: unknown, component: (value: () -> any) -> T) -> Node<T?>) & (<T, F>(
-		condition: unknown,
-		component: (value: () -> any) -> T,
-		fallback: (value: () -> any) -> F
+	show = show :: (<S, T>(condition: S, component: (value: () -> Truthy<Graph.Unwrap<S>>) -> T) -> Node<T?>) & (<S, T, F>(
+		condition: S,
+		component: (value: () -> Truthy<Graph.Unwrap<S>>) -> T,
+		fallback: (value: () -> Graph.Unwrap<S>) -> F
 	) -> Node<(T | F)?>),
 	--[[
 	Mounts `component` while `condition` is truthy (or `fallback` when falsy) and remounts in a fresh [scope](https://flux.kohl.gg/guide/concepts/scopes) whenever `condition` changes identity.
 
 	[Open Documentation](https://flux.kohl.gg/guide/concepts/conditionals#keyed-show)
 	]]
-	showKeyed = showKeyed :: (<T>(condition: unknown, component: (value: () -> any) -> T) -> Node<T?>) & (<T, F>(
-		condition: unknown,
-		component: (value: () -> any) -> T,
-		fallback: (value: () -> any) -> F
+	showKeyed = showKeyed :: (<S, T>(condition: S, component: (value: () -> Truthy<Graph.Unwrap<S>>) -> T) -> Node<T?>) & (<S, T, F>(
+		condition: S,
+		component: (value: () -> Truthy<Graph.Unwrap<S>>) -> T,
+		fallback: (value: () -> Graph.Unwrap<S>) -> F
 	) -> Node<(T | F)?>),
 	switch = switch,
 	presence = presence,

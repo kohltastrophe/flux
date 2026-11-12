@@ -41,7 +41,14 @@ type EnumMap = { [string]: EnumItem }
 export type Reactive<T> = Graph.Reactive<T>
 export type Length = number | UDim
 export type ReactiveLength = Reactive<number> | Reactive<UDim>
-export type Insets = { top: number?, bottom: number?, left: number?, right: number? }
+export type Insets = {
+	top: Length?,
+	bottom: Length?,
+	left: Length?,
+	right: Length?,
+	x: Length?,
+	y: Length?,
+}
 export type Align = "start" | "center" | "end"
 export type FlexAlign = Align | "between" | "around" | "evenly" | "stretch" | "fill" | "none"
 export type LineAlign = Align | "stretch" | "automatic"

@@ -56,4 +56,13 @@ local _hp: number = stats.hp
 stats.name = "Renamed"
 assert(stats.name == "Renamed")
 
+-- Flux.Namespace supports dependency injection and frozen parent barrels (`table.freeze`) while keeping callability.
+local barrel: { read Flux: Flux.Namespace } = table.freeze({ Flux = Flux })
+local _nsCall: Flux.Node<any> = barrel.Flux(0)
+local _nsSync: Flux.SyncSignal<number> = barrel.Flux.Sync("Count", 0)
+local _nsFrame: Frame = barrel.Flux.new("Frame")({})
+
+type Merged = Flux.Merge<{ a: number, b: string }, { b: boolean, c: number }>
+local _merged: Merged = { a = 1, b = true, c = 2 }
+
 return nil

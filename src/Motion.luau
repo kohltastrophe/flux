@@ -43,16 +43,25 @@ type Reactive<T> = Graph.Reactive<T>
 --- @ignore
 type Unwrap<T> = Graph.Unwrap<T>
 
-export type Spring<T> = Graph.Node<T> & {
-	-- Adds `delta` to the spring's current velocity without changing its target.
-	impulse: (self: any, delta: T) -> (),
-	-- Replaces the spring's velocity outright without changing its target.
-	setVelocity: (self: any, velocity: T) -> (),
-	-- Sets the spring's current animated value immediately without altering its target or velocity.
-	setCurrent: (self: any, value: T) -> (),
-	-- Jumps both the target and current value to `value` and zeroes the velocity.
-	snap: (self: any, value: T) -> (),
-}
+export type Spring<T> = setmetatable<
+	{
+		read peek: (self: any) -> T,
+		read get: (self: any) -> T,
+		read set: (self: any, value: any, force: boolean?) -> T,
+		read update: <N>(self: N) -> N,
+		read Destroy: (self: any) -> (),
+		read onDestroy: (self: any, fn: (oldValue: T) -> ()) -> (),
+		-- Adds `delta` to the spring's current velocity without changing its target.
+		read impulse: (self: any, delta: T) -> (),
+		-- Replaces the spring's velocity outright without changing its target.
+		read setVelocity: (self: any, velocity: T) -> (),
+		-- Sets the spring's current animated value immediately without altering its target or velocity.
+		read setCurrent: (self: any, value: T) -> (),
+		-- Jumps both the target and current value to `value` and zeroes the velocity.
+		read snap: (self: any, value: T) -> (),
+	},
+	Graph.Operators<T>
+>
 
 -- Color & Oklab -------------------------------------------------------------------------------------------------------
 

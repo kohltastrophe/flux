@@ -34,7 +34,10 @@ local function forPlayer(player: Player)
 end
 
 local chained: Flux.SyncSignal<number> = coins:unreliable(true):validate(function(_, value)
-	return value >= 0
+	if type(value) ~= "number" or value ~= value then
+		return false
+	end
+	return true, math.clamp(value, 0, 100)
 end)
 
 local asNode: Node<number> = coins

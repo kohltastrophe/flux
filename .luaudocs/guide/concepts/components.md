@@ -152,3 +152,22 @@ local function TimerLabel(): TextLabel
 	return label
 end
 ```
+
+## `--!strict` Types
+
+Flux exports its core reactive and component types directly on the `Flux` module:
+
+| Type | Meaning |
+| :--- | :--- |
+| **`Flux.State<T>`** | Writable [Signal](/guide/concepts/signals) or [SyncSignal](/guide/concepts/sync) node (`:set` is checked against `T`) |
+| **`Flux.Node<T>`** | Read/lifecycle reactive node (Signals, Computeds, Effects, Scopes, Springs, Tweens) |
+| **`Flux.Reactive<T>`** | `T \| Flux.Node<T> \| () -> T` (static value, node, or getter) |
+| **`Flux.Unwrap<T>`** | Extracts `V` from `Node<V>`, `State<V>`, `Spring<V>`, `SyncSignal<V>`, or `() -> V` (leaves plain `T` as-is) |
+| **`Flux.Props<ClassName, Extra?>`** | `Flux.new(className)` property table merged with `Extra` (your component's own props override conflicting class members) |
+| **`Flux.Merge<Base, Extra>`** | Table merge where fields in `Extra` replace matching keys on `Base` |
+| **`Flux.Pick<T, K>` / `Flux.Omit<T, K>` / `Flux.Partial<T>`** | Table projection helpers used by [`Flux.split`](#splitting-props-with-flux-split) |
+| **`Flux.Component<P, I?>`** | `(props: P) -> I` (defaults `I` to `Instance`) |
+| **`Flux.Child` / `Flux.Children`** | Single child item or nested array accepted at numeric indices in `Flux.new` / `Flux.edit` |
+| **`Flux.Cleanable`** | Any value accepted by [`Flux.cleanup`](/guide/concepts/effects#cleanup-with-flux-cleanup) and [`Flux.dispose`](/guide/concepts/scopes#disposing-by-hand-with-flux-dispose) |
+| **`Flux.Owner`** | Active scope/context handle returned by [`Flux.getOwner()`](/guide/concepts/scopes#capturing-the-active-scope) |
+| **`Flux.Namespace`** | Full type of the `Flux` module table (for dependency injection or plugin helpers) |

@@ -44,7 +44,7 @@ end
 Validates a client write on the server (`fn(player, value)`).
 Return `true` to accept (`true, replacement` to store `replacement`), or `false`/`nil` to reject without yielding.
 ]]
-export type Validator<T> = (player: Player, value: T) -> (boolean?, ...T)
+export type Validator<T> = (player: Player, value: T) -> (boolean?, ...T?)
 
 --[[
 A signal synchronized between the server and clients.
@@ -69,19 +69,19 @@ export type SyncSignal<T = any> = Graph.State<T> & {
 	unreliable: (self: any, enabled: boolean?) -> SyncSignal<T>,
 }
 
--- A table & function intersection rather than a `__call` metatable type: the solver only instantiates `T` through a
--- plain function type.
-export type Namespace = {
+export type SyncNamespace = setmetatable<{
 	--[[
 	Sends all pending synced changes immediately instead of waiting for the end of the frame.
 	]]
-	flush: () -> (),
+	read flush: () -> (),
 	--[[
 	Read-only node that is `true` on the server and turns `true` on the client once the initial sync arrives.
 	]]
-	ready: Graph.Node<boolean>,
-	[string]: SyncSignal<any>,
-} & (<T>(key: string, initial: T, validate: Validator<T>?) -> SyncSignal<T>)
+	read ready: Graph.Node<boolean>,
+	read [string]: SyncSignal<any>,
+}, {
+	read __call: <T>(self: unknown, key: string, initial: T, validate: Validator<T>?) -> SyncSignal<T>,
+}>
 
 -- Each synced signal stores its graph node at `[1]` alongside Sync's `_` bookkeeping fields.
 type Synced = {
@@ -807,7 +807,7 @@ local function stepAll()
 end
 
 -- Tests: a namespace over remote-shaped tables (`FireClient`/`FireAllClients` or `FireServer`), plus its instance.
-local function createInternal(isServer: boolean, reliable: any, unreliable: any?): (Namespace, any)
+local function createInternal(isServer: boolean, reliable: any, unreliable: any?): (SyncNamespace, any)
 	local sync = newSync(isServer, reliable, unreliable)
 	local function flushThis()
 		flush(sync)
@@ -826,4 +826,4 @@ Sync._internal = table.freeze({
 	create = createInternal,
 })
 
-return Sync :: Namespace & { _internal: any }
+return Sync :: SyncNamespace & { _internal: any }

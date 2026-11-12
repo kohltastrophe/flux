@@ -40,5 +40,6 @@ local _badFastGet: string = getCount() -- expect-error: createSignal getter retu
 setCount("not a number") -- expect-error: createSignal setter checks value type
 local _badNodeGet: string = Flux.getter(count)() -- expect-error: Flux.getter preserves node type
 Flux.setter(name)(123) -- expect-error: Flux.setter checks value type
+Flux.model("not a node") -- expect-error: model requires a writable node
 
 return nil

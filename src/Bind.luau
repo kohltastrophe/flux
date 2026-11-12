@@ -471,7 +471,7 @@ Updates the instance from `node` and writes changes back to `node` when the inst
 
 [Open Documentation](https://flux.kohl.gg/guide/roblox/creation#flux-model-two-way-binding-in-one-key)
 ]]
-function Bind.model<N>(node: N): Graph.Unwrap<N>
+function Bind.model<T>(node: { read get: (any) -> T, read peek: (any) -> T, read set: (any, ...any) -> any }): T
 	if not isNode(node) then
 		error("Flux.model expects a reactive node", 2)
 	end

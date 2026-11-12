@@ -9,5 +9,8 @@ local coins = Flux.Sync("Coins", 0)
 coins:set("not a number") -- expect-error: a number signal takes numbers
 local _name: string = coins() -- expect-error: reads keep the value type
 local _player: Flux.State<string> = coins:of((nil :: any) :: Player) -- expect-error: per-player keeps the type
+coins:validate(function(_, _value)
+	return true, "not a number" -- expect-error: validator replacement keeps the value type
+end)
 
 return {}

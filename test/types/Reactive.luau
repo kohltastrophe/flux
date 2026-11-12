@@ -110,6 +110,27 @@ local once = Flux.async(function(): number
 	return 1
 end)
 local _once: number? = once.data()
+local queryAsync = Flux.async(function()
+	return { region = "US", page = 1 }
+end, function(query)
+	return `{query.region}:{query.page}`
+end)
+local _queryData: string? = queryAsync.data()
+local maybeUser = Flux.signal(nil :: { name: string }?)
+local _shownUser: Node<Frame?> = Flux.show(maybeUser, function(user)
+	local _name: string = user().name
+	return Flux.new("Frame")({})
+end)
+local _keyedUser: Node<(TextBox | TextLabel)?> = Flux.showKeyed(maybeUser, function(user)
+	local draft = Flux.signal(user().name)
+	return Flux.new("TextBox")({ Text = Flux.model(draft) })
+end, function(falsyUser)
+	local _rawUser: { name: string }? = falsyUser()
+	return Flux.new("TextLabel")({})
+end)
+local _pad = Flux.padding(function()
+	return { x = 8, y = UDim.new(0, 4) }
+end)
 local selected = Flux.selector(name)
 local _isSelected: boolean = selected("Save")
 

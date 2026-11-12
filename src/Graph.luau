@@ -3104,7 +3104,7 @@ type Hooks = {
 -- A node's operators. Every member is `read` and `T` appears only in results, so nodes are covariant in `T`. A typed
 -- write parameter on `__call` makes the solver stop checking the rest of a node, so calls are never write-checked.
 --- @ignore
-type Operators<T> = {
+export type Operators<T> = {
 	read __call: (self: any, value: any, force: boolean?) -> T,
 	read __concat: (a: any, b: any) -> string,
 	read __tostring: (self: any) -> string,

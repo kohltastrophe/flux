@@ -197,6 +197,22 @@ function Async.refetch(self: Data, refetching: any?)
 	trigger(self, input, if refetching == nil then true else refetching)
 end
 
+--- @ignore
+type function NonFunction(t: type): type
+	if t:is("function") then
+		return types.never
+	elseif not t:is("union") then
+		return t
+	end
+	local parts = {}
+	for _, part in t:components() do
+		if not part:is("function") then
+			table.insert(parts, part)
+		end
+	end
+	return if #parts == 0 then types.never elseif #parts == 1 then parts[1] else types.unionof(table.unpack(parts))
+end
+
 --[[
 Runs yielding work off the reactive graph and exposes its progress as `.data`, `.error`, `.loading`, and `.state` nodes.
 `fetcher(value, previous, refetching)` runs untracked whenever `source` is truthy, and stale in-flight results are discarded automatically.
@@ -212,6 +228,9 @@ Async.new = new :: (<S, T>(
 	source: S,
 	fetcher: (value: Graph.Unwrap<S>, previous: T?, refetching: any) -> T,
 	initialValue: T?
-) -> Async<T>) & (<T>(fetcher: (value: nil, previous: T?, refetching: any) -> T, initialValue: T?) -> Async<T>)
+) -> Async<T>) & (<T>(
+	fetcher: (value: nil, previous: T?, refetching: any) -> T,
+	initialValue: NonFunction<T>?
+) -> Async<T>)
 
 return table.freeze(Async)

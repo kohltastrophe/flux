@@ -1,41 +1,12 @@
 --!strict
--- Type-level machinery for property tables: the `Properties`, `EditProperties` and `PropertyType` type functions,
--- `Merge`, and the child types.
+-- Type-level machinery for property tables and component props: `Properties`, `EditProperties`, `PropertyType`,
+-- `Merge`, `NonNil`, and the child types.
 
+local Graph = require("./Graph")
 local Instances = require("@self/Instances")
 
 type Consumer = (...any) -> ()
-
-type Hooks = {
-	read onObserved: (self: any, fn: () -> ()) -> (),
-	read onUnobserved: (self: any, fn: () -> ()) -> (),
-}
-
-type Operators<T> = {
-	read __call: (self: any, value: any, force: boolean?) -> T,
-	read __concat: (a: any, b: any) -> string,
-	read __tostring: (self: any) -> string,
-	read __unm: (self: any) -> number,
-	read __add: (a: any, b: any) -> number,
-	read __sub: (a: any, b: any) -> number,
-	read __mul: (a: any, b: any) -> number,
-	read __div: (a: any, b: any) -> number,
-	read __idiv: (a: any, b: any) -> number,
-	read __mod: (a: any, b: any) -> number,
-	read __pow: (a: any, b: any) -> number,
-	read __lt: (a: any, b: any) -> boolean,
-	read __le: (a: any, b: any) -> boolean,
-	read __index: Hooks,
-}
-
-type GraphNode = setmetatable<{
-	read peek: (self: any) -> any,
-	read get: (self: any) -> any,
-	read set: (self: any, value: any, force: boolean?) -> any,
-	read update: <N>(self: N) -> N,
-	read Destroy: (self: any) -> (),
-	read onDestroy: (self: any, fn: (oldValue: any) -> ()) -> (),
-}, Operators<any>>
+type GraphNode = Graph.Node<any>
 
 --- @within Flux
 --- @private
@@ -55,8 +26,7 @@ export type Children = { Child }
 --- @within Flux
 --- @private
 export type function Properties(instance: type?)
-	local indexType = types.unionof(types.number, types.string)
-	local result = types.newtable(nil, { index = indexType, readresult = types.any, writeresult = types.any })
+	local result = types.newtable(nil, { index = types.number, readresult = types.any, writeresult = types.any })
 	-- `__EVENT`: a change listener per property, called with the new value. Signals connect at the top level.
 	local events = types.newtable(nil, { index = types.number, readresult = types.never, writeresult = types.never })
 	local connectKey = types.singleton("Connect")
@@ -224,5 +194,39 @@ export type Editable = Instances.Editable
 --- @within Flux
 --- @private
 export type Resolve<Name> = index<Creatable & { [string]: Instance }, Name>
+
+--- @within Flux
+--- @private
+export type function NonNil(t: type): type
+	if t:is("nil") then
+		return types.never
+	elseif not t:is("union") then
+		return t
+	end
+	local parts = {}
+	for _, part in t:components() do
+		if not part:is("nil") then
+			table.insert(parts, part)
+		end
+	end
+	return if #parts == 0 then types.never elseif #parts == 1 then parts[1] else types.unionof(table.unpack(parts))
+end
+
+--- @within Flux
+--- @private
+export type function Truthy(t: type): type
+	if t:is("nil") or (t:is("singleton") and t:value() == false) then
+		return types.never
+	elseif not t:is("union") then
+		return t
+	end
+	local parts = {}
+	for _, part in t:components() do
+		if not part:is("nil") and not (part:is("singleton") and part:value() == false) then
+			table.insert(parts, part)
+		end
+	end
+	return if #parts == 0 then types.never elseif #parts == 1 then parts[1] else types.unionof(table.unpack(parts))
+end
 
 return nil
