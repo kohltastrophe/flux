@@ -366,11 +366,50 @@ test("sync · validators may write the signal directly", function()
 		name:of(player)(`[{player.Name}] {value}`)
 		return false
 	end)
+	local clamped
+	clamped = w.server("Clamped", 10, function(_, value)
+		if type(value) ~= "number" then
+			return false
+		end
+		clamped(math.clamp(value, 0, 10))
+		return true
+	end)
+	local perPlayerClamp
+	perPlayerClamp = w.server("PerPlayerClamp", 10, function(player, value)
+		if type(value) ~= "number" then
+			return false
+		end
+		perPlayerClamp:of(player)(math.clamp(value, 0, 10))
+		return true
+	end)
+	local clearedNoOp
+	clearedNoOp = w.server("ClearedNoOp", 10, function(player, _value)
+		clearedNoOp:clear(player)
+		return true
+	end)
 	w.joinAll()
-	local mine = w.clients[1].sync.Name
+	local client = w.clients[1]
+	perPlayerClamp:of(client)(10)
+	w.settle()
+	local mine = client.sync.Name
 	mine("hi")
+	client.sync.Clamped(50)
+	client.sync.PerPlayerClamp(50)
+	client.sync.ClearedNoOp(99)
 	w.settle()
 	expect(mine() == "[Player1] hi", `the client sees the server's value, got {mine()}`)
+	expect(
+		clamped() == 10 and client.sync.Clamped() == 10,
+		`direct no-op clamp overrides return true, got server={clamped()} client={client.sync.Clamped()}`
+	)
+	expect(
+		perPlayerClamp:of(client)() == 10 and client.sync.PerPlayerClamp() == 10,
+		`direct per-player no-op clamp overrides return true, got server={perPlayerClamp:of(client)()} client={client.sync.PerPlayerClamp()}`
+	)
+	expect(
+		clearedNoOp() == 10 and client.sync.ClearedNoOp() == 10,
+		`direct no-op :clear(player) suppresses fallback write, got server={clearedNoOp()} client={client.sync.ClearedNoOp()}`
+	)
 	w.destroy()
 end)
 
@@ -1092,4 +1131,77 @@ sert.test.roblox("sync · the default instance creates its remotes on the server
 	signal(2)
 	Flux.Sync.flush()
 	expect(Flux.Sync.SyncSpecDefault == signal, "lazy indexing finds it")
+end)
+
+test(
+	"sync · validator returning true, nil clears nullable signal while return true preserves incoming value",
+	function()
+		local w = world(1)
+		local c1 = w.clients[1]
+		local nullable = w.server("Nullable", "init" :: string?, function(_, value)
+			if value == "clear" then
+				return true, nil
+			end
+			return false
+		end)
+		local keep = w.server("Keep", "init", function(_, _value)
+			return true
+		end)
+		local cNullable = c1.sync("Nullable")
+		local cKeep = c1.sync("Keep")
+		w.joinAll()
+
+		cNullable("clear")
+		cKeep("accepted")
+		w.settle()
+
+		expect.eq(nullable(), nil, "returning true, nil clears nullable signal on server")
+		expect.eq(cNullable(), nil, "returning true, nil replicates nil to client")
+		expect.eq(keep(), "accepted", "returning true without second return accepts client value")
+		expect.eq(cKeep(), "accepted", "returning true keeps accepted value on client")
+		w.destroy()
+	end
+)
+
+sert.test.roblox("sync · sweeping remotes under ReplicatedStorage recreates them without orphaning signals", function()
+	local RunService = game:GetService("RunService")
+	if not RunService:IsServer() then
+		return
+	end
+	local key1 = env.fresh("SweepResilient1")
+	local key2 = env.fresh("SweepResilient2")
+	local sig1 = Flux.Sync(key1, 10)
+	Flux.Sync.flush()
+
+	local syncFolder = game:GetService("ReplicatedStorage").Flux.Sync
+	local rel = syncFolder:FindFirstChild("SyncEvent")
+	local unrel = syncFolder:FindFirstChild("SyncUnreliable")
+	expect(rel ~= nil and unrel ~= nil, "initial server remotes exist under Flux.Sync")
+	if rel then
+		rel:Destroy()
+	end
+	if unrel then
+		unrel:Destroy()
+	end
+	expect(
+		syncFolder:FindFirstChild("SyncEvent") == nil and syncFolder:FindFirstChild("SyncUnreliable") == nil,
+		"remotes removed cleanly by sweep simulation"
+	)
+
+	sig1(25)
+	Flux.Sync.flush()
+	expect(sig1() == 25 and Flux.Sync[key1] == sig1, "pre-existing default Sync signal remains alive after sweep")
+	expect(
+		syncFolder:FindFirstChild("SyncEvent") ~= nil and syncFolder:FindFirstChild("SyncUnreliable") ~= nil,
+		"flushServer recreates destroyed remotes under ReplicatedStorage"
+	)
+
+	local rel2 = syncFolder:FindFirstChild("SyncEvent")
+	if rel2 then
+		rel2:Destroy()
+	end
+	local sig2 = Flux.Sync(key2, 99)
+	Flux.Sync.flush()
+	expect(sig2() == 99 and Flux.Sync[key2] == sig2, "newly created signal works after partial remote sweep")
+	expect(syncFolder:FindFirstChild("SyncEvent") ~= nil, "getDefault recreates missing remote cleanly")
 end)

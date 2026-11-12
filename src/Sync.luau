@@ -244,9 +244,13 @@ PlayerMT.update = update
 function SyncMT.set(self: Synced, value: any, force: boolean?): any
 	local old = nodeValue(self)
 	rawSet(self, value, force)
+	local sync = self._sync
+	if sync.isServer and sync.validating == self then
+		sync.wrote = true
+	end
 	if old ~= value or force then
 		self._touched = true
-		written(self._sync, self, nil)
+		written(sync, self, nil)
 	end
 	return value
 end
@@ -255,8 +259,14 @@ function PlayerMT.set(self: PlayerSignal, value: any, force: boolean?): any
 	local old = nodeValue(self)
 	rawSet(self, value, force)
 	local owner = self._owner
-	if owner and (old ~= value or force) then
-		written(owner._sync, owner, self._player)
+	if owner then
+		local sync = owner._sync
+		if sync.isServer and sync.validating == owner then
+			sync.wrote = true
+		end
+		if old ~= value or force then
+			written(sync, owner, self._player)
+		end
 	end
 	return value
 end
@@ -288,8 +298,12 @@ function SyncMT.of(self: Synced, player: any): any
 end
 
 function SyncMT.clear(self: Synced, player: any)
+	local sync = self._sync
+	if sync.isServer and sync.validating == self then
+		sync.wrote = true
+	end
 	if drop(self, player) then
-		written(self._sync, self, player)
+		written(sync, self, player)
 	end
 end
 
@@ -376,6 +390,10 @@ local function link(sync: Sync, links: any, handshake: boolean)
 	end
 end
 
+local function unpackResume(ok: boolean, ...: any): (boolean, number, any, any)
+	return ok, select("#", ...), ...
+end
+
 -- Runs `entry`'s validator on a coroutine so a yield is caught (and rejected) instead of leaking `validating` into
 -- other remote threads. Returns whether to store a value and which one.
 local function runValidator(
@@ -387,7 +405,7 @@ local function runValidator(
 ): (boolean, any)
 	local thread = coroutine.create(validator)
 	sync.validating, sync.wrote = entry, false
-	local ok, accepted, replacement = coroutine.resume(thread, player, value)
+	local ok, count, accepted, replacement = unpackResume(coroutine.resume(thread, player, value))
 	sync.validating = nil
 	if coroutine.status(thread) ~= "dead" then
 		coroutine.close(thread)
@@ -405,7 +423,7 @@ local function runValidator(
 	if not accepted or sync.wrote then
 		return false, nil
 	end
-	return true, if replacement ~= nil then replacement else value
+	return true, if count >= 2 then replacement else value
 end
 
 local function applyServer(sync: Sync, entry: Synced, player: any, value: any)
@@ -494,9 +512,16 @@ local function receive(sync: Sync, ...: any)
 	end
 end
 
+local ensureServerRemotes: (sync: Sync) -> (any, any)
+
 local function flushServer(sync: Sync)
-	local reliable = sync.reliable
-	local unreliable = sync.unreliable or reliable
+	local reliable, unreliable
+	if sync == default then
+		reliable, unreliable = ensureServerRemotes(sync)
+	else
+		reliable = sync.reliable
+		unreliable = sync.unreliable or reliable
+	end
 	local received, globalDirty, playerDirty, ackDirty =
 		sync.received, sync.globalDirty, sync.playerDirty, sync.ackDirty
 
@@ -705,11 +730,32 @@ local function findOrCreate(container: Instance, name: string, class: "RemoteEve
 	return remote
 end
 
+function ensureServerRemotes(sync: Sync): (any, any)
+	local reliable = sync.reliable
+	if reliable == nil or reliable.Parent ~= script then
+		if sync.connections[1] then
+			sync.connections[1]:Disconnect()
+		end
+		reliable = findOrCreate(script, "SyncEvent", "RemoteEvent")
+		sync.reliable = reliable
+		sync.connections[1] = reliable.OnServerEvent:Connect(onEvent)
+	end
+	local unreliable = sync.unreliable
+	if unreliable == nil or unreliable.Parent ~= script then
+		unreliable = findOrCreate(script, "SyncUnreliable", "UnreliableRemoteEvent")
+		sync.unreliable = unreliable
+	end
+	return reliable, unreliable or reliable
+end
+
 -- Wires the default instance to remotes under this module: the server creates them, a client waits for them in the
 -- background so creating signals never yields. Clients only send on the reliable remote, so the server only listens
 -- there.
 local function getDefault(): Sync
 	if default then
+		if default.isServer then
+			ensureServerRemotes(default)
+		end
 		return default
 	end
 	local runService, players = RunService, Players
@@ -721,8 +767,8 @@ local function getDefault(): Sync
 		local unreliableEvent: UnreliableRemoteEvent = findOrCreate(script, "SyncUnreliable", "UnreliableRemoteEvent")
 		local sync = newSync(true, event, unreliableEvent)
 		default = sync
-		table.insert(sync.connections, event.OnServerEvent:Connect(onEvent))
-		table.insert(sync.connections, players.PlayerRemoving:Connect(onPlayerRemoving))
+		sync.connections[1] = event.OnServerEvent:Connect(onEvent)
+		sync.connections[2] = players.PlayerRemoving:Connect(onPlayerRemoving)
 		return sync
 	end
 	local sync = newSync(false, nil, nil)
