@@ -2232,3 +2232,326 @@ sert.laws.differential(
 	},
 	{ runs = 80 }
 )
+
+test(
+	"regression · raw(fn) and safe fallback allocating inside a scope do not hijack curChildren of enclosing reaction",
+	function()
+		local trigger = Flux.signal(1)
+		local afterRawDestroyed = 0
+		local afterSafeDestroyed = 0
+
+		local scope, c = Flux.scope(function()
+			local comp = Flux.computed(function()
+				local n = trigger()
+				Flux.raw(function()
+					return Flux.computed(function()
+						return n
+					end)
+				end)
+				local innerAfterRaw = Flux.computed(function()
+					return n + 1
+				end)
+				innerAfterRaw:onDestroy(function()
+					afterRawDestroyed += 1
+				end)
+
+				local guarded = Flux.safe(function()
+					error("boom")
+				end, function()
+					Flux.computed(function()
+						return n
+					end)
+					return n
+				end)
+				guarded:peek()
+
+				local innerAfterSafe = Flux.computed(function()
+					return n + 2
+				end)
+				innerAfterSafe:onDestroy(function()
+					afterSafeDestroyed += 1
+				end)
+				return innerAfterRaw:peek() + innerAfterSafe:peek()
+			end)
+			comp:peek()
+			return comp
+		end)
+
+		expect(
+			afterRawDestroyed == 0 and afterSafeDestroyed == 0,
+			"initial synchronous peek keeps child computeds alive"
+		)
+
+		trigger:set(2)
+		expect(c:peek() == 7, "updated computed evaluates new children")
+		expect(
+			afterRawDestroyed == 1,
+			"re-running computed disposes post-raw(fn) child computed instead of leaking to outer scope"
+		)
+		expect(
+			afterSafeDestroyed == 1,
+			"re-running computed disposes post-safe-fallback child computed instead of leaking to outer scope"
+		)
+
+		scope:Destroy()
+		expect(
+			afterRawDestroyed == 2 and afterSafeDestroyed == 2,
+			"destroying outer scope disposes latest reaction children once"
+		)
+	end
+)
+
+test(
+	"graph · isObserved, isCleanable, locked/subtyped metatables, and tracked getter/createSignal/createMemo fast paths",
+	function()
+		local GraphMod = if env.IS_ROBLOX
+			then require(game:GetService("ReplicatedStorage"):WaitForChild("Flux"):WaitForChild("Graph")) :: any
+			else require("../../src/Graph") :: any
+
+		-- 1. Graph.isObserved across signal, computed, effect, scope, and destroyed states
+		local obsSig = Flux.signal(1)
+		local obsComp = Flux.computed(function()
+			return obsSig() + 1
+		end)
+		local obsSc, obsEff = Flux.scope(function()
+			return Flux.effect(function()
+				obsComp()
+			end)
+		end)
+		expect(
+			not GraphMod.isObserved(obsSc) and not GraphMod.isObserved(obsEff),
+			"scopes and effects are never reported as observed"
+		)
+		expect(
+			not GraphMod.isObserved(obsSig) and not GraphMod.isObserved(obsComp),
+			"before initial flush, signal and computed have 0 observers"
+		)
+		flush()
+		expect(
+			GraphMod.isObserved(obsSig) and GraphMod.isObserved(obsComp),
+			"active effect marks upstream computed and signal observed"
+		)
+		obsSc:Destroy()
+		expect(
+			not GraphMod.isObserved(obsSig) and not GraphMod.isObserved(obsComp),
+			"destroying observer scope clears observed state"
+		)
+		obsComp:Destroy()
+		obsSig:Destroy()
+		expect(
+			not GraphMod.isObserved(obsSig) and not GraphMod.isObserved(obsComp),
+			"destroyed signal and computed report false for isObserved"
+		)
+
+		-- 2. Flux.isCleanable across every supported cleanable kind and non-cleanable values
+		local tmpInst = env.Instance.new("Folder")
+		local tmpConn = tmpInst.Destroying:Connect(function() end)
+		local tmpThread = coroutine.create(function()
+			coroutine.yield()
+		end)
+		coroutine.resume(tmpThread)
+		local regTbl = { x = 1 }
+		GraphMod.register(regTbl, function() end)
+		expect(
+			GraphMod.isCleanable(function() end)
+				and GraphMod.isCleanable(tmpInst)
+				and GraphMod.isCleanable(tmpConn)
+				and GraphMod.isCleanable(tmpThread)
+				and GraphMod.isCleanable({ Destroy = function() end })
+				and GraphMod.isCleanable({ function() end })
+				and GraphMod.isCleanable({})
+				and GraphMod.isCleanable(regTbl),
+			"all cleanable types recognized"
+		)
+		expect(
+			not GraphMod.isCleanable(123) and not GraphMod.isCleanable("abc") and not GraphMod.isCleanable({ x = 1 }),
+			"primitives and plain non-empty map tables are not cleanable"
+		)
+		GraphMod.register(regTbl, nil)
+		tmpConn:Disconnect()
+		Flux.dispose(tmpThread)
+		tmpInst:Destroy()
+
+		-- 3. Locked metatables (`__metatable` string) and `__type = Node` subtyped metatables
+		local locked = setmetatable({ v = 5 }, { __metatable = "locked" })
+		expect(
+			not Flux.isNode(locked) and Flux.raw(locked) == locked and Flux.read(locked) == locked,
+			"locked metatable does not crash isNode, raw, or read"
+		)
+		expectError(function()
+			Flux.getter(locked :: any)
+		end, "Flux.getter expects a node")
+		expectError(function()
+			Flux.setter(locked :: any)
+		end, "Flux.setter expects a node")
+
+		local backingSig = Flux.signal(11)
+		local scForType = Flux.scope(function() end)
+		local nodeMT = getmetatable(scForType :: any)
+		local subMT = { __index = nodeMT, __type = nodeMT }
+		local subNode: any = setmetatable({ (backingSig :: any)[1] }, subMT)
+		expect(
+			Flux.isNode(subNode) and Flux.raw(subNode) == 11 and Flux.read(subNode) == 11,
+			"__type = Node subtype recognized by isNode, raw, and read"
+		)
+		local getSub = Flux.getter(subNode)
+		local setSub = Flux.setter(subNode)
+		setSub(22)
+		expect(getSub() == 22 and backingSig:peek() == 22, "getter and setter work on __type = Node subtype")
+		scForType:Destroy()
+		backingSig:Destroy()
+
+		-- 4. Tracked fast paths + dedup + mid-run pull on Flux.getter, createSignal, createMemo, and dynamic createEffect
+		local s1 = Flux.signal(2)
+		local s2 = Flux.signal(3)
+		local comp = Flux.computed(function()
+			return s1() * 10
+		end)
+		local getS1 = Flux.getter(s1)
+		local getComp = Flux.getter(comp)
+		local getterSum = 0
+		local getterEff = Flux.effect(function()
+			local a = getS1() + getS1() -- curRun dedup on first run, curIdx slot hit on re-runs
+			if s2() > 3 then
+				s1:set(5) -- dirties `comp` mid-run before `getComp()` slot hit!
+			end
+			local b = getComp() + getComp() -- curRun dedup + mid-run pull when dirty
+			getterSum = a + b
+		end)
+		flush()
+		expect(getterSum == 44, "initial tracked getter reads")
+		s1:set(4)
+		flush()
+		expect(getterSum == 88, "re-run hits curIdx fast slot on signal and computed getters")
+		s2:set(4)
+		flush()
+		expect(getterSum == 110, "mid-run dirtying pulls computed getter on curIdx slot hit and requeues self-read")
+		getterEff:Destroy()
+
+		local fastGet, fastSet = Flux.createSignal(1)
+		local gateSig = Flux.signal(0)
+		local dynCleaned = 0
+		local fastTotal = 0
+		local hostScope = Flux.scope(function()
+			local memo = Flux.createMemo(function()
+				return fastGet() + fastGet() -- curRun dedup on first run, curIdx slot hit on re-run
+			end)
+			Flux.effect(function()
+				if gateSig() == 1 then
+					fastSet(7) -- dirties `memo` mid-run before `memo()` slot hit
+				end
+				fastTotal = memo() + memo() -- curRun dedup + live/dirty slot hits
+				-- Dynamic createMemo + createEffect inside an active reaction (`attachSlow` path)
+				local innerMemo = Flux.createMemo(function()
+					Flux.cleanup(function()
+						dynCleaned += 1
+					end)
+					return gateSig()
+				end)
+				Flux.createEffect(function()
+					innerMemo()
+				end)
+			end)
+			flush()
+			expect(fastTotal == 4 and memo() == 2, "live createMemo read inside and outside reaction")
+			fastSet(3)
+			flush()
+			expect(fastTotal == 12 and dynCleaned >= 1, "re-running outer effect cleans up attached inner memo")
+			gateSig:set(1)
+			flush()
+			expect(fastTotal == 28, "mid-run fastSet pulls createMemo on curIdx slot hit")
+		end)
+		hostScope:Destroy()
+
+		-- 5. Diverged track after nested pull must not double-subscribe prefix or curNew dependencies
+		local d1 = Flux.signal(1)
+		local d2 = Flux.signal(2)
+		local d3 = Flux.signal(3)
+		local dToggle = Flux.signal(false)
+		local dInner = Flux.computed(function()
+			if dToggle() then
+				return d1() + d3()
+			end
+			return 0
+		end)
+		local dOuter = Flux.computed(function()
+			if not dToggle() then
+				return d1() + d2()
+			end
+			local a = d1()
+			local b = d3()
+			local c = Flux.raw(dInner)
+			return a + b + c + d1() + d3()
+		end)
+		local dEff = Flux.effect(function()
+			dOuter()
+		end)
+		flush()
+		sert.eq((d1 :: any)[1][4], 1)
+		sert.eq((d3 :: any)[1][4], 0)
+		dToggle:set(true)
+		flush()
+		sert.eq(dOuter:peek(), 12)
+		sert.eq((d1 :: any)[1][4], 1)
+		sert.eq((d3 :: any)[1][4], 1)
+		dToggle:set(false)
+		flush()
+		sert.eq((d3 :: any)[1][4], 0)
+		dEff:Destroy()
+		dInner:Destroy()
+		dOuter:Destroy()
+		d1:Destroy()
+		d2:Destroy()
+		d3:Destroy()
+		dToggle:Destroy()
+
+		-- 6. Flux.safe recovers leaked 0-arg untrack()/owner state on throw and preserves tracking
+		local sOk = Flux.signal(false)
+		local throwCleaned = 0
+		local recoveredFromSafe = Flux.safe(function()
+			Flux.cleanup(function()
+				throwCleaned += 1
+			end)
+			if not sOk() then
+				Flux.untrack()
+				error("partial boom", 0)
+			end
+			return "ok"
+		end, function()
+			return if Flux.isReactive() then "reactive" else "recovered"
+		end)
+		sert.eq(recoveredFromSafe:get(), "recovered")
+		sert(not Flux.isReactive(), "0-arg untrack before throw inside safe does not leak")
+		sOk:set(true)
+		sert.eq(recoveredFromSafe:get(), "ok")
+		sert.eq(throwCleaned, 1)
+		recoveredFromSafe:Destroy()
+		sert.eq(throwCleaned, 2)
+		sOk:Destroy()
+	end
+)
+
+test("dispose · child disposal inside Flux.untrack prunes source observers when no destroys or hooks exist", function()
+	local src = Flux.signal(1)
+	local runs = 0
+	local sc = Flux.scope(function()
+		Flux.untrack(function()
+			Flux.effect(function()
+				runs += 1
+				src:get()
+			end)
+		end)
+	end)
+	flush()
+	expect(runs == 1 and Graph.isObserved(src), "baseline untracked child effect observes source")
+
+	Flux.untrack(function()
+		sc:Destroy()
+	end)
+	expect(not Graph.isObserved(src), "disposing inside Flux.untrack removes observer cleanly with zero zombies")
+
+	src:set(2)
+	flush()
+	expect(runs == 1, "destroyed untracked child effect does not re-run")
+	src:Destroy()
+end)
