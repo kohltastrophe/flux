@@ -102,6 +102,19 @@ test("property · follows an instance tag reactively via # and _tag_ prefixes", 
 	hasPre:Destroy()
 	other:Destroy()
 	frame:Destroy()
+
+	local doomed = Instance.new("Frame")
+	doomed.Parent = workspace
+	local doomedTag = Flux.property(doomed, "#Enemy")
+	expect(doomedTag:get() == false, "seeded before instance destroy")
+	local cs = env.Compat.services.CollectionService
+	local addedBefore = #cs:GetInstanceAddedSignal("Enemy")._listeners
+	doomed:Destroy()
+	expect(
+		#cs:GetInstanceAddedSignal("Enemy")._listeners < addedBefore,
+		"destroying instance disconnects CollectionService tag listeners"
+	)
+	doomedTag:Destroy()
 end)
 
 test("property & call · reject non-Instance, missing property, non-string or empty prefix names", function()
@@ -342,7 +355,7 @@ test("bind · late Bind.children attachment, model destroy pruning, and untracke
 	local afterCount = if (shared :: any)[1].destroys then #(shared :: any)[1].destroys else 0
 	local afterTagCount = if (sharedTag :: any)[1].destroys then #(sharedTag :: any)[1].destroys else 0
 	expect(
-		afterCount == 1 and afterTagCount == 0,
+		afterCount == 0 and afterTagCount == 0,
 		`destroying model-bound instances prunes node destroys: {afterCount}/{afterTagCount}`
 	)
 	shared:Destroy()
@@ -791,4 +804,270 @@ test("listen · callbacks run untracked, ownerless, and safe across mid-flush ad
 	expectError(function()
 		Flux.listen(src, "not a function" :: any)
 	end, "expects a function")
+end)
+
+test("property & Bind.from · owning scope teardown disconnects property, attribute, and tag listeners", function()
+	local frame = Instance.new("Frame")
+	frame.Name = "Initial"
+	frame:SetAttribute("Score", 1)
+	frame.Parent = workspace
+
+	local propNode: any
+	local attrNode: any
+	local tagNode: any
+	local scope = Flux.scope(function()
+		propNode = Flux.property(frame, "Name")
+		attrNode = Flux.property(frame, "$Score")
+		tagNode = Flux.property(frame, "#Highlighted")
+	end)
+
+	frame.Name = "Updated"
+	frame:SetAttribute("Score", 2)
+	frame:AddTag("Highlighted")
+	settle()
+	expect(propNode:peek() == "Updated" and attrNode:peek() == 2 and tagNode:peek() == true, "active bindings follow")
+
+	scope:Destroy()
+	frame.Name = "AfterDestroy"
+	frame:SetAttribute("Score", 3)
+	frame:RemoveTag("Highlighted")
+	settle()
+	expect(
+		propNode:peek() == "Updated" and attrNode:peek() == 2 and tagNode:peek() == true,
+		"scope teardown disconnects property, attribute, and tag listeners"
+	)
+
+	-- Child-scoped Bind.from on an outer signal disconnects without destroying the outer signal
+	local outer = Flux.signal("")
+	local childScope = Flux.scope(function()
+		Bind.from(outer, frame, "Name")
+	end)
+	expect(outer:peek() == "AfterDestroy", "Bind.from syncs initial value")
+	childScope:Destroy()
+	frame.Name = "PostChildDestroy"
+	settle()
+	expect(outer:peek() == "AfterDestroy", "child scope teardown disconnects Bind.from listener")
+	outer:set("StillWritable")
+	expect(outer:peek() == "StillWritable", "outer signal stays alive after child scope teardown")
+
+	-- Stale release closure on the SAME signal after replacement does not evict newer claim, and dual attr+prop buckets stay independent
+	local sig1 = Flux.signal("One")
+	local rel1 = Bind.to(sig1, frame, "Name", false)
+	Bind.attach(frame, "Name", false, rel1)
+	Bind.release(frame, "Name", false)
+	sig1:set("Two")
+	local rel2 = Bind.to(sig1, frame, "Name", false)
+	Bind.attach(frame, "Name", false, rel2)
+	rel1() -- stale release from first binding on the SAME signal must not drop second claim
+	sig1:set("Three")
+	flush()
+	expect(frame.Name == "Three", "second claim on same signal survived stale release")
+	Bind.release(frame, "Name", false)
+	sig1:set("IgnoredAfterRelease")
+	flush()
+	expect(frame.Name == "Three", "cleanly released by Bind.release")
+
+	local dualSig = Flux.signal("InitDual")
+	local relProp = Bind.to(dualSig, frame, "Name", false)
+	local relAttr = Bind.to(dualSig, frame, "DualAttr", true)
+	relAttr() -- release attr bucket while prop bucket remains active
+	dualSig:set("PropOnly")
+	flush()
+	expect(
+		frame.Name == "PropOnly" and frame:GetAttribute("DualAttr") == "InitDual",
+		"releasing attr keeps prop bucket live"
+	)
+	local relAttr2 = Bind.to(dualSig, frame, "DualAttr", true)
+	relProp() -- release prop bucket while attr bucket remains active
+	dualSig:set("AttrOnly")
+	flush()
+	expect(
+		frame.Name == "PropOnly" and frame:GetAttribute("DualAttr") == "AttrOnly",
+		"releasing prop keeps attr bucket live"
+	)
+	relAttr2()
+	dualSig:set("NoneActive")
+	flush()
+	expect(frame:GetAttribute("DualAttr") == "AttrOnly", "both buckets released")
+
+	-- Flux.on with defer = true preserves initial prevInput and returns initial prevResult
+	local onDep = Flux.signal("a")
+	local deferredStep = Flux.on(onDep, function(inp, prevInp, prevRes)
+		return `{inp}:{tostring(prevInp)}:{tostring(prevRes)}`
+	end, true)
+	expect(deferredStep("seed") == "seed", "deferred Flux.on returns prevResult on initial call")
+	onDep:set("b")
+	expect(
+		deferredStep("seed2") == "b:a:seed2",
+		"second call receives initial input as prevInput and latest prevResult"
+	)
+
+	-- Bind.to inside an effect or scope isolatesChanged side-effects from outer tracking and ownership
+	local sideSig = Flux.signal(1)
+	local innerLeak = 0
+	local sideInst = Instance.new("Frame")
+	sideInst:GetPropertyChangedSignal("Name"):Connect(function()
+		sideSig()
+		Flux.effect(function()
+			innerLeak += 1
+		end)
+	end)
+	local outerRuns = 0
+	local effNode = Flux.effect(function()
+		outerRuns += 1
+		local r = Bind.to(Flux.signal("InEffect"), sideInst, "Name", false)
+		r()
+	end)
+	flush()
+	expect(outerRuns == 1, "outer effect ran once")
+	sideSig:set(2)
+	flush()
+	expect(outerRuns == 1, "Bind.to inside effect did not subscribe outer effect to Changed reads")
+	effNode:Destroy()
+	local ownerScope = Flux.scope(function()
+		local r = Bind.to(Flux.signal("InScope"), sideInst, "Name", false)
+		r()
+	end)
+	ownerScope:Destroy()
+	sideInst:Destroy()
+
+	local host = Instance.new("Frame")
+	host.Parent = workspace
+	local kid1 = Instance.new("Frame")
+	local kid2 = Instance.new("Frame")
+	local kid3 = Instance.new("Frame")
+	local kidsSig = Flux.signal(kid1 :: any)
+	local heardKids = 0
+	local unlistenKids = Flux.listen(kidsSig, function()
+		heardKids += 1
+	end)
+	local reactiveMountScope = Flux.scope(function()
+		return Flux.effect(function()
+			Bind.children(kidsSig, host, 5)
+		end)
+	end)
+	flush()
+	reactiveMountScope:Destroy()
+	Bind.children(kidsSig, host, 5)
+	expect(kid1.Parent == host and kid1.LayoutOrder == 5, "single-Instance Bind.children applies layoutOrder offset")
+	kidsSig:set({ kid2, kid3 })
+	flush()
+	expect(
+		heardKids >= 1 and kid1.Parent == nil and kid2.LayoutOrder == 5 and kid3.LayoutOrder == 6,
+		"Bind.children keeps pre-existing Flux.listen alive and applies sequential layoutOrder"
+	)
+	unlistenKids()
+	host:Destroy()
+	kidsSig:set(Instance.new("Frame"))
+	flush()
+
+	frame:Destroy()
+end)
+
+sert.test("bind.from · cleans up destroys entries on instance destroy and preserves computed onDestroy", function()
+	local sharedSig = Flux.signal("")
+	for i = 1, 5 do
+		local frame = Instance.new("Frame")
+		frame.Name = `Item{i}`
+		Bind.from(sharedSig, frame, "Name")
+		frame:Destroy()
+	end
+	local destroys = (sharedSig :: any)[1].destroys
+	expect(destroys == nil or #destroys == 0, "destroying bound instances removes bindDestroy hooks from shared node")
+
+	local frame = Instance.new("Frame")
+	frame.Name = "First"
+	local comp = Flux.computed(function()
+		return "First"
+	end)
+	local userDestroyed = false
+	Bind.from(comp, frame, "Name")
+	comp:onDestroy(function()
+		userDestroyed = true
+	end)
+	comp:Destroy()
+	expect(userDestroyed, "destroying computed with Bind.from still runs subsequent onDestroy callbacks")
+	frame:Destroy()
+	sharedSig:Destroy()
+end)
+
+test("bind · idle BindData teardown fires onUnobserved and cleanly rebinds across listen, to, and children", function()
+	local s = Flux.signal("A")
+	local obs, unobs = 0, 0
+	s:onObserved(function()
+		obs += 1
+	end)
+	s:onUnobserved(function()
+		unobs += 1
+	end)
+
+	local host = Instance.new("Frame")
+	host.Parent = workspace
+	local lbl = Instance.new("TextLabel")
+	lbl.Parent = host
+	local heard = 0
+
+	local unlisten = Bind.listen(s, function()
+		heard += 1
+	end)
+	local stopTo = Bind.to(s, lbl, "Text", false)
+	expect(obs == 1 and unobs == 0, "listen + to observe shared signal once")
+
+	stopTo()
+	expect(obs == 1 and unobs == 0, "stopping to keeps listen active and observed")
+
+	unlisten()
+	expect(obs == 1 and unobs == 1, "stopping final binding tears down idle BindData and fires onUnobserved")
+	local destroys = (s :: any)[1].destroys
+	expect(destroys == nil or #destroys == 0, "idle BindData teardown prunes node destroys")
+
+	stopTo = Bind.to(s, lbl, "Text", false)
+	flush()
+	expect(obs == 2 and unobs == 1, "rebinding Bind.to re-creates BindData and fires onObserved")
+	s:set("B")
+	flush()
+	expect(lbl.Text == "B", "rebound Bind.to tracks updates")
+
+	unlisten = Bind.listen(s, function()
+		heard += 1
+	end)
+	s:set("C")
+	flush()
+	expect(lbl.Text == "C" and heard >= 1, "rebound Bind.listen receives subsequent updates")
+	stopTo()
+	unlisten()
+	expect(obs == 2 and unobs == 2, "releasing rebound listen + to tears down BindData again")
+
+	local childA = Instance.new("Frame")
+	local childB = Instance.new("Frame")
+	local kidsSig = Flux.signal({ childA } :: any)
+	local kObs, kUnobs = 0, 0
+	kidsSig:onObserved(function()
+		kObs += 1
+	end)
+	kidsSig:onUnobserved(function()
+		kUnobs += 1
+	end)
+
+	local stopKids = Bind.children(kidsSig, host)
+	flush()
+	expect(kObs == 1 and kUnobs == 0 and childA.Parent == host, "Bind.children observes and mounts childA")
+	stopKids()
+	expect(kObs == 1 and kUnobs == 1 and childA.Parent == nil, "stopping Bind.children tears down idle BindData")
+
+	stopKids = Bind.children(kidsSig, host)
+	flush()
+	expect(kObs == 2 and kUnobs == 1 and childA.Parent == host, "rebinding Bind.children re-observes signal")
+	kidsSig:set({ childB })
+	flush()
+	expect(childA.Parent == nil and childB.Parent == host, "rebound Bind.children updates mounted children")
+	stopKids()
+	expect(kObs == 2 and kUnobs == 2, "releasing rebound Bind.children fires onUnobserved")
+
+	host:Destroy()
+	lbl:Destroy()
+	childA:Destroy()
+	childB:Destroy()
+	s:Destroy()
+	kidsSig:Destroy()
 end)

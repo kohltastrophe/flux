@@ -7,8 +7,10 @@ local compatTask = Compat.task
 local compatTypeof = Compat.typeof
 local warn = Compat.warn
 
+local cleanup = Graph.cleanup
 local effect = Graph.effect
 local get = Graph.Node.get
+local getOwner = Graph.getOwner
 local kindOf = Graph.kindOf
 local new = Graph.new
 local signal = Graph.signal
@@ -29,6 +31,8 @@ type BindData = {
 	rbx: { [Instance]: { { [string]: any }? } },
 	eff: Graph.Node<any>,
 	flushed: boolean,
+	destroyCleanup: (() -> ())?,
+	pin: number?,
 	children: {
 		cleanupConnection: RBXScriptConnection?,
 		list: { Instance },
@@ -222,11 +226,15 @@ local function onTagChanged(instance: Instance, tag: string, fn: (hasTag: boolea
 	local ancestry = instance.AncestryChanged:Connect(function()
 		check(instance)
 	end)
-	return function()
+	local destroying: RBXScriptConnection
+	local function disconnect()
 		added:Disconnect()
 		removed:Disconnect()
 		ancestry:Disconnect()
+		destroying:Disconnect()
 	end
+	destroying = instance.Destroying:Connect(disconnect)
+	return disconnect
 end
 
 local function onChanged(
@@ -288,6 +296,22 @@ local function writeBinds(bind: BindData, value: any)
 	end
 end
 
+local bindDestroy: (node: Graph.Node<any>, disconnect: () -> ()) -> () -> ()
+
+local function releaseBindDataIfIdle<T>(node: Graph.Node<T>)
+	local data = bindData[node]
+	if data == nil or data.pin ~= nil or next(data.fn) ~= nil or next(data.rbx) ~= nil or data.children ~= nil then
+		return
+	end
+	bindData[node] = nil
+	local stopDestroy = data.destroyCleanup
+	data.destroyCleanup = nil
+	if stopDestroy ~= nil then
+		stopDestroy()
+	end
+	data.eff:Destroy()
+end
+
 local function cleanupChildrenBind<T>(node: Graph.Node<T>, parent: Instance?)
 	local data = bindData[node]
 	local children = data and data.children
@@ -306,6 +330,7 @@ local function cleanupChildrenBind<T>(node: Graph.Node<T>, parent: Instance?)
 	table.clear(children.list)
 	table.clear(children)
 	data.children = nil
+	releaseBindDataIfIdle(node)
 end
 
 local function startBindEffect(node: Graph.Node<any>, data: any): Graph.Node<any>
@@ -362,43 +387,56 @@ local function startBindEffect(node: Graph.Node<any>, data: any): Graph.Node<any
 	return eff
 end
 
-local function getBindData<T>(node: Graph.Node<T>)
+function bindDestroy(node: Graph.Node<any>, disconnect: () -> ()): () -> ()
+	local rawNode: any = node
+	local done = false
+	local destroyingNode = false
+	local disconnectOnce: () -> ()
+	local function onNodeDestroy()
+		destroyingNode = true
+		disconnectOnce()
+	end
+	function disconnectOnce()
+		if done then
+			return
+		end
+		done = true
+		if not destroyingNode then
+			local inner = rawget(rawNode, 1)
+			local destroys = inner and inner.destroys
+			if destroys then
+				local idx = table.find(destroys, onNodeDestroy)
+				if idx then
+					table.remove(destroys, idx)
+				end
+			end
+		end
+		disconnect()
+	end
+	node:onDestroy(onNodeDestroy)
+	return disconnectOnce
+end
+
+local function ensureBindData<T>(node: Graph.Node<T>)
 	local data: any = bindData[node]
 	if data == nil then
 		data = { fn = {}, rbx = {}, children = nil, eff = nil, flushed = false }
 		bindData[node] = data
 		data.eff = startBindEffect(node, data)
-		node:onDestroy(function()
+		data.destroyCleanup = bindDestroy(node, function()
+			if bindData[node] ~= data then
+				return
+			end
 			data.eff:Destroy()
 			table.clear(data.fn)
 			table.clear(data.rbx)
-			cleanupChildrenBind(node)
+			if data.children ~= nil then
+				cleanupChildrenBind(node)
+			end
 			bindData[node] = nil
 		end)
 	end
 	return data
-end
-
-local function bindDestroy(node: Graph.Node<any>, disconnect: () -> ()): () -> ()
-	local rawNode: any = node
-	local done = false
-	local function disconnectOnce()
-		if done then
-			return
-		end
-		done = true
-		local inner = rawNode[1]
-		local destroys = inner and inner.destroys
-		if destroys then
-			local idx = table.find(destroys, disconnectOnce)
-			if idx then
-				table.remove(destroys, idx)
-			end
-		end
-		disconnect()
-	end
-	node:onDestroy(disconnectOnce)
-	return disconnectOnce
 end
 
 local Bind = {
@@ -472,7 +510,7 @@ end
 
 --- @ignore
 function Bind.children<T>(node: Graph.Node<T>, parent: Instance, layoutOrder: number?): () -> ()
-	local data = getBindData(node)
+	local data = ensureBindData(node)
 	bindGeneration += 1
 	local token = bindGeneration
 	local function disconnectBind()
@@ -534,7 +572,7 @@ function Bind.listen<T>(node: Graph.Node<T>, fn: (value: T) -> ()): () -> ()
 	elseif type(fn) ~= "function" then
 		error(`Flux.listen expects a function, got {compatTypeof(fn)}`, 2)
 	end
-	local data = getBindData(node)
+	local data = ensureBindData(node)
 	if not data.flushed then
 		data.eff:peek()
 	end
@@ -542,6 +580,7 @@ function Bind.listen<T>(node: Graph.Node<T>, fn: (value: T) -> ()): () -> ()
 	fnData[fn] = true
 	return function()
 		fnData[fn] = nil
+		releaseBindDataIfIdle(node)
 	end
 end
 
@@ -565,7 +604,20 @@ function Bind.from<T>(node: Graph.Node<T>, instance: Instance, property: string,
 			connection:Disconnect()
 		end
 	end
-	return node, bindDestroy(node, disconnect)
+	local destroyConn: RBXScriptConnection? = nil
+	local stop = bindDestroy(node, function()
+		local conn = destroyConn
+		destroyConn = nil
+		if conn ~= nil then
+			conn:Disconnect()
+		end
+		disconnect()
+	end)
+	destroyConn = instance.Destroying:Once(stop)
+	if getOwner() ~= nil then
+		cleanup(stop)
+	end
+	return node, stop
 end
 
 local function follow(instance: Instance, property: string): Graph.Node<any>
@@ -575,7 +627,7 @@ end
 -- The `"Name"` singleton in `property`'s type keeps a literal argument from widening to `string`, so `K` stays the key.
 --[[
 Creates a [node](https://flux.kohl.gg/guide/concepts/signals) mirroring an [`Instance`](https://create.roblox.com/docs/reference/engine/classes/Instance) property, an attribute (`$Name` or `_attr_Name`), or a [`CollectionService`](https://create.roblox.com/docs/reference/engine/classes/CollectionService) tag (`#Tag` or `_tag_Tag`).
-Disconnects automatically when the node or its owning scope is destroyed.
+Disconnects automatically when `instance`, the node, or its owning scope is destroyed.
 
 ```luau
 local text = Flux.property(textBox, "Text")
@@ -660,25 +712,37 @@ end
 
 --- @ignore
 function Bind.to<T>(node: Graph.Node<T>, instance: Instance, property: string, isAttribute: boolean?)
-	local data = getBindData(node)
+	local data = ensureBindData(node)
+	data.pin = (data.pin or 0) + 1
 	local attribute = isAttribute == true
 	local index = if attribute then 1 else 2
-	release(instance, property, attribute)
+	local ok, err: any = pcall(function()
+		release(instance, property, attribute)
 
-	local value = raw(node)
-	local function applyInitial()
-		if attribute then
-			setAttribute(instance, property, value)
-		else
-			setProperty(instance, property, value)
+		local value = raw(node)
+		local function applyInitial()
+			if attribute then
+				setAttribute(instance, property, value)
+			else
+				setProperty(instance, property, value)
+			end
 		end
+		if isReactive() or Graph.getOwner() ~= nil then
+			withOwner(NO_VALUE, function()
+				untrack(applyInitial)
+			end)
+		else
+			applyInitial()
+		end
+	end)
+	local pin = (data.pin or 1) - 1
+	data.pin = if pin > 0 then pin else nil
+	if not ok then
+		releaseBindDataIfIdle(node)
+		error(err, 0)
 	end
-	if isReactive() or Graph.getOwner() ~= nil then
-		withOwner(NO_VALUE, function()
-			untrack(applyInitial)
-		end)
-	else
-		applyInitial()
+	if bindData[node] ~= data then
+		return NOOP
 	end
 
 	local binds = data.rbx[instance]
@@ -704,6 +768,7 @@ function Bind.to<T>(node: Graph.Node<T>, instance: Instance, property: string, i
 		if (binds[1] == nil or next(binds[1]) == nil) and (binds[2] == nil or next(binds[2]) == nil) then
 			data.rbx[instance] = nil
 		end
+		releaseBindDataIfIdle(node)
 	end
 
 	local key = claimKey(property, attribute)
