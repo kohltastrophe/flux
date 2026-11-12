@@ -417,15 +417,27 @@ local function syncBranchModel(state: any)
 	end
 end
 
+local pendingBranchState: any = nil
 sert.model("show/showKeyed/switch · the mounted branch follows the source's key", {
 	init = function()
-		local source = Flux.signal(nil :: any)
 		local state: any = {
 			value = nil,
 			dirty = true,
 			cases = {},
 		}
+		for _, caseSpec in BRANCH_CASES do
+			state.cases[caseSpec.id] = { mounted = false, activeKey = nil, live = nil, count = 0 }
+		end
+		syncBranchModel(state)
+		pendingBranchState = state
+		return state
+	end,
+	setup = function()
+		local state = pendingBranchState
+		pendingBranchState = nil
+		local source = Flux.signal(nil :: any)
 		local sut: any = {
+			state = state,
 			source = source,
 			cases = {},
 		}
@@ -460,14 +472,13 @@ sert.model("show/showKeyed/switch · the mounted branch follows the source's key
 					node = Flux.showKeyed(input, factory("on"), if caseSpec.withFallback then factory("off") else nil)
 				end
 			end)
-			state.cases[caseSpec.id] = { mounted = false, activeKey = nil, live = nil, count = 0 }
 			sut.cases[caseSpec.id] = { spec = caseSpec, owner = owner, node = node, mounts = mounts }
 		end
 		Flux.flush()
-		syncBranchModel(state)
-		return state, sut
+		return sut
 	end,
-	teardown = function(sut, state)
+	teardown = function(sut)
+		local state = sut.state
 		Flux.flush()
 		syncBranchModel(state)
 		for _, caseSpec in BRANCH_CASES do
@@ -487,10 +498,10 @@ sert.model("show/showKeyed/switch · the mounted branch follows the source's key
 		end
 		Flux.flush()
 	end,
-	actions = {
+	commands = {
 		set = {
 			weight = 3,
-			gen = function(g)
+			gen = function(_state, g)
 				return BRANCH_DOMAIN[g:int(1, #BRANCH_DOMAIN)]
 			end,
 			run = function(sut, value)
@@ -511,31 +522,25 @@ sert.model("show/showKeyed/switch · the mounted branch follows the source's key
 			end,
 		},
 	},
-	never = {
-		mountCleanedTwice = function(_state, sut)
+	invariants = {
+		mountNeverCleanedTwice = function(_state, sut)
 			for _, cSut in sut.cases do
 				for _, mount in cSut.mounts do
-					if mount.cleaned > 1 then
-						return true
-					end
+					sert(mount.cleaned <= 1, "mount never cleaned more than once")
 				end
 			end
-			return false
 		end,
-		activeMountCleanedWhileSynced = function(state, sut)
+		activeMountNotCleanedWhileSynced = function(state, sut)
 			if state.dirty then
-				return false
+				return
 			end
 			for id, cState in state.cases do
 				local mounts = sut.cases[id].mounts
-				if cState.live ~= nil and #mounts > 0 and mounts[#mounts].cleaned ~= 0 then
-					return true
+				if cState.live ~= nil and #mounts > 0 then
+					sert.eq(mounts[#mounts].cleaned, 0, `{id}: active mount not cleaned while synced`)
 				end
 			end
-			return false
 		end,
-	},
-	invariants = {
 		mountCountMatchesReference = function(state, sut)
 			if state.dirty then
 				return
@@ -619,8 +624,22 @@ local function syncPresenceState(state: any)
 	end
 end
 
+local pendingPresenceState: any = nil
 sert.model("presence · mounts on truthy, holds during exit, reverses on re-truthy, and unmounts on done", {
 	init = function()
+		local state = {
+			mode = "unmounted",
+			visible = false,
+			count = 0,
+			pendingDone = false,
+			dirty = false,
+		}
+		pendingPresenceState = state
+		return state
+	end,
+	setup = function()
+		local state = pendingPresenceState
+		pendingPresenceState = nil
 		local visible = Flux.signal(false)
 		local mounts = {}
 		local node
@@ -635,24 +654,17 @@ sert.model("presence · mounts on truthy, holds during exit, reverses on re-trut
 			end)
 		end)
 		Flux.flush()
-		local state = {
-			mode = "unmounted",
-			visible = false,
-			count = 0,
-			pendingDone = false,
-			dirty = false,
-		}
-		local sut = {
+		return {
+			state = state,
 			visible = visible,
 			mounts = mounts,
 			node = node,
 			owner = owner,
 		}
-		return state, sut
 	end,
-	teardown = function(sut, state)
+	teardown = function(sut)
 		Flux.flush()
-		syncPresenceState(state)
+		syncPresenceState(sut.state)
 		sut.node:Destroy()
 		sut.owner:Destroy()
 		Flux.flush()
@@ -660,7 +672,7 @@ sert.model("presence · mounts on truthy, holds during exit, reverses on re-trut
 			sert.eq(mount.cleaned, 1, `mount {i} cleaned once after Destroy`)
 		end
 	end,
-	actions = {
+	commands = {
 		set = {
 			weight = 4,
 			gen = sert.gen.bool(),
@@ -696,23 +708,12 @@ sert.model("presence · mounts on truthy, holds during exit, reverses on re-trut
 			end,
 		},
 	},
-	never = {
-		cleanedMoreThanOnce = function(_state, sut)
-			for _, mount in sut.mounts do
-				if mount.cleaned > 1 then
-					return true
-				end
-			end
-			return false
-		end,
-		activeMountCleaned = function(state, sut)
-			if state.dirty or state.mode == "unmounted" or #sut.mounts == 0 then
-				return false
-			end
-			return sut.mounts[#sut.mounts].cleaned ~= 0
-		end,
-	},
 	invariants = {
+		neverCleanedMoreThanOnce = function(_state, sut)
+			for _, mount in sut.mounts do
+				sert(mount.cleaned <= 1, "presence mount never cleaned more than once")
+			end
+		end,
 		mountCountMatches = function(state, sut)
 			if state.dirty then
 				return
@@ -748,12 +749,31 @@ sert.model("presence · mounts on truthy, holds during exit, reverses on re-trut
 })
 
 local PICK_DOMAIN: { any } = { nil, false, "A", "B" }
-local function genPickValue(g): any
+local function genPickValue(_state, g): any
 	return PICK_DOMAIN[g:int(1, #PICK_DOMAIN)]
 end
 
+local pendingPickState: any = nil
 sert.model("pick/fallback · the value matches and a reader re-runs only when it changes", {
 	init = function()
+		local state = {
+			cond = true :: any,
+			whenTrue = "A" :: any,
+			whenFalse = "B" :: any,
+			val = nil :: any,
+			def = "A" :: any,
+			expectedPick3 = "A" :: any,
+			expectedPick2 = "A" :: any,
+			expectedFb = "A" :: any,
+			expectedRuns = { pick3 = 1, pick2 = 1, fb = 1 },
+			unusedEvaluated = false,
+		}
+		pendingPickState = state
+		return state
+	end,
+	setup = function()
+		local state = pendingPickState
+		pendingPickState = nil
 		local condSig = Flux.signal(true :: any)
 		local trueSig = Flux.signal("A" :: any)
 		local falseSig = Flux.signal("B" :: any)
@@ -796,19 +816,8 @@ sert.model("pick/fallback · the value matches and a reader re-runs only when it
 		sert(rPick2:get() == "A" and runs.pick2 == 1, "pick (omitFalse) starts at A")
 		sert(rFb:get() == "A" and runs.fb == 1, "fallback starts at A")
 
-		local state = {
-			cond = true :: any,
-			whenTrue = "A" :: any,
-			whenFalse = "B" :: any,
-			val = nil :: any,
-			def = "A" :: any,
-			expectedPick3 = "A" :: any,
-			expectedPick2 = "A" :: any,
-			expectedFb = "A" :: any,
-			expectedRuns = { pick3 = 1, pick2 = 1, fb = 1 },
-			unusedEvaluated = false,
-		}
-		local sut = {
+		return {
+			state = state,
 			scope = scope,
 			condSig = condSig,
 			trueSig = trueSig,
@@ -821,13 +830,12 @@ sert.model("pick/fallback · the value matches and a reader re-runs only when it
 			evals = evals,
 			runs = runs,
 		}
-		return state, sut
 	end,
 	teardown = function(sut)
 		sut.scope:Destroy()
 		Flux.flush()
 	end,
-	actions = {
+	commands = {
 		setCond = {
 			weight = 3,
 			gen = genPickValue,
@@ -853,7 +861,8 @@ sert.model("pick/fallback · the value matches and a reader re-runs only when it
 		setTrue = {
 			weight = 3,
 			gen = genPickValue,
-			run = function(sut, value, state)
+			run = function(sut, value)
+				local state = sut.state
 				local beforeEvals = sut.evals.trueBranch
 				sut.trueSig:set(value)
 				sut.rPick3:get()
@@ -879,7 +888,8 @@ sert.model("pick/fallback · the value matches and a reader re-runs only when it
 		setFalse = {
 			weight = 3,
 			gen = genPickValue,
-			run = function(sut, value, state)
+			run = function(sut, value)
+				local state = sut.state
 				local beforeEvals = sut.evals.falseBranch
 				sut.falseSig:set(value)
 				sut.rPick3:get()
@@ -916,7 +926,8 @@ sert.model("pick/fallback · the value matches and a reader re-runs only when it
 		setDefault = {
 			weight = 3,
 			gen = genPickValue,
-			run = function(sut, value, state)
+			run = function(sut, value)
+				local state = sut.state
 				local beforeEvals = sut.evals.defBranch
 				sut.defSig:set(value)
 				sut.rFb:get()
@@ -934,17 +945,10 @@ sert.model("pick/fallback · the value matches and a reader re-runs only when it
 			end,
 		},
 	},
-	never = {
-		unusedBranchEvaluated = function(state)
-			return state.unusedEvaluated
-		end,
-		spuriousReaderRun = function(state, sut)
-			return sut.runs.pick3 ~= state.expectedRuns.pick3
-				or sut.runs.pick2 ~= state.expectedRuns.pick2
-				or sut.runs.fb ~= state.expectedRuns.fb
-		end,
-	},
 	invariants = {
+		unusedBranchNeverEvaluated = function(state)
+			sert(not state.unusedEvaluated, "unused branch is never evaluated")
+		end,
 		pickMatchesReference = function(state, sut)
 			sert.eq(sut.rPick3:get(), state.expectedPick3, "pick matches reference")
 			sert.eq(sut.runs.pick3, state.expectedRuns.pick3, "pick reader re-runs only when value changes")
@@ -1041,7 +1045,7 @@ test("for · non-table source returns empty array and recovers cleanly after map
 		end
 		return string.upper(val)
 	end)
-	sert.fails(function()
+	sert.throws(function()
 		mapped2:get()
 	end, "row boom")
 
@@ -1056,7 +1060,12 @@ local function counters(): { maps: number, disposed: number, nodeDestroyed: numb
 	return { maps = 0, disposed = 0, nodeDestroyed = 0, cleaned = 0 }
 end
 
-local function makeMapperSpec(map: any, genList: (g: any) -> { any }, keyOf: (list: { any }, i: number) -> any, check)
+local function makeMapperSpec(
+	map: any,
+	genList: (state: any, g: any) -> { any },
+	keyOf: (list: { any }, i: number) -> any,
+	check
+)
 	local function row(rows: { [any]: any }, key: any)
 		local counts = rows[key]
 		if counts == nil then
@@ -1091,11 +1100,24 @@ local function makeMapperSpec(map: any, genList: (g: any) -> { any }, keyOf: (li
 		sut.lastResult = result
 	end
 
+	local pendingState: any = nil
 	return {
 		init = function()
+			local state = {
+				current = {},
+				live = {} :: { [any]: any },
+				rows = {} :: { [any]: any },
+				changed = true,
+			}
+			pendingState = state
+			return state
+		end,
+		setup = function()
+			local state = pendingState
+			pendingState = nil
+			local rows = state.rows
 			local list = Flux.signal({})
 			local noise = Flux.signal(0)
-			local rows: { [any]: any } = {}
 			local mapper
 			local owner = Flux.scope(function()
 				mapper = map(list, function(a, b, key)
@@ -1120,13 +1142,8 @@ local function makeMapperSpec(map: any, genList: (g: any) -> { any }, keyOf: (li
 					}
 				end)
 			end)
-			local state = {
-				current = {},
-				live = {} :: { [any]: any },
-				rows = rows,
-				changed = true,
-			}
 			local sut = {
+				state = state,
 				list = list,
 				noise = noise,
 				mapper = mapper,
@@ -1134,9 +1151,10 @@ local function makeMapperSpec(map: any, genList: (g: any) -> { any }, keyOf: (li
 				lastResult = nil :: any,
 			}
 			readAndCheck(state, sut)
-			return state, sut
+			return sut
 		end,
-		teardown = function(sut, state)
+		teardown = function(sut)
+			local state = sut.state
 			readAndCheck(state, sut)
 			sut.mapper:Destroy()
 			sut.owner:Destroy()
@@ -1147,7 +1165,7 @@ local function makeMapperSpec(map: any, genList: (g: any) -> { any }, keyOf: (li
 				sert.eq(counts.cleaned, counts.maps, `{key}: and runs every cleanup once`)
 			end
 		end,
-		actions = {
+		commands = {
 			set = {
 				weight = 3,
 				gen = genList,
@@ -1167,26 +1185,22 @@ local function makeMapperSpec(map: any, genList: (g: any) -> { any }, keyOf: (li
 			},
 			read = {
 				weight = 2,
-				run = function(sut, _arg, state)
-					readAndCheck(state, sut)
+				run = function(sut)
+					readAndCheck(sut.state, sut)
 				end,
 			},
 		},
-		never = {
-			teardownCountExceedsMaps = function(state)
-				for _, counts in state.rows do
-					if
-						counts.disposed > counts.maps
-						or counts.nodeDestroyed > counts.maps
-						or counts.cleaned > counts.maps
-					then
-						return true
-					end
-				end
-				return false
-			end,
-		},
 		invariants = {
+			teardownCountNeverExceedsMaps = function(state)
+				for _, counts in state.rows do
+					expect(
+						counts.disposed <= counts.maps
+							and counts.nodeDestroyed <= counts.maps
+							and counts.cleaned <= counts.maps,
+						"teardown counts never exceed map count"
+					)
+				end
+			end,
 			rowLifecyclesBalanced = function(state, sut)
 				if state.changed then
 					return
@@ -1211,7 +1225,7 @@ sert.model(
 		return Flux.forValue(source, function(indexNode, value)
 			return mapFn(indexNode, value, value)
 		end)
-	end, function(g)
+	end, function(_state, g)
 		local pool, out = table.clone(FOR_VALUE_POOL), {}
 		for _ = 1, g:int(0, math.min(#FOR_VALUE_POOL, g.size + 1)) do
 			table.insert(out, table.remove(pool, g:int(1, #pool)))
@@ -1237,7 +1251,7 @@ sert.model(
 		return Flux.forIndex(source, function(index, itemNode)
 			return mapFn(index, itemNode, index)
 		end)
-	end, function(g)
+	end, function(_state, g)
 		return g:list(function(g)
 			return g:int(1, 3)
 		end, 0, math.min(4, g.size + 1))
@@ -1288,7 +1302,7 @@ local function selectorRef(custom: boolean, value: number?, key: number): boolea
 	return value == key
 end
 
-local function genSelectorValue(g): number?
+local function genSelectorValue(_state, g): number?
 	local n = g:int(0, 5)
 	return if n == 0 then nil else n
 end
@@ -1319,11 +1333,26 @@ local function checkSelectorFlush(state: any, sut: any, where: string)
 	state.dirty = false
 end
 
+local pendingSelectorState: any = nil
 sert.model("selector · per-key readers match the reference and only flipped keys re-run", {
 	init = function()
+		local state = {
+			value = 1 :: number?,
+			dirty = false,
+			earlyRun = false,
+			maxReran = 0,
+			spuriousRun = false,
+		}
+		pendingSelectorState = state
+		return state
+	end,
+	setup = function()
+		local state = pendingSelectorState
+		pendingSelectorState = nil
 		local source = Flux.signal(1 :: number?)
 		local noise = Flux.signal(0)
 		local sut: any = {
+			state = state,
 			source = source,
 			noise = noise,
 			getterRuns = 0,
@@ -1344,16 +1373,10 @@ sert.model("selector · per-key readers match the reference and only flipped key
 		end)
 		Flux.flush()
 		sut.readerScope = Flux.scope(function() end)
-		local state = {
-			value = 1 :: number?,
-			dirty = false,
-			earlyRun = false,
-			maxReran = 0,
-			spuriousRun = false,
-		}
-		return state, sut
+		return sut
 	end,
-	teardown = function(sut, state)
+	teardown = function(sut)
+		local state = sut.state
 		checkSelectorFlush(state, sut, "end")
 		sut.selStd:Destroy()
 		sut.selScope:Destroy()
@@ -1368,7 +1391,7 @@ sert.model("selector · per-key readers match the reference and only flipped key
 		sut.selCustom:Destroy()
 		Flux.flush()
 	end,
-	actions = {
+	commands = {
 		set = {
 			weight = 4,
 			gen = genSelectorValue,
@@ -1382,7 +1405,8 @@ sert.model("selector · per-key readers match the reference and only flipped key
 		},
 		noise = {
 			weight = 1,
-			run = function(sut, _arg, state)
+			run = function(sut)
+				local state = sut.state
 				checkSelectorFlush(state, sut, "before noise")
 				sut.noise:set(sut.noise:peek() + 1)
 				local before = sut.getterRuns
@@ -1392,10 +1416,10 @@ sert.model("selector · per-key readers match the reference and only flipped key
 		},
 		peek = {
 			weight = 2,
-			gen = function(g)
+			gen = function(_state, g)
 				return { key = g:int(1, 5), tracked = g:bool(), custom = g:bool() }
 			end,
-			run = function(sut, arg, state)
+			run = function(sut, arg)
 				local sel = if arg.custom then sut.selCustom else sut.selStd
 				local expected = selectorRef(arg.custom, sut.source:peek(), arg.key)
 				if arg.tracked then
@@ -1411,12 +1435,12 @@ sert.model("selector · per-key readers match the reference and only flipped key
 						`an untracked read of key {arg.key} is current before the flush`
 					)
 				end
-				state.earlyRun = true
+				sut.state.earlyRun = true
 			end,
 		},
 		reader = {
 			weight = 3,
-			gen = function(g)
+			gen = function(_state, g)
 				return { key = g:int(1, 5), custom = g:bool() }
 			end,
 			run = function(sut, arg)
@@ -1434,7 +1458,7 @@ sert.model("selector · per-key readers match the reference and only flipped key
 		},
 		drop = {
 			weight = 1,
-			gen = function(g)
+			gen = function(_state, g)
 				return g:int(1, 8)
 			end,
 			run = function(sut, index)
@@ -1446,20 +1470,16 @@ sert.model("selector · per-key readers match the reference and only flipped key
 		},
 		flush = {
 			weight = 3,
-			run = function(sut, _arg, state)
-				checkSelectorFlush(state, sut, "flush")
+			run = function(sut)
+				checkSelectorFlush(sut.state, sut, "flush")
 			end,
 		},
 	},
-	never = {
-		readerOverran = function(state)
-			return state.maxReran > 1
-		end,
-		unflippedReaderRan = function(state)
-			return state.spuriousRun
-		end,
-	},
 	invariants = {
+		noOverrunOrSpuriousRun = function(state)
+			expect(state.maxReran <= 1, "key reader re-ran at most once")
+			expect(not state.spuriousRun, "unflipped key reader never re-ran")
+		end,
 		readersMatchReferenceWhenFlushed = function(state, sut)
 			if state.dirty then
 				return
@@ -1478,17 +1498,12 @@ sert.model("selector · per-key readers match the reference and only flipped key
 	exhaustive = { size = 2 },
 })
 
-local flickerTest = if env.IS_ROBLOX and game:GetService("Players").LocalPlayer == nil then sert.skip else test
+local flickerTest = if env.IS_ROBLOX and game:GetService("Players").LocalPlayer == nil then sert.test.skip else test
 flickerTest("conditional & list layout · transitions settle cleanly without visibility or rect flicker", function()
 	local Layout = sert.roblox.Layout
 	local Flicker = sert.roblox.Flicker
 	local UDim2 = env.UDim2
-	local rs = if env.IS_ROBLOX then game:GetService("RunService") else env.engine.game:GetService("RunService")
-
-	Flicker.drive(env.frame)
-	sert.defer(function()
-		Flicker.drive(nil)
-	end)
+	local rs = if env.IS_ROBLOX then game:GetService("RunService") else nil
 
 	local showBanner = Flux.signal(true)
 	local items = Flux.signal({ "Alpha", "Beta" })
@@ -1550,49 +1565,56 @@ flickerTest("conditional & list layout · transitions settle cleanly without vis
 		Flux.flush()
 	end)
 
-	local settled, moving = Layout.settle(screen, { step = env.frame, lead = 1, stable = 2 })
-	expect(settled, `initial conditional/list layout settled ({tostring(moving)})`)
-	expect(bannerFrame ~= nil and Layout.visible(bannerFrame :: any, screen), "banner is visible")
-	expect(rowFrames.Alpha ~= nil and Layout.visible(rowFrames.Alpha, screen), "Row_Alpha is visible")
-	Layout.audit(columnFrame, { fitsParent = true })
+	env.frame()
+	local settleOpts = { stableFrames = 2, runService = rs }
+	expect(Layout.settle(screen, settleOpts) <= 30, "initial conditional/list layout settled")
+	expect(bannerFrame ~= nil and Layout.geometry.visible(bannerFrame :: any), "banner is visible")
+	expect(rowFrames.Alpha ~= nil and Layout.geometry.visible(rowFrames.Alpha), "Row_Alpha is visible")
+	Layout.fitsParent(columnFrame)
 
 	-- Insertion across forValue and forIndex
-	local enterResult = Flicker.around(function()
-		return rowFrames.Gamma
-	end, function()
-		items:set({ "Alpha", "Beta", "Gamma" })
-		idxItems:set({ 10, 20, 30 })
-	end, { runService = rs, stable = 2, label = "Row_Gamma enter" })
-	Flicker.expect(enterResult, "Row_Gamma enter")
-	Layout.audit(columnFrame, { fitsParent = true })
+	items:set({ "Alpha", "Beta", "Gamma" })
+	idxItems:set({ 10, 20, 30 })
+	flush()
+	Flicker.steady(rowFrames.Gamma, { step = env.frame, stableFrames = 2, label = "Row_Gamma enter" })
+	Layout.fitsParent(columnFrame)
 
 	-- Permutation across forValue and forIndex
-	local permuteResult = Flicker.around(function()
-		return rowFrames.Gamma
-	end, function()
-		items:set({ "Gamma", "Alpha", "Beta" })
-		idxItems:set({ 30, 10, 20 })
-	end, { runService = rs, stable = 2, motion = 60, label = "Row_Gamma permutation" })
-	Flicker.expect(permuteResult, "Row_Gamma permutation")
-	Layout.audit(columnFrame, { fitsParent = true })
+	items:set({ "Gamma", "Alpha", "Beta" })
+	idxItems:set({ 30, 10, 20 })
+	flush()
+	Flicker.steady(rowFrames.Gamma, { step = env.frame, stableFrames = 2, label = "Row_Gamma permutation" })
+	Layout.fitsParent(columnFrame)
 
 	-- Removal across forValue, forIndex, and conditional banner hide
-	local removeResult = Flicker.around(function()
-		return rowFrames.Beta
-	end, function()
-		showBanner:set(false)
-		items:set({ "Gamma", "Beta" })
-		idxItems:set({ 30, 20 })
-	end, { runService = rs, stable = 2, motion = 64, label = "Row_Beta shift on removal and banner hide" })
-	Flicker.expect(removeResult, "Row_Beta shift on removal and banner hide")
-	Layout.audit(columnFrame, { fitsParent = true })
+	showBanner:set(false)
+	items:set({ "Gamma", "Beta" })
+	idxItems:set({ 30, 20 })
+	flush()
+	Flicker.steady(rowFrames.Beta, {
+		step = env.frame,
+		stableFrames = 2,
+		label = "Row_Beta shift on removal and banner hide",
+	})
+	Layout.fitsParent(columnFrame)
 
-	local settledAfter, movingAfter = Layout.settle(screen, { step = env.frame, lead = 1, stable = 2 })
-	expect(settledAfter, `post-transition layout settled ({tostring(movingAfter)})`)
+	expect(Layout.settle(screen, settleOpts) <= 30, "post-transition layout settled")
 end)
 
+local pendingSweepState: any = nil
 sert.model("selector · subscription lifecycle and cache sweeping evicts unobserved keys and preserves active keys", {
 	init = function()
+		local state = {
+			active = "k1",
+			subscribed = { k1 = false, k2 = false, k3 = false, k4 = false } :: { [string]: boolean },
+			sweptSinceUnsub = false,
+		}
+		pendingSweepState = state
+		return state
+	end,
+	setup = function()
+		local state = pendingSweepState
+		pendingSweepState = nil
 		local active = Flux.signal("k1")
 		local sel = Flux.selector(active)
 		local lazyComputeds: { [string]: any } = {}
@@ -1606,12 +1628,8 @@ sert.model("selector · subscription lifecycle and cache sweeping evicts unobser
 				end)
 			end
 		end)
-		local state = {
-			active = "k1",
-			subscribed = { k1 = false, k2 = false, k3 = false, k4 = false } :: { [string]: boolean },
-			sweptSinceUnsub = false,
-		}
-		local sut = {
+		return {
+			state = state,
 			scope = scope,
 			active = active,
 			sel = sel,
@@ -1620,7 +1638,6 @@ sert.model("selector · subscription lifecycle and cache sweeping evicts unobser
 			seen = seen,
 			probeCounter = 0,
 		}
-		return state, sut
 	end,
 	teardown = function(sut)
 		for _, eff in sut.subs do
@@ -1630,10 +1647,10 @@ sert.model("selector · subscription lifecycle and cache sweeping evicts unobser
 		sut.sel:Destroy()
 		flush()
 	end,
-	actions = {
+	commands = {
 		SelectKey = {
 			weight = 3,
-			gen = function(g)
+			gen = function(_state, g)
 				return `k{g:int(1, 4)}`
 			end,
 			run = function(sut, key)
@@ -1646,7 +1663,7 @@ sert.model("selector · subscription lifecycle and cache sweeping evicts unobser
 		},
 		SubscribeKey = {
 			weight = 3,
-			gen = function(g)
+			gen = function(_state, g)
 				return `k{g:int(1, 4)}`
 			end,
 			run = function(sut, key)
@@ -1664,7 +1681,7 @@ sert.model("selector · subscription lifecycle and cache sweeping evicts unobser
 		},
 		UnsubscribeKey = {
 			weight = 2,
-			gen = function(g)
+			gen = function(_state, g)
 				return `k{g:int(1, 4)}`
 			end,
 			run = function(sut, key)
@@ -1682,11 +1699,11 @@ sert.model("selector · subscription lifecycle and cache sweeping evicts unobser
 		},
 		ReadLazyComputed = {
 			weight = 2,
-			gen = function(g)
+			gen = function(_state, g)
 				return `k{g:int(1, 4)}`
 			end,
-			run = function(sut, key, state)
-				sert.eq(sut.lazyComputeds[key](), state.active == key, `lazy computed for {key}`)
+			run = function(sut, key)
+				sert.eq(sut.lazyComputeds[key](), sut.state.active == key, `lazy computed for {key}`)
 			end,
 			next = function(state)
 				state.sweptSinceUnsub = false
@@ -1710,20 +1727,15 @@ sert.model("selector · subscription lifecycle and cache sweeping evicts unobser
 			end,
 		},
 	},
-	never = {
-		unobservedKeyRetainedAfterSweep = function(state, sut)
+	invariants = {
+		unobservedKeysEvictedAfterSweep = function(state, sut)
 			if not state.sweptSinceUnsub then
-				return false
+				return
 			end
 			for k, isSub in state.subscribed do
-				if not isSub and (sut.sel :: any)._nodes[k] ~= nil then
-					return true
-				end
+				expect(isSub or (sut.sel :: any)._nodes[k] == nil, `unobserved key {k} evicted after sweep`)
 			end
-			return false
 		end,
-	},
-	invariants = {
 		activeSubscribersAndLazyComputedsMatchSelection = function(state, sut)
 			local activeCount = 0
 			for k, isSub in state.subscribed do
@@ -1753,9 +1765,10 @@ local lastDynamicControls: {
 	indexItems: any,
 } = nil :: any
 
-sert.laws.ui("conditional · dynamic forValue, forIndex, show, and switch UI reconciliation", {
-	noTextOverflow = not env.IS_ROBLOX,
-	mount = function(_uiEnv, parent, viewport)
+sert.roblox.Layout.matrix(
+	"conditional · dynamic forValue, forIndex, show, and switch UI reconciliation",
+	function(parent, preset)
+		local viewport = preset.size
 		local UDim2 = env.UDim2
 		local hostParent, cleanHost = env.mountUi(parent, viewport)
 		local showAlert = Flux.signal(true)
@@ -1845,53 +1858,61 @@ sert.laws.ui("conditional · dynamic forValue, forIndex, show, and switch UI rec
 			valueItems = valueItems,
 			indexItems = indexItems,
 		}
-		sert.defer(function()
-			scope:Destroy()
-			root:Destroy()
-			cleanHost()
+		return {
+			root = root,
+			cleanup = function()
+				scope:Destroy()
+				root:Destroy()
+				cleanHost()
+				flush()
+			end,
+		}
+	end,
+	{
+		audit = { textOverflow = not env.IS_ROBLOX },
+		check = function(root, vp)
+			local RobloxLayout = sert.roblox.Layout
+			local controls = lastDynamicControls
+			local checkText = not env.IS_ROBLOX
+			RobloxLayout.fitsParent(root :: GuiObject)
+			RobloxLayout.audit(root, { viewport = vp.size, textOverflow = checkText })
+
+			local valList = root:FindFirstChild("ValueList") :: Frame
+			expect(valList ~= nil, "ValueList initially mounted")
+			local sword = valList:FindFirstChild("Val_Sword") :: Frame
+			local shield = valList:FindFirstChild("Val_Shield") :: Frame
+			local potion = valList:FindFirstChild("Val_Potion") :: Frame
+			env.expectSpacing({ sword, shield, potion }, "Y", 4)
+			RobloxLayout.aligned({ sword, shield, potion }, "left")
+
+			-- Reorder + insert + hide banner
+			controls.showAlert:set(false)
+			controls.valueItems:set({ "Potion", "Bow", "Sword" })
 			flush()
-		end)
-		return root
-	end,
-	check = function(_uiEnv, root, vp)
-		local RobloxLayout = sert.roblox.Layout
-		local controls = lastDynamicControls
-		local checkText = not env.IS_ROBLOX
-		RobloxLayout.audit(root, { viewport = vp.size, fitsParent = true, noTextOverflow = checkText })
+			RobloxLayout.fitsParent(root :: GuiObject)
+			RobloxLayout.audit(root, { viewport = vp.size, textOverflow = checkText })
+			expect(root:FindFirstChild("AlertBanner") == nil, "AlertBanner unmounted when showAlert is false")
+			local bow = valList:FindFirstChild("Val_Bow") :: Frame
+			expect(valList:FindFirstChild("Val_Shield") == nil, "Val_Shield unmounted")
+			env.expectSpacing({ potion, bow, sword }, "Y", 4)
 
-		local valList = root:FindFirstChild("ValueList") :: Frame
-		expect(valList ~= nil, "ValueList initially mounted")
-		local sword = valList:FindFirstChild("Val_Sword") :: Frame
-		local shield = valList:FindFirstChild("Val_Shield") :: Frame
-		local potion = valList:FindFirstChild("Val_Potion") :: Frame
-		RobloxLayout.spacing({ sword, shield, potion }, "Y", 4)
-		RobloxLayout.aligned({ sword, shield, potion }, "Left")
-
-		-- Reorder + insert + hide banner
-		controls.showAlert:set(false)
-		controls.valueItems:set({ "Potion", "Bow", "Sword" })
-		flush()
-		RobloxLayout.audit(root, { viewport = vp.size, fitsParent = true, noTextOverflow = checkText })
-		expect(root:FindFirstChild("AlertBanner") == nil, "AlertBanner unmounted when showAlert is false")
-		local bow = valList:FindFirstChild("Val_Bow") :: Frame
-		expect(valList:FindFirstChild("Val_Shield") == nil, "Val_Shield unmounted")
-		RobloxLayout.spacing({ potion, bow, sword }, "Y", 4)
-
-		-- Switch to forIndex tab and mutate
-		controls.tab:set("index")
-		controls.indexItems:set({ 100, 200, 300, 400 })
-		flush()
-		RobloxLayout.audit(root, { viewport = vp.size, fitsParent = true, noTextOverflow = checkText })
-		local idxList = root:FindFirstChild("IndexList") :: Frame
-		expect(idxList ~= nil, "IndexList mounted on switch")
-		local i1 = idxList:FindFirstChild("Idx_1") :: Frame
-		local i2 = idxList:FindFirstChild("Idx_2") :: Frame
-		local i3 = idxList:FindFirstChild("Idx_3") :: Frame
-		local i4 = idxList:FindFirstChild("Idx_4") :: Frame
-		RobloxLayout.spacing({ i1, i2, i3, i4 }, "Y", 4)
-		RobloxLayout.aligned({ i1, i2, i3, i4 }, "Left")
-	end,
-})
+			-- Switch to forIndex tab and mutate
+			controls.tab:set("index")
+			controls.indexItems:set({ 100, 200, 300, 400 })
+			flush()
+			RobloxLayout.fitsParent(root :: GuiObject)
+			RobloxLayout.audit(root, { viewport = vp.size, textOverflow = checkText })
+			local idxList = root:FindFirstChild("IndexList") :: Frame
+			expect(idxList ~= nil, "IndexList mounted on switch")
+			local i1 = idxList:FindFirstChild("Idx_1") :: Frame
+			local i2 = idxList:FindFirstChild("Idx_2") :: Frame
+			local i3 = idxList:FindFirstChild("Idx_3") :: Frame
+			local i4 = idxList:FindFirstChild("Idx_4") :: Frame
+			env.expectSpacing({ i1, i2, i3, i4 }, "Y", 4)
+			RobloxLayout.aligned({ i1, i2, i3, i4 }, "left")
+		end,
+	}
+)
 
 sert.laws.differential("conditional · forValue and forIndex reconciliation matches functional oracle", {
 	gen = sert.gen.list(sert.gen.list(sert.gen.pick({ "A", "B", "C", "D", "E", "F" }), 0, 5), 1, 8),
@@ -1980,5 +2001,3 @@ sert.laws.differential("conditional · forValue and forIndex reconciliation matc
 		return `{table.concat(gotVal, ",")}|{table.concat(gotIdx, ",")}`
 	end,
 }, { runs = 60 })
-
-return {}

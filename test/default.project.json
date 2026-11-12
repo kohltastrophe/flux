@@ -1,33 +1,14 @@
 {
-	"name": "Test Flux",
-	"emitLegacyScripts": false,
+	"name": "Flux-Tests",
 	"tree": {
 		"$className": "DataModel",
 		"ReplicatedStorage": {
+			"$className": "ReplicatedStorage",
 			"Flux": {
 				"$path": "../src"
 			},
-			"sert": {
-				"$path": "../.sert/sert/src"
-			},
-			"Flux.Tests": {
-				"$path": "runner/Config.luau"
-			},
 			"Flux.lib": {
 				"$path": "lib"
-			},
-			"Flux.unit": {
-				"$path": "unit"
-			}
-		},
-		"ServerScriptService": {
-			"Flux.TestRunner": {
-				"$path": "runner/server.server.luau"
-			}
-		},
-		"ReplicatedFirst": {
-			"Flux.TestRunner": {
-				"$path": "runner/client.client.luau"
 			}
 		}
 	}

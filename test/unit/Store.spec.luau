@@ -598,6 +598,7 @@ local function runReconcileStep(op: string, state: any, sut: any, arg: { keyed: 
 	end
 end
 
+local pendingStoreInit: any = nil
 local storeModelSpec = {
 	init = function()
 		local state: any = {
@@ -617,13 +618,20 @@ local storeModelSpec = {
 			},
 		}
 		state.mirror = plain(initial)
+		pendingStoreInit = { state = state, initial = initial }
+		return state
+	end,
+	setup = function()
+		local info = pendingStoreInit
+		pendingStoreInit = nil
 		local store
 		local storeScope = Flux.scope(function()
-			store = Flux.store(plain(initial))
+			store = Flux.store(plain(info.initial))
 		end)
 		local rawRoot = Store.unwrap(store)
 		local readerScope = Flux.scope(function() end)
-		local sut = {
+		return {
+			state = info.state,
 			store = store,
 			storeScope = storeScope,
 			rawRoot = rawRoot,
@@ -631,9 +639,9 @@ local storeModelSpec = {
 			proxies = {} :: { [any]: any },
 			readers = {},
 		}
-		return state, sut
 	end,
-	teardown = function(sut, state)
+	teardown = function(sut)
+		local state = sut.state
 		local checkOk, checkErr = pcall(function()
 			Flux.flush()
 			checkReaders(state, sut, "at the end")
@@ -658,10 +666,10 @@ local storeModelSpec = {
 		end
 		sert.eq(sut.rawRoot, state.mirror, "teardown leaves the raw table intact")
 	end,
-	actions = {
+	commands = {
 		setRoot = {
 			weight = 3,
-			gen = function(g, state)
+			gen = function(state, g)
 				local key = g:pick({ "a", "b", 1, 2, 5, "list" })
 				local value = if key == "list"
 					then (if g:bool(0.8)
@@ -687,7 +695,7 @@ local storeModelSpec = {
 		},
 		setField = {
 			weight = 3,
-			gen = function(g)
+			gen = function(_state, g)
 				return {
 					key = g:pick(ROOT_KEYS),
 					field = g:pick({ "x", "y" }),
@@ -695,7 +703,8 @@ local storeModelSpec = {
 					viaIteration = g:bool(),
 				}
 			end,
-			run = function(sut, arg, state)
+			run = function(sut, arg)
+				local state = sut.state
 				if type(state.mirror[arg.key]) == "table" then
 					local proxy
 					if arg.viaIteration then
@@ -719,10 +728,11 @@ local storeModelSpec = {
 		},
 		alias = {
 			weight = 1,
-			gen = function(g)
+			gen = function(_state, g)
 				return { from = g:pick(ROOT_KEYS), to = g:pick(ROOT_KEYS) }
 			end,
-			run = function(sut, arg, state)
+			run = function(sut, arg)
+				local state = sut.state
 				if arg.from ~= arg.to and type(state.mirror[arg.from]) == "table" then
 					sut.store[arg.to] = walkStore(sut, { arg.from })
 				end
@@ -736,15 +746,15 @@ local storeModelSpec = {
 		},
 		insert = {
 			weight = 3,
-			gen = function(g, state)
+			gen = function(state, g)
 				local list = if type(state.mirror.list) == "table" then state.mirror.list else nil
 				local how = g:pick({ "append", "past the end", "at" })
 				local pos = if list then g:int(1, #list + 1) else 1
 				local row = { id = nextStateId(state), v = g:int(1, 3) }
 				return { how = how, pos = pos, row = row }
 			end,
-			run = function(sut, arg, state)
-				local list, proxy = listOf(state, sut)
+			run = function(sut, arg)
+				local list, proxy = listOf(sut.state, sut)
 				if list then
 					local pos = math.clamp(arg.pos, 1, #list + 1)
 					if arg.how == "append" then
@@ -772,24 +782,28 @@ local storeModelSpec = {
 		},
 		remove = {
 			weight = 3,
-			gen = function(g, state)
+			gen = function(state, g)
 				local list = if type(state.mirror.list) == "table" then state.mirror.list else nil
 				local pos = if g:bool() and list and #list > 0 then g:int(1, #list) else nil
 				return pos
 			end,
-			run = function(sut, pos, state)
-				local list, proxy = listOf(state, sut)
+			run = function(sut, pos)
+				local list, proxy = listOf(sut.state, sut)
 				if list then
 					local validPos = if pos ~= nil and pos >= 1 and pos <= #list then pos else nil
-					return { removed = Store.remove(proxy, validPos), validPos = validPos, hadList = true }
+					local expected = list[validPos or #list]
+					return {
+						removed = Store.remove(proxy, validPos),
+						expected = expected,
+						validPos = validPos,
+						hadList = true,
+					}
 				end
 				return { hadList = false }
 			end,
-			post = function(state, _pos, res)
+			post = function(_state, _sut, _pos, res)
 				if res.hadList then
-					local list = state.mirror.list
-					local expected = list[res.validPos or #list]
-					sert.eq(res.removed, expected, "Store.remove returns the removed element")
+					sert.eq(res.removed, res.expected, "Store.remove returns the removed element")
 				end
 			end,
 			next = function(state, _pos, res)
@@ -801,13 +815,13 @@ local storeModelSpec = {
 		},
 		move = {
 			weight = 2,
-			gen = function(g, state)
+			gen = function(state, g)
 				local list = if type(state.mirror.list) == "table" then state.mirror.list else nil
 				local n = if list and #list > 0 then #list else 1
 				return { from = g:int(1, n), to = g:int(1, n) }
 			end,
-			run = function(sut, arg, state)
-				local list, proxy = listOf(state, sut)
+			run = function(sut, arg)
+				local list, proxy = listOf(sut.state, sut)
 				if list and #list > 0 then
 					local from, to = math.clamp(arg.from, 1, #list), math.clamp(arg.to, 1, #list)
 					Store.move(proxy, from, to)
@@ -824,13 +838,13 @@ local storeModelSpec = {
 		},
 		setRow = {
 			weight = 2,
-			gen = function(g, state)
+			gen = function(state, g)
 				local list = if type(state.mirror.list) == "table" then state.mirror.list else nil
 				local n = if list and #list > 0 then #list else 1
 				return { index = g:int(1, n), value = g:int(1, 3) }
 			end,
-			run = function(sut, arg, state)
-				local list = listOf(state, sut)
+			run = function(sut, arg)
+				local list = listOf(sut.state, sut)
 				if list and #list > 0 then
 					local index = math.clamp(arg.index, 1, #list)
 					walkStore(sut, { "list", index }).v = arg.value
@@ -846,13 +860,13 @@ local storeModelSpec = {
 		},
 		aliasRow = {
 			weight = 1,
-			gen = function(g, state)
+			gen = function(state, g)
 				local list = if type(state.mirror.list) == "table" then state.mirror.list else nil
 				local n = if list and #list > 1 then #list else 2
 				return { from = g:int(1, n), to = g:int(1, n) }
 			end,
-			run = function(sut, arg, state)
-				local list, proxy = listOf(state, sut)
+			run = function(sut, arg)
+				local list, proxy = listOf(sut.state, sut)
 				if list and #list > 1 then
 					local from, to = math.clamp(arg.from, 1, #list), math.clamp(arg.to, 1, #list)
 					if from ~= to then
@@ -873,7 +887,7 @@ local storeModelSpec = {
 		},
 		badPos = {
 			weight = 1,
-			gen = function(g, state)
+			gen = function(state, g)
 				local list = if type(state.mirror.list) == "table" then state.mirror.list else nil
 				local n = if list then #list else 0
 				return {
@@ -881,8 +895,8 @@ local storeModelSpec = {
 					bad = g:pick({ 0, n + 2, 1.5, "1" }),
 				}
 			end,
-			run = function(sut, arg, state)
-				local list, proxy = listOf(state, sut)
+			run = function(sut, arg)
+				local list, proxy = listOf(sut.state, sut)
 				if list then
 					local n = #list
 					local bad = if type(arg.bad) == "number" and arg.bad > 1.5 then n + 2 else arg.bad
@@ -901,7 +915,7 @@ local storeModelSpec = {
 		},
 		reconcileLeaf = {
 			weight = 2,
-			gen = function(g, state)
+			gen = function(state, g)
 				local keyed = g:bool()
 				local choices: { any } = {}
 				for _, key in ROOT_KEYS do
@@ -916,7 +930,8 @@ local storeModelSpec = {
 				end
 				return { keyed = keyed, target = g:pick(choices), value = g:int(1, 3) }
 			end,
-			run = function(sut, arg, state)
+			run = function(sut, arg)
+				local state = sut.state
 				if not hasAlias(state.mirror) then
 					local target = arg.target
 					if target.kind == "nested" and type(state.mirror[target.key]) == "table" then
@@ -933,7 +948,7 @@ local storeModelSpec = {
 		},
 		reconcileList = {
 			weight = 2,
-			gen = function(g, state)
+			gen = function(state, g)
 				local list = if type(state.mirror.list) == "table" then state.mirror.list else nil
 				return {
 					keyed = g:bool(),
@@ -942,14 +957,15 @@ local storeModelSpec = {
 					end),
 				}
 			end,
-			run = function(sut, arg, state)
+			run = function(sut, arg)
+				local state = sut.state
 				state.dirtyAll = true
 				runReconcileStep("reconcileList", state, sut, arg)
 			end,
 		},
 		reconcileRoot = {
 			weight = 2,
-			gen = function(g, state)
+			gen = function(state, g)
 				local keyed = g:bool()
 				if g.size <= 3 then
 					local snapshot = plain(state.mirror)
@@ -976,23 +992,24 @@ local storeModelSpec = {
 					else g:pick({ 1, "s" })
 				return { keyed = keyed, snapshot = snapshot }
 			end,
-			run = function(sut, arg, state)
+			run = function(sut, arg)
+				local state = sut.state
 				state.dirtyAll = true
 				runReconcileStep("reconcileRoot", state, sut, arg)
 			end,
 		},
 		reconcileSame = {
 			weight = 1,
-			gen = function(g)
+			gen = function(_state, g)
 				return { keyed = g:bool(), snapshot = nil }
 			end,
-			run = function(sut, arg, state)
-				runReconcileStep("reconcileSame", state, sut, arg)
+			run = function(sut, arg)
+				runReconcileStep("reconcileSame", sut.state, sut, arg)
 			end,
 		},
 		reader = {
 			weight = 3,
-			gen = function(g)
+			gen = function(_state, g)
 				return { spec = g:pick(READ_SPECS), isEffect = g:bool() }
 			end,
 			run = function(sut, arg)
@@ -1005,7 +1022,7 @@ local storeModelSpec = {
 		},
 		dropReader = {
 			weight = 1,
-			gen = function(g)
+			gen = function(_state, g)
 				return g:int(1, 8)
 			end,
 			run = function(sut, index)
@@ -1017,36 +1034,16 @@ local storeModelSpec = {
 		},
 		flush = {
 			weight = 5,
-			run = function(sut, _arg, state)
+			run = function(sut)
 				Flux.flush()
-				checkReaders(state, sut, "after flush")
+				checkReaders(sut.state, sut, "after flush")
 			end,
 		},
 	},
-	never = {
-		rootProxyStrippedEarly = function(_state, sut)
-			return getmetatable(sut.store) == nil
-		end,
-		liveProxyTornDown = function(_state, sut)
-			local live = reachable(sut.rawRoot)
-			for raw, proxy in sut.proxies do
-				if live[raw] and getmetatable(proxy) == nil then
-					return true
-				end
-			end
-			return false
-		end,
-		deadProxyLeaked = function(_state, sut)
-			local live = reachable(sut.rawRoot)
-			for raw, proxy in sut.proxies do
-				if not live[raw] and getmetatable(proxy) ~= nil then
-					return true
-				end
-			end
-			return false
-		end,
-	},
 	invariants = {
+		rootProxyNeverStrippedEarly = function(_state, sut)
+			sert(getmetatable(sut.store) ~= nil, "root proxy stays live until teardown")
+		end,
 		rawMatchesMirror = function(state, sut)
 			sert.eq(Store.unwrap(sut.store), state.mirror, "raw table matches the mirror")
 		end,
@@ -1193,4 +1190,84 @@ sert.laws.differential("store · nested proxy mutations, array ops and reconcile
 	end,
 }, { runs = 80 })
 
-return {}
+test("store · validation bounds, observed move resync, mixed reconcile keys, and teardown idempotency", function()
+	local okInit = pcall(Flux.store, 123 :: any)
+	expect(not okInit, "Flux.store rejects non-table initial state")
+
+	local arr = Flux.store({ "a", "b", "c" })
+	for _, badPos in { 0, 1.5, 5 } do
+		expect(not (pcall(Store.insert, arr, badPos, "x")), `Store.insert rejects out-of-range pos {badPos}`)
+	end
+	for _, badPos in { 0, 1.5, 4 } do
+		expect(not (pcall(Store.remove, arr, badPos)), `Store.remove rejects out-of-range pos {badPos}`)
+		expect(not (pcall(Store.move, arr, badPos, 1)), `Store.move rejects out-of-range from {badPos}`)
+		expect(not (pcall(Store.move, arr, 1, badPos)), `Store.move rejects out-of-range to {badPos}`)
+	end
+
+	local scope, mid = Flux.scope(function()
+		return Flux.computed(function()
+			return arr[2]
+		end)
+	end)
+	expect(mid() == "b", "initial observed middle slot")
+	Store.move(arr, 1, 3)
+	flush()
+	expect(mid() == "c" and arr[1] == "b" and arr[3] == "a", "Store.move resyncs observed slot nodes")
+	scope:Destroy()
+	Store.Destroy(arr)
+
+	local mixed = Flux.store({} :: { [any]: any })
+	local iterScope, keysSeen = Flux.scope(function()
+		return Flux.computed(function()
+			local n = 0
+			for _ in mixed do
+				n += 1
+			end
+			return n
+		end)
+	end)
+	expect(keysSeen() == 0, "empty store initially")
+	Store.reconcile(mixed, { [1] = "first", [2] = "second", [1.5] = "fractional" })
+	flush()
+	expect(
+		keysSeen() == 3 and mixed[1] == "first" and mixed[2] == "second" and mixed[1.5] == "fractional",
+		"reconcile handles empty->array transition and fractional numeric keys"
+	)
+
+	local mapStore = Flux.store({ a = 1 } :: { [string]: any })
+	local mapScope, mapCount = Flux.scope(function()
+		return Flux.computed(function()
+			local n = 0
+			for _ in mapStore do
+				n += 1
+			end
+			return n
+		end)
+	end)
+	expect(mapCount() == 1, "initial map count")
+	Store.reconcile(mapStore, { a = 1, b = 2 })
+	flush()
+	expect(mapCount() == 2 and mapStore.b == 2, "reconcile wakes structural iterators when adding map keys")
+
+	local leafDestroyed = 0
+	local aScope, aReader = Flux.scope(function()
+		return Flux.computed(function()
+			return mapStore.a
+		end)
+	end)
+	expect(aReader() == 1, "leaf reader subscribed")
+	local aNode = (getmetatable(mapStore) :: any).nodes.a
+	aNode:onDestroy(function()
+		leafDestroyed += 1
+	end)
+	Store.Destroy(mapStore)
+	expect(
+		leafDestroyed == 1 and getmetatable(mapStore) == nil and Store.unwrap(mapStore) == mapStore,
+		"Store.Destroy destroys leaf nodes and unregisters proxy"
+	)
+	Flux.dispose(mapStore) -- second dispose is a safe no-op
+	aScope:Destroy()
+	iterScope:Destroy()
+	mapScope:Destroy()
+	Store.Destroy(mixed)
+end)

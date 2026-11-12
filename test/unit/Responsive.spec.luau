@@ -141,7 +141,7 @@ test("responsive · input modes map every gamepad slot, and sensors leave the mo
 end)
 
 -- Headless only: the sert.env engine's services are writable, so a spec can play the player changing a setting.
-local engineTest = if env.engine ~= nil then test else sert.skip
+local engineTest = if env.engine ~= nil then test else sert.test.skip
 engineTest("responsive · the live nodes follow the engine's services", function()
 	local services = env.Compat.services
 	local Enum = env.Enum
@@ -194,15 +194,13 @@ engineTest("responsive · the live nodes follow the engine's services", function
 	altCam:Destroy()
 end)
 
-sert.laws.ui("responsive · adaptive layout across Phone, Tablet, Desktop, and Console viewports", {
-	noTextOverflow = not env.IS_ROBLOX,
-	mount = function(_uiEnv, parent, viewport)
+sert.roblox.Layout.matrix(
+	"responsive · adaptive layout across Phone, Tablet, Desktop, and Console viewports",
+	function(container, preset)
+		local viewport = preset.size
 		local UDim2 = env.UDim2
 		local Enum = env.Enum
-		local hostParent, cleanHost = env.mountUi(parent, viewport)
-		if env.engine ~= nil then
-			env.engine:setViewport(viewport)
-		end
+		local hostParent, cleanHost = env.mountUi(container, viewport)
 		Responsive.viewport:set(viewport)
 		Flux.flush()
 
@@ -323,37 +321,39 @@ sert.laws.ui("responsive · adaptive layout across Phone, Tablet, Desktop, and C
 			})
 		end)
 		Flux.flush()
-		sert.defer(function()
-			scope:Destroy()
-			root:Destroy()
-			cleanHost()
-			if env.engine ~= nil then
-				env.engine:setViewport(Vector2.new(1920, 1080))
-			end
-			Responsive.viewport:set(Vector2.new(1920, 1080))
-			Flux.flush()
-		end)
-		return root
+		return {
+			root = root,
+			cleanup = function()
+				scope:Destroy()
+				root:Destroy()
+				cleanHost()
+				Responsive.viewport:set(Vector2.new(1920, 1080))
+				Flux.flush()
+			end,
+		}
 	end,
-	check = function(_uiEnv, root, vp)
-		local RobloxLayout = sert.roblox.Layout
-		RobloxLayout.audit(root, { viewport = vp.size, fitsParent = true, noTextOverflow = not env.IS_ROBLOX })
+	{
+		audit = { textOverflow = not env.IS_ROBLOX },
+		check = function(root, vp)
+			local RobloxLayout = sert.roblox.Layout
+			RobloxLayout.fitsParent(root :: GuiObject)
 
-		local expectedBp = if vp.size.X < 600 then "phone" elseif vp.size.X < 1024 then "tablet" else "desktop"
-		expect.eq(Responsive.breakpoint:get(), expectedBp, `breakpoint at {vp.name} ({vp.size.X}x{vp.size.Y})`)
+			local expectedBp = if vp.size.X < 600 then "phone" elseif vp.size.X < 1024 then "tablet" else "desktop"
+			expect.eq(Responsive.breakpoint:get(), expectedBp, `breakpoint at {vp.name} ({vp.size.X}x{vp.size.Y})`)
 
-		local topBar = root:FindFirstChild("TopBar") :: Frame
-		local badge = topBar:FindFirstChild("ModeBadge") :: TextLabel
-		expect.eq(badge.Text, `BP:{expectedBp}`, "ModeBadge text reflects active breakpoint")
+			local topBar = root:FindFirstChild("TopBar") :: Frame
+			local badge = topBar:FindFirstChild("ModeBadge") :: TextLabel
+			expect.eq(badge.Text, `BP:{expectedBp}`, "ModeBadge text reflects active breakpoint")
 
-		local hasCompact = topBar:FindFirstChild("NavCompact") ~= nil
-		local hasMedium = topBar:FindFirstChild("NavMedium") ~= nil
-		local hasFull = topBar:FindFirstChild("NavFull") ~= nil
-		expect.eq(hasCompact, expectedBp == "phone", "NavCompact mounted iff phone")
-		expect.eq(hasMedium, expectedBp == "tablet", "NavMedium mounted iff tablet")
-		expect.eq(hasFull, expectedBp == "desktop", "NavFull mounted iff desktop")
-	end,
-})
+			local hasCompact = topBar:FindFirstChild("NavCompact") ~= nil
+			local hasMedium = topBar:FindFirstChild("NavMedium") ~= nil
+			local hasFull = topBar:FindFirstChild("NavFull") ~= nil
+			expect.eq(hasCompact, expectedBp == "phone", "NavCompact mounted iff phone")
+			expect.eq(hasMedium, expectedBp == "tablet", "NavMedium mounted iff tablet")
+			expect.eq(hasFull, expectedBp == "desktop", "NavFull mounted iff desktop")
+		end,
+	}
+)
 
 engineTest(
 	"responsive · env:setViewport relayouts live ScreenGui across Phone, Tablet, Desktop, and Console",
@@ -386,6 +386,7 @@ engineTest(
 			})
 			screen = Flux.new("ScreenGui")({
 				Name = "ViewportGui",
+				IgnoreGuiInset = true,
 				Parent = env.Compat.services.Players.LocalPlayer.PlayerGui,
 				panel,
 			})
@@ -404,10 +405,11 @@ engineTest(
 			Flux.flush()
 			expect.eq(Responsive.breakpoint:get(), vp.bp, `breakpoint matches {vp.name}`)
 			expect.eq(screen.AbsoluteSize, vp.size, `ScreenGui AbsoluteSize matches {vp.name} viewport`)
-			RobloxLayout.audit(panel, { viewport = vp.size, fitsParent = true })
+			RobloxLayout.audit(panel, { viewport = vp.size })
+			RobloxLayout.fitsParent(panel)
 			local paneA = panel:FindFirstChild("PaneA") :: Frame
 			local paneB = panel:FindFirstChild("PaneB") :: Frame
-			RobloxLayout.spacing({ paneA, paneB }, vp.axis :: any, 10)
+			env.expectSpacing({ paneA, paneB }, vp.axis :: any, 10)
 		end
 
 		scope:Destroy()
@@ -417,5 +419,3 @@ engineTest(
 		Flux.flush()
 	end
 )
-
-return {}

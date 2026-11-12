@@ -10,9 +10,9 @@ local Flux = env.Flux
 local Compat = env.Compat
 local sert = env.sert
 local test = sert.test
-local rtest = sert.rtest
+local rtest = sert.test.roblox
 local expect = sert
-local expectError = sert.fails
+local expectError = sert.throws
 local flush = Flux.flush
 local Engine = Motion.Engine
 local Easing = Motion.Easing
@@ -1309,20 +1309,9 @@ local function observeSpringStep(state: any, sut: any)
 	state.prevUnderEnergy = newE
 end
 
+local pendingMotionState: any = nil
 sert.model("motion · physical spring state machine across boundaryFloat goals, impulses, and damping regimes", {
 	init = function()
-		local over, under
-		local scope = Flux.scope(function()
-			over = Flux.spring(0, 4, 1.25)
-			under = Flux.spring(0, 4, 0.3)
-		end)
-		local sut = {
-			scope = scope,
-			over = over,
-			under = under,
-			overMotion = Motion.NodeToMotion[over],
-			underMotion = Motion.NodeToMotion[under],
-		}
 		local state = {
 			goal = 0,
 			unforcedFromRest = true,
@@ -1334,74 +1323,94 @@ sert.model("motion · physical spring state machine across boundaryFloat goals, 
 			lastPeakEnergy = 0,
 			energyIncreased = false,
 		}
+		pendingMotionState = state
+		return state
+	end,
+	setup = function()
+		local state = pendingMotionState
+		pendingMotionState = nil
+		local over, under
+		local scope = Flux.scope(function()
+			over = Flux.spring(0, 4, 1.25)
+			under = Flux.spring(0, 4, 0.3)
+		end)
+		local sut = {
+			state = state,
+			scope = scope,
+			over = over,
+			under = under,
+			overMotion = Motion.NodeToMotion[over],
+			underMotion = Motion.NodeToMotion[under],
+		}
 		syncSpringState(state, sut, true)
-		return state, sut
+		return sut
 	end,
 	teardown = function(sut)
 		sut.scope:Destroy()
 		Flux.flush()
 	end,
-	actions = {
+	commands = {
 		SetGoal = {
 			weight = 3,
 			gen = finiteMotionFloat,
-			run = function(sut, goal, state)
+			run = function(sut, goal)
 				local atRest = sut.overMotion.vel[1] == 0
 				sut.over:set(goal)
 				sut.under:set(goal)
-				syncSpringState(state, sut, atRest)
+				syncSpringState(sut.state, sut, atRest)
 			end,
 		},
 		Impulse = {
 			weight = 2,
 			gen = finiteMotionFloat,
-			run = function(sut, delta, state)
+			run = function(sut, delta)
 				sut.over:impulse(delta)
 				sut.under:impulse(delta)
-				syncSpringState(state, sut, false)
+				syncSpringState(sut.state, sut, false)
 			end,
 		},
 		SetVelocity = {
 			weight = 2,
 			gen = finiteMotionFloat,
-			run = function(sut, vel, state)
+			run = function(sut, vel)
 				sut.over:setVelocity(vel)
 				sut.under:setVelocity(vel)
-				syncSpringState(state, sut, vel == 0)
+				syncSpringState(sut.state, sut, vel == 0)
 			end,
 		},
 		SetPosition = {
 			weight = 2,
 			gen = finiteMotionFloat,
-			run = function(sut, pos, state)
+			run = function(sut, pos)
 				local atRest = sut.overMotion.vel[1] == 0 and sut.underMotion.vel[1] == 0
 				sut.over:setCurrent(pos)
 				sut.under:setCurrent(pos)
-				syncSpringState(state, sut, atRest)
+				syncSpringState(sut.state, sut, atRest)
 			end,
 		},
 		Snap = {
 			weight = 2,
 			gen = finiteMotionFloat,
-			run = function(sut, val, state)
+			run = function(sut, val)
 				sut.over:snap(val)
 				sut.under:snap(val)
-				syncSpringState(state, sut, true)
+				syncSpringState(sut.state, sut, true)
 			end,
 		},
 		StepFrame = {
 			weight = 4,
-			gen = function(g)
+			gen = function(_state, g)
 				return g:float(1 / 240, 1 / 15)
 			end,
-			run = function(sut, dt, state)
+			run = function(sut, dt)
 				advance(dt)
-				observeSpringStep(state, sut)
+				observeSpringStep(sut.state, sut)
 			end,
 		},
 		StepUntilSettled = {
 			weight = 2,
-			run = function(sut, _arg, state)
+			run = function(sut)
+				local state = sut.state
 				local f = sut.underMotion.frequency
 				local d = sut.underMotion.damping
 				local halfPeriod = math.pi / (math.tau * f * math.sqrt(1 - d * d))
@@ -1423,18 +1432,16 @@ sert.model("motion · physical spring state machine across boundaryFloat goals, 
 			end,
 		},
 	},
-	never = {
-		criticallyOrOverdampedOvershotFromRest = function(state)
-			return state.overshotFromRest
-		end,
-		criticallyOrOverdampedMovedAwayFromRest = function(state)
-			return state.nonMonotonicFromRest
-		end,
-		underdampedMechanicalEnergyIncreased = function(state)
-			return state.energyIncreased
-		end,
-	},
 	invariants = {
+		criticallyOrOverdampedNeverOvershootsFromRest = function(state)
+			expect(not state.overshotFromRest, "critically or overdamped spring never overshoots from rest")
+		end,
+		criticallyOrOverdampedNeverMovesAwayFromRest = function(state)
+			expect(not state.nonMonotonicFromRest, "critically or overdamped spring never moves away from rest")
+		end,
+		underdampedMechanicalEnergyNeverIncreases = function(state)
+			expect(not state.energyIncreased, "underdamped mechanical energy never increases")
+		end,
 		valuesAndVelocitiesAreFinite = function(_state: any, sut: any)
 			local op: number, up: number = sut.over:peek(), sut.under:peek()
 			local ov: number, uv: number = sut.overMotion.vel[1], sut.underMotion.vel[1]
@@ -1540,5 +1547,3 @@ rtest(
 		cfSpring:Destroy()
 	end
 )
-
-return {}

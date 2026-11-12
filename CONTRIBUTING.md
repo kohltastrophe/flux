@@ -6,8 +6,8 @@ Bug reports and pull requests are welcome. Open an issue first for anything larg
 
 ## Setup
 
-- [Rokit](https://github.com/rojo-rbx/rokit): Run `rokit install` to install the tools pinned in `rokit.toml` (Rojo, StyLua, luau-lsp, and Wally).
-- Python 3.11 or newer: Run `python3 tools/sert.py fetch` to populate `.sert/` with the pinned [sert](https://github.com/kohltastrophe/sert) test toolkit, engine definitions, and standalone `luau` binary. `.luaurc` aliases `@sert` to `.sert/sert/src`, so run this before running the headless test suite or language server.
+- [Rokit](https://github.com/rojo-rbx/rokit): Run `rokit install` to install the tools pinned in `rokit.toml` (Luau, Rojo, StyLua, luau-lsp, and Wally).
+- Python 3.11 or newer: Run `python3 tools/sert.py fetch` to populate `.sert/` with the pinned [sert](https://github.com/kohltastrophe/sert) test toolkit and engine definitions locked in `sert.lock`. `.luaurc` aliases `@sert` to `.sert/sert/src`, so run this before running the headless test suite or language server.
 - Node 22 or newer for the [LuauDocs](https://github.com/kohltastrophe/luaudocs) documentation site and `llms.txt` generation.
 
 ## Layout
@@ -32,20 +32,19 @@ src/                     the Flux package (Rojo root, --!strict Luau)
     init.luau            public and internal Luau type definitions
     Instances.luau       generated Creatable and Editable class maps (updated daily by update-instances.yml)
 test/
-  spec.client.luau       shared test entry point for standalone Luau and Open Cloud execution
+  setup.luau             shared test setup installing per-test reset and leak-check hooks
   default.project.json   Rojo project for Studio and Open Cloud test places
   unit/
-    init.luau            suite aggregator and afterEach leak/reset hooks
     *.spec.luau          per-module unit, property, and model-based test suites
   lib/
     env.luau             test harness bridging Flux.Clock, Compat, and sert.env
     GraphModel.luau      stateful reference model for Graph property tests
     Model.luau           shared model-testing helpers
-  runner/                sert Studio runner configuration and client/server bootstrap scripts
   types/                 compile-time type probes (positive cases and negative cases in fail/)
 .luaudocs/               documentation site guides, landing page, and static assets
 tools/
   sert.py                bootstrap wrapper for the pinned sert version in sert.toml
+sert.lock                cryptographic lockfile for the pinned sert release
 ```
 
 `src/Type/Instances.luau` is generated from the Roblox API dump by `.github/scripts/generate_instances.py` and updated automatically by `.github/workflows/update-instances.yml`. Do not edit it by hand; run `python3 .github/scripts/generate_instances.py` to refresh it locally.
@@ -61,39 +60,35 @@ python3 tools/sert.py run                            # headless test suite on st
 python3 tools/sert.py run -a "Graph"                 # filter tests by name or tag (e.g. -a "@file=Graph")
 python3 tools/sert.py run --coverage                 # run suite and write coverage.out
 python3 tools/sert.py coverage --min 90              # enforce >= 90% line coverage across src/
+python3 tools/sert.py audit --no-run                    # audit zero-assertion and trivial tests
 python3 tools/sert.py mutate --no-coverage-run --min 85  # enforce >= 85% mutation score across src/
 ```
 
-`sert lint` verifies that every `test/unit/**/*.spec.luau` file is required in `test/unit/init.luau`, checks `src` and `test` under the new Luau type solver, verifies that every file in `test/types/` passes and every file in `test/types/fail/` fails typechecking, and checks formatting with `stylua --check`. Run `stylua src test` to format code locally.
+`sert lint` checks `src` and `test` under the new Luau type solver, verifies that every file in `test/types/` passes and every file in `test/types/fail/` fails typechecking, checks formatting with `stylua --check`, and verifies `tools/sert.py` against the shipped bootstrap stub. Run `stylua src test` to format code locally.
 
-When adding a new module or spec file:
-
-1. Require the spec in `test/unit/init.luau`.
-2. Tag the spec with `@file=<Name>` and map the source module under `[mutate.specs]` in `sert.toml` so targeted mutation runs stay fast.
-
-Nightly CI (and manual workflow dispatch) also runs `python3 tools/sert.py run --exhaustive` for larger property and model test budgets.
+Place new spec files under `test/unit/<Name>.spec.luau`; `[test].specs` and `sert mutate` discover and route them automatically.
 
 ### Test harness and leak checks
 
 `test/lib/env.luau` lets the same spec files run in both standalone Luau and Roblox:
 
-- **Headless (`luau`):** `env.luau` constructs a `sert.env` mock engine wired to `Flux.Clock` (manual clock) and `src/Compat.luau`, then bridges the mock engine's `RunService` step to `Flux.Clock`'s `Heartbeat` connection before requiring `src/init.luau`. `sert.test` specs run against this deterministic clock, while `sert.rtest` specs (which require real Roblox `Instance` layout or engine services) skip in standalone `luau`.
-- **Roblox (Studio and Open Cloud):** `env.luau` requires the mounted `ReplicatedStorage.Flux` and `ReplicatedStorage.sert` modules directly and steps frames with `RunService.Heartbeat:Wait()`. Both `sert.test` and `sert.rtest` specs run.
+- **Headless (`luau`):** `env.luau` constructs a `sert.env` mock engine wired to `Flux.Clock` (manual clock) and `src/Compat.luau`, injects `sert.env` datatypes into `Compat`, and bridges the mock engine's `RunService` step to `Flux.Clock`'s `Heartbeat` connection before requiring `src/init.luau`. `sert.test` specs run against this deterministic clock, while `sert.test.roblox` and `sert.test.client` specs (which require real Roblox `Instance` layout or engine services) skip in standalone `luau`.
+- **Roblox (Studio and Open Cloud):** `env.luau` requires the mounted `ReplicatedStorage.Flux` and `ReplicatedStorage.sert` modules directly and steps frames with `RunService.Heartbeat:Wait()`. `sert.test` and `sert.test.roblox` specs run in both lanes, and `sert.test.client` specs run in Studio play mode.
 
 Effects and UI bindings are frame-batched, so tests advance time with `Flux.flush()`, `env.frame(dt)`, or `env.settle()`. Tests that expect warning output capture it with `env.warnings(fn)`.
 
-After every test, the `afterEach` hook in `test/unit/init.luau` resets `Flux.Defaults`, restores the default `1920x1080` viewport, resets `Flux.Clock`, and calls `env.idle(Flux)` to verify that no reactive owner, active tracking context, suspended `untrack` state, or provided `Flux.context` value leaked at the top level.
+After every test, the `afterEach` hook installed by `test/setup.luau` (via `env.installHooks()`) resets `Flux.Defaults`, restores the default `1920x1080` viewport, resets `Flux.Clock`, and calls `env.idle(Flux)` to verify that no reactive owner, active tracking context, suspended `untrack` state, or provided `Flux.context` value leaked at the top level.
 
 ## Roblox Lane
 
-Run the full suite (including `rtest` specs) in Roblox Studio or via the Open Cloud Luau Execution API:
+Run the full suite (including `sert.test.roblox` and `sert.test.client` specs) in Roblox Studio or via the Open Cloud Luau Execution API:
 
 ```sh
 python3 tools/sert.py studio    # run test/default.project.json in a fresh headless Studio session
-python3 tools/sert.py cloud     # build the test place and run test/spec.client.luau on Open Cloud
+python3 tools/sert.py cloud     # build the test place and run [cloud].specs on Open Cloud
 ```
 
-`cloud` builds `test/default.project.json` with Rojo and executes `test/spec.client.luau` against the place configured by `ROBLOX_API_KEY`, `ROBLOX_UNIVERSE_ID`, and `ROBLOX_PLACE_ID` (or `ROBLOX_TEST_UNIVERSE_ID` and `ROBLOX_TEST_PLACE_ID` in CI). Pass `--dry-run` to validate the place build without making network requests, or `studio --check` to validate the Studio suite configuration without launching Studio.
+`cloud` builds `test/default.project.json` with Rojo and executes `test/**/*.spec.luau` against the place configured by `ROBLOX_API_KEY`, `ROBLOX_UNIVERSE_ID`, and `ROBLOX_PLACE_ID` (or `ROBLOX_TEST_UNIVERSE_ID` and `ROBLOX_TEST_PLACE_ID` in CI). Pass `--dry-run` to validate the place build without making network requests, or `studio --check` to validate the Studio suite configuration without launching Studio.
 
 ## Docs
 
@@ -121,6 +116,6 @@ Any change to public API doc comments in `src/` or guide pages in `.luaudocs/gui
 
 Update pinned tools intentionally:
 
-- `rokit.toml`: Rojo, StyLua, luau-lsp, and Wally.
-- `sert.toml`: `[sert]` `version` and `[tools]` `luau`.
+- `rokit.toml`: Luau, Rojo, StyLua, luau-lsp, and Wally.
+- `sert.toml` and `sert.lock`: `[sert]` `version` and its locked release checksums (`python3 tools/sert.py fetch`).
 - GitHub workflows: `CompeyDev/setup-rokit` and third-party actions in `.github/workflows/`.

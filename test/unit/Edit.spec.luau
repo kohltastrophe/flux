@@ -12,7 +12,7 @@ local settle = env.settle
 local Instance = env.Instance
 local workspace = env.workspace
 local Find = Flux.Find
-local expectError = sert.fails
+local expectError = sert.throws
 
 local function tagsOf(instance: Instance): string
 	local tags = instance:GetTags()
@@ -888,10 +888,24 @@ local function syncEditChildren(sut: any, mountedIds: { number })
 	flush()
 end
 
+local pendingEditState: any = nil
 sert.model(
 	"edit · dynamic DOM hierarchy, reactive properties, attributes, tags and two-way models stay synchronized",
 	{
 		init = function()
+			local state = {
+				mounted = {} :: { number },
+				expectedText = "t0",
+				expectedAttr = 1,
+				expectedFlag = false,
+				expectedSet = { "A" } :: { string },
+			}
+			pendingEditState = state
+			return state
+		end,
+		setup = function()
+			local state = pendingEditState
+			pendingEditState = nil
 			local textSig = Flux.signal("t0")
 			local attrSig = Flux.signal(1)
 			local tagBool = Flux.signal(false)
@@ -921,14 +935,8 @@ sert.model(
 			flush()
 			settle()
 
-			local state = {
-				mounted = {} :: { number },
-				expectedText = "t0",
-				expectedAttr = 1,
-				expectedFlag = false,
-				expectedSet = { "A" } :: { string },
-			}
-			local sut = {
+			return {
+				state = state,
 				scope = scope,
 				box = box,
 				pool = pool,
@@ -941,7 +949,6 @@ sert.model(
 				propAttr = propAttr,
 				propFlag = propFlag,
 			}
-			return state, sut
 		end,
 		teardown = function(sut)
 			sut.scope:Destroy()
@@ -952,13 +959,14 @@ sert.model(
 			Flux.flush()
 			sert.eq(env.idle(Flux), nil, "zero-leak reactive state on teardown")
 		end,
-		actions = {
+		commands = {
 			MountChild = {
 				weight = 2,
-				gen = function(g)
+				gen = function(_state, g)
 					return g:int(1, 3)
 				end,
-				run = function(sut, id, state)
+				run = function(sut, id)
+					local state = sut.state
 					if table.find(state.mounted, id) ~= nil then
 						return
 					end
@@ -974,10 +982,11 @@ sert.model(
 			},
 			UnmountChild = {
 				weight = 2,
-				gen = function(g)
+				gen = function(_state, g)
 					return g:int(1, 3)
 				end,
-				run = function(sut, id, state)
+				run = function(sut, id)
+					local state = sut.state
 					local idx = table.find(state.mounted, id)
 					if idx == nil then
 						return
@@ -995,7 +1004,8 @@ sert.model(
 			},
 			ReorderChildren = {
 				weight = 2,
-				run = function(sut, _arg, state)
+				run = function(sut)
+					local state = sut.state
 					if #state.mounted < 2 then
 						return
 					end
@@ -1018,7 +1028,7 @@ sert.model(
 			},
 			WriteSignalProp = {
 				weight = 2,
-				gen = function(g)
+				gen = function(_state, g)
 					return "n" .. tostring(g:int(1, 9))
 				end,
 				run = function(sut, text)
@@ -1031,7 +1041,7 @@ sert.model(
 			},
 			MutateInstanceProp = {
 				weight = 2,
-				gen = function(g)
+				gen = function(_state, g)
 					return "i" .. tostring(g:int(1, 9))
 				end,
 				run = function(sut, text)
@@ -1045,7 +1055,7 @@ sert.model(
 			},
 			MutateAttribute = {
 				weight = 2,
-				gen = function(g)
+				gen = function(_state, g)
 					return { score = g:int(1, 20), viaInstance = g:bool() }
 				end,
 				run = function(sut, arg)
@@ -1063,7 +1073,7 @@ sert.model(
 			},
 			ToggleTag = {
 				weight = 2,
-				gen = function(g)
+				gen = function(_state, g)
 					return { flag = g:bool(), viaInstance = g:bool() }
 				end,
 				run = function(sut, arg)
@@ -1086,7 +1096,7 @@ sert.model(
 			},
 			tags = {
 				weight = 2,
-				gen = function(g)
+				gen = function(_state, g)
 					return TAG_POOL[g:int(1, #TAG_POOL)]
 				end,
 				run = function(sut, set)
@@ -1098,12 +1108,10 @@ sert.model(
 				end,
 			},
 		},
-		never = {
-			staticTagLost = function(_state, sut)
-				return not sut.box:HasTag("Static")
-			end,
-		},
 		invariants = {
+			staticTagRetained = function(_state, sut)
+				expect(sut.box:HasTag("Static"), "Static tag is never lost")
+			end,
 			childrenOrderSynchronized = function(state, sut)
 				local children = sut.box:GetChildren()
 				sert.eq(#children, #state.mounted, "mounted child count")
@@ -1448,5 +1456,3 @@ test("edit · LayoutOrder model/node pinning, Find numeric ordering, and __REF p
 	childB:Destroy()
 	childC:Destroy()
 end)
-
-return {}

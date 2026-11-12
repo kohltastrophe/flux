@@ -2,9 +2,6 @@
 local Clock = require("./Clock")
 
 local IS_ROBLOX = game ~= nil
-if not IS_ROBLOX then
-	(require :: any)("@sert").doubles.Datatypes.installGlobals()
-end
 
 type Task = {
 	spawn: (fnOrThread: any, ...any) -> thread,
@@ -87,7 +84,8 @@ local Compat: any = {
 	services = if IS_ROBLOX
 		then setmetatable({}, {
 			__index = function(self: { [string]: any }, name: string): any
-				local service = (game.GetService :: any)(game, name)
+				local getService: (DataModel, string) -> Instance = game.GetService
+				local service = getService(game, name)
 				self[name] = service
 				return service
 			end,

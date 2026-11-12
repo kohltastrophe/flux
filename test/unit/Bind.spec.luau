@@ -12,7 +12,7 @@ local workspace = env.workspace
 local Bind = if IS_ROBLOX
 	then require((game :: any).ReplicatedStorage.Flux.Bind) :: any
 	else require("../../src/Bind") :: any
-local expectError = sert.fails
+local expectError = sert.throws
 local flush = Flux.flush
 
 test("property · follows a property and an attribute via $ and _attr_, and stops when destroyed", function()
@@ -389,8 +389,21 @@ local function syncMountedChildren(sut: any, mountedIds: { number })
 	flush()
 end
 
+local pendingBindState: any = nil
 sert.model("bind · dynamic DOM hierarchy and two-way Flux.property/Flux.model binding reconciliation", {
 	init = function()
+		local state = {
+			mounted = {} :: { number },
+			text = "t0",
+			score = 10,
+			active = false,
+		}
+		pendingBindState = state
+		return state
+	end,
+	setup = function()
+		local state = pendingBindState
+		pendingBindState = nil
 		local textSig = Flux.signal("t0")
 		local attrSig = Flux.signal(10)
 		local tagSig = Flux.signal(false)
@@ -420,13 +433,8 @@ sert.model("bind · dynamic DOM hierarchy and two-way Flux.property/Flux.model b
 		flush()
 		settle()
 
-		local state = {
-			mounted = {} :: { number },
-			text = "t0",
-			score = 10,
-			active = false,
-		}
-		local sut = {
+		return {
+			state = state,
 			scope = scope,
 			host = host,
 			pool = pool,
@@ -438,7 +446,6 @@ sert.model("bind · dynamic DOM hierarchy and two-way Flux.property/Flux.model b
 			propAttr = propAttr,
 			propTag = propTag,
 		}
-		return state, sut
 	end,
 	teardown = function(sut)
 		sut.scope:Destroy()
@@ -450,13 +457,14 @@ sert.model("bind · dynamic DOM hierarchy and two-way Flux.property/Flux.model b
 		sert.eq(env.idle(Flux), nil, "zero-leak reactive state on teardown")
 		sert.eq(env.drained(Flux), nil, "zero pending effects on teardown")
 	end,
-	actions = {
+	commands = {
 		MountChild = {
 			weight = 3,
-			gen = function(g)
+			gen = function(_state, g)
 				return g:int(1, 4)
 			end,
-			run = function(sut, id, state)
+			run = function(sut, id)
+				local state = sut.state
 				if table.find(state.mounted, id) ~= nil then
 					return
 				end
@@ -472,10 +480,11 @@ sert.model("bind · dynamic DOM hierarchy and two-way Flux.property/Flux.model b
 		},
 		UnmountChild = {
 			weight = 2,
-			gen = function(g)
+			gen = function(_state, g)
 				return g:int(1, 4)
 			end,
-			run = function(sut, id, state)
+			run = function(sut, id)
+				local state = sut.state
 				local idx = table.find(state.mounted, id)
 				if idx == nil then
 					return
@@ -493,7 +502,8 @@ sert.model("bind · dynamic DOM hierarchy and two-way Flux.property/Flux.model b
 		},
 		ReorderChildren = {
 			weight = 2,
-			run = function(sut, _arg, state)
+			run = function(sut)
+				local state = sut.state
 				if #state.mounted < 2 then
 					return
 				end
@@ -516,7 +526,7 @@ sert.model("bind · dynamic DOM hierarchy and two-way Flux.property/Flux.model b
 		},
 		WriteSignalProp = {
 			weight = 2,
-			gen = function(g)
+			gen = function(_state, g)
 				return `sig_{g:int(1, 20)}`
 			end,
 			run = function(sut, val)
@@ -529,7 +539,7 @@ sert.model("bind · dynamic DOM hierarchy and two-way Flux.property/Flux.model b
 		},
 		MutateInstanceProp = {
 			weight = 2,
-			gen = function(g)
+			gen = function(_state, g)
 				return `inst_{g:int(1, 20)}`
 			end,
 			run = function(sut, val)
@@ -543,7 +553,7 @@ sert.model("bind · dynamic DOM hierarchy and two-way Flux.property/Flux.model b
 		},
 		MutateAttribute = {
 			weight = 2,
-			gen = function(g)
+			gen = function(_state, g)
 				return { score = g:int(1, 50), viaInstance = g:bool() }
 			end,
 			run = function(sut, arg)
@@ -561,7 +571,7 @@ sert.model("bind · dynamic DOM hierarchy and two-way Flux.property/Flux.model b
 		},
 		ToggleTag = {
 			weight = 2,
-			gen = function(g)
+			gen = function(_state, g)
 				return { active = g:bool(), viaInstance = g:bool() }
 			end,
 			run = function(sut, arg)
@@ -583,17 +593,15 @@ sert.model("bind · dynamic DOM hierarchy and two-way Flux.property/Flux.model b
 			end,
 		},
 	},
-	never = {
-		unmountedChildRetainedInHost = function(state, sut)
-			for id, inst in sut.pool do
-				if table.find(state.mounted, id) == nil and inst.Parent ~= nil then
-					return true
-				end
-			end
-			return false
-		end,
-	},
 	invariants = {
+		unmountedChildNeverRetainedInHost = function(state, sut)
+			for id, inst in sut.pool do
+				expect(
+					table.find(state.mounted, id) ~= nil or inst.Parent == nil,
+					`unmounted child #{id} has nil Parent`
+				)
+			end
+		end,
 		childrenOrderMatchesState = function(state, sut)
 			local children = sut.host:GetChildren()
 			sert.eq(#children, #state.mounted, "mounted child count")
@@ -784,5 +792,3 @@ test("listen · callbacks run untracked, ownerless, and safe across mid-flush ad
 		Flux.listen(src, "not a function" :: any)
 	end, "expects a function")
 end)
-
-return {}

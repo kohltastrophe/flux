@@ -3,6 +3,7 @@ local IS_ROBLOX = game ~= nil
 
 local Flux
 local Compat
+local Interact
 local sert
 local engine
 local bridge: () -> () = nil :: any
@@ -10,12 +11,14 @@ if IS_ROBLOX then
 	local ReplicatedStorage = game:GetService("ReplicatedStorage")
 	Flux = require(ReplicatedStorage:WaitForChild("Flux")) :: any
 	Compat = require(ReplicatedStorage.Flux:WaitForChild("Compat")) :: any
+	Interact = require(ReplicatedStorage.Flux:WaitForChild("Interact")) :: any
 	sert = require(ReplicatedStorage:WaitForChild("sert")) :: any
 else
 	-- Headless: a sert.env engine on Flux's own manual clock, handed to Compat before Flux loads (Responsive reads
 	-- the services at module load). Its Instances, services and RunService stand in for the engine's; its game is
 	-- never the global `game`, so Flux keeps its headless Compat and Clock paths.
 	sert = require("@sert") :: any
+	(require("@sert/engine/datatypes") :: any).installGlobals()
 	local HeadlessClock = require("../../src/Clock") :: any
 	Compat = require("../../src/Compat") :: any
 	engine = sert.env.new({
@@ -31,6 +34,28 @@ else
 			cancel = HeadlessClock.cancel,
 		},
 	})
+	for _, key in
+		{
+			"typeof",
+			"Color3",
+			"UDim",
+			"UDim2",
+			"Vector2",
+			"Vector3",
+			"CFrame",
+			"Rect",
+			"NumberRange",
+			"Font",
+			"TweenInfo",
+			"Enum",
+			"ColorSequence",
+			"ColorSequenceKeypoint",
+			"NumberSequence",
+			"NumberSequenceKeypoint",
+		}
+	do
+		Compat[key] = sert.env[key]
+	end
 	Compat.Instance = engine.Instance
 	Compat.services = engine.services
 	-- The engine's RunService phases run in Flux's Heartbeat; Clock.reset drops subscribers, so env.reset re-bridges.
@@ -41,6 +66,7 @@ else
 	end
 	bridge()
 	Flux = require("../../src") :: any
+	Interact = require("../../src/Interact") :: any
 end
 
 local Clock = Flux.Clock
@@ -80,21 +106,39 @@ function env.frame(dt: number?)
 end
 
 function env.frames(done: () -> boolean, count: number?): boolean
-	return sert.frames(done, count, nil, env.frame)
+	local limit = count or 60
+	for _ = 1, limit do
+		if done() then
+			return true
+		end
+		env.frame()
+	end
+	return done()
 end
 
 function env.mountUi(parent: any, viewport: Vector2): (any, () -> ())
-	if not IS_ROBLOX then
+	if IS_ROBLOX then
 		return parent, function() end
 	end
-	local screen = Instance.new("ScreenGui")
-	local host = Instance.new("Frame")
-	host.Name = "ViewportHost"
-	host.Size = UDim2.fromOffset(viewport.X, viewport.Y)
-	host.BackgroundTransparency = 1
-	host.Parent = screen
-	return host, function()
+	local prevViewport = engine.workspace.CurrentCamera.ViewportSize
+	engine:setViewport(viewport)
+	local screen = engine.Instance.new("ScreenGui")
+	screen.IgnoreGuiInset = true
+	screen.Parent = engine.LocalPlayer.PlayerGui
+	return screen, function()
 		screen:Destroy()
+		engine:setViewport(prevViewport)
+	end
+end
+
+function env.expectSpacing(elements: { GuiObject }, axis: "X" | "Y", expectedGap: number, tolerance: number?)
+	local rectOf = sert.roblox.Layout.geometry.rect
+	local eps = tolerance or 1
+	for i = 2, #elements do
+		local prev = rectOf(elements[i - 1])
+		local cur = rectOf(elements[i])
+		local gap = if axis == "X" then cur.x - (prev.x + prev.w) else cur.y - (prev.y + prev.h)
+		sert.near(gap, expectedGap, eps, `{elements[i - 1].Name} -> {elements[i].Name} {axis} spacing`)
 	end
 end
 
@@ -171,6 +215,48 @@ function env.drained(targetFlux: any?): string?
 		return `a fresh effect ran again on a second flush ({runs - first} more runs)`
 	end
 	return nil
+end
+
+local defaultSnapshot: { [string]: { [string]: any } } = {}
+for class, map in Flux.Defaults do
+	defaultSnapshot[class] = table.clone(map)
+end
+
+local responsiveConfig = Flux.Responsive.config
+local responsiveSnapshot: { [string]: any } = {}
+for key, value in responsiveConfig do
+	responsiveSnapshot[key] = if type(value) == "table" then table.clone(value) else value
+end
+
+local hooksInstalled = false
+function env.installHooks()
+	if hooksInstalled then
+		return
+	end
+	hooksInstalled = true
+	sert.afterEach(function()
+		local leak = env.idle(Flux)
+		Flux.Flags.defaults = true
+		table.clear(Flux.Defaults)
+		for class, map in defaultSnapshot do
+			Flux.Defaults[class] = table.clone(map)
+		end
+		Interact._useHoverServices(nil)
+		table.clear(responsiveConfig)
+		for key, value in responsiveSnapshot do
+			responsiveConfig[key] = if type(value) == "table" then table.clone(value) else value
+		end
+		Flux.Responsive.viewport:set(env.Vector2.new(1920, 1080))
+		if engine ~= nil then
+			engine:setViewport(env.Vector2.new(1920, 1080))
+		end
+		env.reset()
+		assert(not leak, leak)
+	end)
+end
+
+if IS_ROBLOX then
+	env.installHooks()
 end
 
 return table.freeze(env)

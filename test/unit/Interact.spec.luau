@@ -17,7 +17,7 @@ local InteractModule = if IS_ROBLOX
 	then require((game :: any).ReplicatedStorage.Flux.Interact) :: any
 	else require("../../src/Interact") :: any
 
-local ctest = if IS_ROBLOX and game:GetService("Players").LocalPlayer ~= nil then sert.rtest else sert.skip
+local ctest = sert.test.client
 
 test("interact · pointIn tests inclusive absolute bounds", function()
 	local object = { AbsolutePosition = Vector2.new(100, 50), AbsoluteSize = Vector2.new(200, 100) } :: any
@@ -186,7 +186,7 @@ if IS_ROBLOX and game:GetService("Players").LocalPlayer ~= nil then
 		print("[InputSink-native] SKIPPED: public virtual input unavailable")
 	end
 end
-local pointerTest = if virtualInput ~= nil then ctest else sert.skip
+local pointerTest = if virtualInput ~= nil then sert.test.client else sert.test.client.skip
 pointerTest("interact · native InputSink None Activate All and release outside bounds", function()
 	local playerGui = game:GetService("Players").LocalPlayer.PlayerGui
 	local gui = Instance.new("ScreenGui")
@@ -265,10 +265,37 @@ pointerTest("interact · native InputSink None Activate All and release outside 
 end)
 
 local function fakeSignal()
-	local sig = sert.doubles.Signal.new()
-	function sig:listeners()
-		return self:connections()
+	local entries: { { fn: (...any) -> (), Connected: boolean } } = {}
+	local sig = {}
+
+	function sig:Connect(fn: (...any) -> ())
+		local conn: any = { fn = fn, Connected = true }
+		function conn:Disconnect()
+			if not self.Connected then
+				return
+			end
+			self.Connected = false
+			local idx = table.find(entries, self)
+			if idx ~= nil then
+				table.remove(entries, idx)
+			end
+		end
+		table.insert(entries, conn)
+		return conn
 	end
+
+	function sig:Fire(...: any)
+		for _, conn in table.clone(entries) do
+			if conn.Connected then
+				conn.fn(...)
+			end
+		end
+	end
+
+	function sig:listeners(): number
+		return #entries
+	end
+
 	return sig
 end
 
@@ -927,7 +954,20 @@ sert.model(
 	"interact · hover, press, selected, focused, sunk and covered match geometric hit-testing and multi-touch isolation",
 	{
 		init = function()
+			return {
+				pointerTarget = 0,
+				overlayActive = false,
+				activeTouchSlot = { [1] = nil :: number?, [2] = nil :: number? },
+				heldTouchHover = { [1] = nil :: number?, [2] = nil :: number? },
+				heldPress = { [1] = nil :: string?, [2] = nil :: string? },
+				selectedIdx = nil :: number?,
+				menuOpen = false,
+				focused = { false, false },
+			}
+		end,
+		setup = function()
 			local UDim2 = env.UDim2
+			local ownsEnv = env.engine == nil
 			local simEnv = env.engine
 				or sert.env.new({
 					isClient = true,
@@ -981,17 +1021,8 @@ sert.model(
 					focused[i] = Flux.Interact.focused(gui)
 				end
 			end)
-			local state = {
-				pointerTarget = 0,
-				overlayActive = false,
-				activeTouchSlot = { [1] = nil :: number?, [2] = nil :: number? },
-				heldTouchHover = { [1] = nil :: number?, [2] = nil :: number? },
-				heldPress = { [1] = nil :: string?, [2] = nil :: string? },
-				selectedIdx = nil :: number?,
-				menuOpen = false,
-				focused = { false, false },
-			}
-			local sut = {
+			return {
+				ownsEnv = ownsEnv,
 				simEnv = simEnv,
 				services = services,
 				input = input,
@@ -1008,7 +1039,6 @@ sert.model(
 				scope = scope,
 				prevHoverServices = prevHoverServices,
 			}
-			return state, sut
 		end,
 		teardown = function(sut)
 			sut.services.GuiService.MenuIsOpen = false
@@ -1016,11 +1046,14 @@ sert.model(
 			InteractModule._useHoverServices(sut.prevHoverServices)
 			sut.scope:Destroy()
 			sut.screen:Destroy()
+			if sut.ownsEnv then
+				sut.simEnv:shutdown()
+			end
 		end,
-		actions = {
+		commands = {
 			hover = {
 				weight = 3,
-				gen = function(g)
+				gen = function(_state, g)
 					return g:int(0, 2)
 				end,
 				run = function(sut, target)
@@ -1041,7 +1074,7 @@ sert.model(
 			},
 			ToggleOverlay = {
 				weight = 2,
-				gen = function(g)
+				gen = function(_state, g)
 					return g:bool()
 				end,
 				run = function(sut, active)
@@ -1054,7 +1087,7 @@ sert.model(
 			},
 			TouchPress = {
 				weight = 3,
-				gen = function(g)
+				gen = function(_state, g)
 					return { idx = g:int(1, 2), slot = g:int(1, 2) }
 				end,
 				run = function(sut, arg)
@@ -1083,7 +1116,7 @@ sert.model(
 			},
 			TouchRelease = {
 				weight = 3,
-				gen = function(g)
+				gen = function(_state, g)
 					return g:int(1, 2)
 				end,
 				run = function(sut, slot)
@@ -1112,7 +1145,7 @@ sert.model(
 			},
 			mouseDown = {
 				weight = 3,
-				gen = function(g)
+				gen = function(_state, g)
 					return g:int(1, 2)
 				end,
 				run = function(sut, idx)
@@ -1144,7 +1177,7 @@ sert.model(
 			},
 			select = {
 				weight = 3,
-				gen = function(g)
+				gen = function(_state, g)
 					return g:int(0, 2)
 				end,
 				run = function(sut, idx)
@@ -1181,7 +1214,7 @@ sert.model(
 			},
 			menu = {
 				weight = 2,
-				gen = function(g)
+				gen = function(_state, g)
 					return g:bool()
 				end,
 				run = function(sut, open)
@@ -1198,7 +1231,7 @@ sert.model(
 			},
 			focus = {
 				weight = 2,
-				gen = function(g)
+				gen = function(_state, g)
 					return { idx = g:int(1, 2), gain = g:bool() }
 				end,
 				run = function(sut, arg)
@@ -1213,22 +1246,27 @@ sert.model(
 				end,
 			},
 		},
-		never = {
-			pressedWhileMenuOpen = function(state, sut)
-				return state.menuOpen and (sut.pressed[1]:peek() or sut.pressed[2]:peek())
+		invariants = {
+			neverPressedWhileMenuOpen = function(state, sut)
+				expect(
+					not (state.menuOpen and (sut.pressed[1]:peek() or sut.pressed[2]:peek())),
+					"never pressed while menu is open"
+				)
 			end,
-			hoveredWhileMenuOpen = function(state, sut)
-				return state.menuOpen and (sut.hovered[1]:peek() or sut.hovered[2]:peek())
+			neverHoveredWhileMenuOpen = function(state, sut)
+				expect(
+					not (state.menuOpen and (sut.hovered[1]:peek() or sut.hovered[2]:peek())),
+					"never hovered while menu is open"
+				)
 			end,
-			pointerHoveredWhileOverlaySinks = function(state, sut)
-				return state.overlayActive
+			neverPointerHoveredWhileOverlaySinks = function(state, sut)
+				local violated = state.overlayActive
 					and (
 						(state.heldTouchHover[1] == nil and sut.hovered[1]:peek())
 						or (state.heldTouchHover[2] == nil and sut.hovered[2]:peek())
 					)
+				expect(not violated, "never pointer-hovered while overlay sinks input")
 			end,
-		},
-		invariants = {
 			hoverAndGeometryMatchReference = function(state, sut)
 				local ptr = sut.positions[state.pointerTarget]
 				local expectedClaimed = state.menuOpen or state.overlayActive
@@ -1310,7 +1348,7 @@ ctest("interact · selected and focused mirror a real player gui", function()
 	gui:Destroy()
 end)
 
-local engineTest = if env.engine ~= nil then test else sert.skip
+local engineTest = if env.engine ~= nil then test else sert.test.skip
 engineTest("interact · press, selected and focused on the engine's own services", function()
 	local services = env.Compat.services
 	local gui = env.Instance.new("ScreenGui")
@@ -1448,5 +1486,3 @@ test("interact · multi-touch hover isolation and nil-services press/selected fa
 	pressed:Destroy()
 	sel:Destroy()
 end)
-
-return {}

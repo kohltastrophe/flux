@@ -447,48 +447,43 @@ test("layout · sert.roblox.Layout geometry, visibility, clipping and settle on 
 	end)
 	flush()
 
-	local settled = RobloxLayout.settle(panel, {
+	local frames = RobloxLayout.settle(panel, {
 		maxFrames = 10,
-		stable = 2,
-		step = function()
-			env.frame(1 / 60)
-		end,
+		stableFrames = 2,
 	})
-	expect(settled, "Flux layout tree settles within frame budget")
-	expect.eq(RobloxLayout.visible(panel), true, "panel is visible under enabled ScreenGui")
-	expect.eq(RobloxLayout.visible(rowA), true, "rowA is visible inside panel")
+	expect(frames <= 10, "Flux layout tree settles within frame budget")
+	expect.eq(RobloxLayout.geometry.visible(panel), true, "panel is visible under enabled ScreenGui")
+	expect.eq(RobloxLayout.geometry.visible(rowA), true, "rowA is visible inside panel")
 
 	local rA = RobloxLayout.geometry.rect(rowA)
-	expect.eq(rA.width, 180, "rowA initial width matches reactive signal")
-	expect.eq(rA.height, 32, "rowA height matches UDim2")
-	expect.eq(
-		RobloxLayout.geometry.sameRect(rA, { x = 32, y = 42, width = 180, height = 32 }),
-		true,
-		"sameRect matches"
-	)
+	expect.eq(rA.w, 180, "rowA initial width matches reactive signal")
+	expect.eq(rA.h, 32, "rowA height matches UDim2")
+	expect.eq(rA.x == 32 and rA.y == 42 and rA.w == 180 and rA.h == 32, true, "rect matches padded offset and size")
 
 	width(140)
 	gap(16)
 	flush()
-	expect.eq(RobloxLayout.geometry.rect(rowA).width, 140, "rowA width updates reactively")
+	expect.eq(RobloxLayout.geometry.rect(rowA).w, 140, "rowA width updates reactively")
 	expect.eq(listConstraint.Padding, UDim.new(0, 16), "list gap updates reactively")
 	expect.eq(RobloxLayout.geometry.rect(rowB).y, 42 + 32 + 16, "rowB Y position reflects updated list gap")
 
-	local low, high = RobloxLayout.clippedBounds(rowB)
-	expect.eq(low.X, 32, "clippedBounds low.X starts at padded child left edge")
-	expect.eq(high.X - low.X, 188, "ClipsDescendants clamps wider child width to panel right edge")
+	RobloxLayout.within(rowA, panel)
+	sert.throws(function()
+		RobloxLayout.within(rowB, panel)
+	end)
 
 	screen.Enabled = false
-	expect.eq(RobloxLayout.visible(rowA), false, "disabling ancestor ScreenGui hides descendant")
+	expect.eq(RobloxLayout.geometry.visible(rowA), false, "disabling ancestor ScreenGui hides descendant")
 
 	s:Destroy()
 	screen:Destroy()
 end)
 
-sert.laws.ui("layout · vstack and hstack with padding, flex, sizeConstraint and aspectRatio", {
-	noTextOverflow = not env.IS_ROBLOX,
-	mount = function(_uiEnv, parent, viewport)
-		local hostParent, cleanHost = env.mountUi(parent, viewport)
+sert.roblox.Layout.matrix(
+	"layout · vstack and hstack with padding, flex, sizeConstraint and aspectRatio",
+	function(container, preset)
+		local viewport = preset.size
+		local hostParent, cleanHost = env.mountUi(container, viewport)
 		local cardW = math.min(viewport.X - 24, 480)
 		local cardH = math.min(viewport.Y - 24, 320)
 		local root: Frame
@@ -564,34 +559,39 @@ sert.laws.ui("layout · vstack and hstack with padding, flex, sizeConstraint and
 			})
 		end)
 		flush()
-		sert.defer(function()
-			scope:Destroy()
-			root:Destroy()
-			cleanHost()
-			flush()
-		end)
-		return root
+		return {
+			root = root,
+			cleanup = function()
+				scope:Destroy()
+				root:Destroy()
+				cleanHost()
+				flush()
+			end,
+		}
 	end,
-	check = function(_uiEnv, root, vp)
-		local RobloxLayout = sert.roblox.Layout
-		RobloxLayout.audit(root, { viewport = vp.size, fitsParent = true, noTextOverflow = not env.IS_ROBLOX })
-		local header = root:FindFirstChild("Header") :: Frame
-		local row1 = root:FindFirstChild("BodyRow1") :: Frame
-		local row2 = root:FindFirstChild("BodyRow2") :: Frame
-		local icon = header:FindFirstChild("Icon") :: Frame
-		local title = header:FindFirstChild("Title") :: TextLabel
-		local spacer = header:FindFirstChild("Spacer") :: Frame
-		local badge = header:FindFirstChild("Badge") :: TextLabel
+	{
+		audit = { textOverflow = not env.IS_ROBLOX },
+		check = function(root)
+			local RobloxLayout = sert.roblox.Layout
+			RobloxLayout.fitsParent(root :: GuiObject)
+			local header = root:FindFirstChild("Header") :: Frame
+			local row1 = root:FindFirstChild("BodyRow1") :: Frame
+			local row2 = root:FindFirstChild("BodyRow2") :: Frame
+			local icon = header:FindFirstChild("Icon") :: Frame
+			local title = header:FindFirstChild("Title") :: TextLabel
+			local spacer = header:FindFirstChild("Spacer") :: Frame
+			local badge = header:FindFirstChild("Badge") :: TextLabel
 
-		RobloxLayout.aligned({ header, row1, row2 }, "Left")
-		RobloxLayout.spacing({ header, row1, row2 }, "Y", 8)
-		RobloxLayout.aligned({ icon, title, spacer, badge }, "CenterY")
-		RobloxLayout.spacing({ icon, title, spacer, badge }, "X", 8)
-		RobloxLayout.aspectRatio(icon, 1)
-		RobloxLayout.within(icon, header)
-		RobloxLayout.nonZero(title)
-	end,
-})
+			RobloxLayout.aligned({ header, row1, row2 }, "left")
+			env.expectSpacing({ header, row1, row2 }, "Y", 8)
+			RobloxLayout.aligned({ icon, title, spacer, badge }, "centerY")
+			env.expectSpacing({ icon, title, spacer, badge }, "X", 8)
+			sert.near(icon.AbsoluteSize.X / icon.AbsoluteSize.Y, 1, 0.05, "icon maintains 1:1 aspect ratio")
+			RobloxLayout.within(icon, header)
+			RobloxLayout.visible(title)
+		end,
+	}
+)
 
 local lastGridState: {
 	gapSig: any,
@@ -599,10 +599,11 @@ local lastGridState: {
 	gridInst: UIGridLayout,
 } = nil :: any
 
-sert.laws.ui("layout · grid and scrolling frame with AutomaticCanvasSize and reactive gap", {
-	noTextOverflow = not env.IS_ROBLOX,
-	mount = function(_uiEnv, parent, viewport)
-		local hostParent, cleanHost = env.mountUi(parent, viewport)
+sert.roblox.Layout.matrix(
+	"layout · grid and scrolling frame with AutomaticCanvasSize and reactive gap",
+	function(container, preset)
+		local viewport = preset.size
+		local hostParent, cleanHost = env.mountUi(container, viewport)
 		local gapSig = Flux.signal(6)
 		local cellSig = Flux.signal(Vector2.new(72, 44))
 		local scroll: ScrollingFrame
@@ -645,35 +646,40 @@ sert.laws.ui("layout · grid and scrolling frame with AutomaticCanvasSize and re
 			cellSig = cellSig,
 			gridInst = gridInst,
 		}
-		sert.defer(function()
-			scope:Destroy()
-			scroll:Destroy()
-			cleanHost()
-			flush()
-		end)
-		return scroll
+		return {
+			root = scroll,
+			cleanup = function()
+				scope:Destroy()
+				scroll:Destroy()
+				cleanHost()
+				flush()
+			end,
+		}
 	end,
-	check = function(_uiEnv, root, vp)
-		local RobloxLayout = sert.roblox.Layout
-		local checkText = not env.IS_ROBLOX
-		RobloxLayout.audit(root, { viewport = vp.size, fitsParent = true, noTextOverflow = checkText })
-		local gridInst = lastGridState.gridInst
-		expect(gridInst.AbsoluteContentSize.Y > 0, "UIGridLayout computes non-zero AbsoluteContentSize.Y")
-		if not env.IS_ROBLOX or root.AbsoluteCanvasSize.Y > 0 then
-			expect(
-				root.AbsoluteCanvasSize.Y >= gridInst.AbsoluteContentSize.Y + 16 - 0.5,
-				"AutomaticCanvasSize.Y expands to fit UIGridLayout content plus padding"
-			)
-		end
+	{
+		audit = { textOverflow = not env.IS_ROBLOX },
+		check = function(root, vp)
+			local RobloxLayout = sert.roblox.Layout
+			local checkText = not env.IS_ROBLOX
+			RobloxLayout.fitsParent(root :: GuiObject)
+			local gridInst = lastGridState.gridInst
+			expect(gridInst.AbsoluteContentSize.Y > 0, "UIGridLayout computes non-zero AbsoluteContentSize.Y")
+			if not env.IS_ROBLOX or (root :: ScrollingFrame).AbsoluteCanvasSize.Y > 0 then
+				expect(
+					(root :: ScrollingFrame).AbsoluteCanvasSize.Y >= gridInst.AbsoluteContentSize.Y + 16 - 0.5,
+					"AutomaticCanvasSize.Y expands to fit UIGridLayout content plus padding"
+				)
+			end
 
-		local gapSig = lastGridState.gapSig
-		local cellSig = lastGridState.cellSig
-		gapSig:set(10)
-		cellSig:set(Vector2.new(80, 52))
-		flush()
-		RobloxLayout.audit(root, { viewport = vp.size, fitsParent = true, noTextOverflow = checkText })
-	end,
-})
+			local gapSig = lastGridState.gapSig
+			local cellSig = lastGridState.cellSig
+			gapSig:set(10)
+			cellSig:set(Vector2.new(80, 52))
+			flush()
+			RobloxLayout.audit(root, { viewport = vp.size, textOverflow = checkText })
+		end,
+	}
+)
 
 test("layout · AutomaticSize, UIScale, TextBounds and RobloxLayout.audit checks", function()
 	local RobloxLayout = sert.roblox.Layout
@@ -744,8 +750,7 @@ test("layout · AutomaticSize, UIScale, TextBounds and RobloxLayout.audit checks
 	RobloxLayout.fitsViewport(autoBox, { viewport = Vector2.new(800, 600) })
 	RobloxLayout.audit(rootFrame, {
 		viewport = Vector2.new(800, 600),
-		fitsParent = true,
-		noTextOverflow = hasTextMetrics,
+		textOverflow = hasTextMetrics,
 	})
 
 	scaleFactor:set(0.5)
@@ -760,8 +765,8 @@ test("layout · AutomaticSize, UIScale, TextBounds and RobloxLayout.audit checks
 	flush()
 end)
 
-local ctest = if env.IS_ROBLOX and game:GetService("Players").LocalPlayer ~= nil then sert.rtest else sert.skip
-ctest("layout · sert.roblox.Layout.settle, geometry and Flicker.around verify non-flickering list layout", function()
+local ctest = sert.test.client
+ctest("layout · sert.roblox.Layout.settle, geometry and Flicker.steady verify non-flickering list layout", function()
 	local RobloxLayout = sert.roblox.Layout
 	local Flicker = sert.roblox.Flicker
 	local gap = Flux(8)
@@ -802,26 +807,20 @@ ctest("layout · sert.roblox.Layout.settle, geometry and Flicker.around verify n
 	end)
 	flush()
 
-	expect(RobloxLayout.settle(container), "Studio UIListLayout + UIPadding settles")
-	expect.eq(RobloxLayout.visible(first), true, "first item is visible")
-	expect.eq(RobloxLayout.visible(second), true, "second item is visible")
-	expect.eq(RobloxLayout.visible(third), true, "third item is visible")
+	expect(RobloxLayout.settle(container) <= 30, "Studio UIListLayout + UIPadding settles")
+	expect.eq(RobloxLayout.geometry.visible(first), true, "first item is visible")
+	expect.eq(RobloxLayout.geometry.visible(second), true, "second item is visible")
+	expect.eq(RobloxLayout.geometry.visible(third), true, "third item is visible")
 
 	local r1 = RobloxLayout.geometry.rect(first)
 	local r2 = RobloxLayout.geometry.rect(second)
 	local r3 = RobloxLayout.geometry.rect(third)
-	expect(r1.y < r2.y and r2.y < r3.y and r1.width == 120, "children lay out in LayoutOrder vertically")
+	expect(r1.y < r2.y and r2.y < r3.y and r1.w == 120, "children lay out in LayoutOrder vertically")
 
-	local report = Flicker.around(function()
-		return second
-	end, function()
-		gap(14)
-		flush()
-	end, { motion = 12, stable = 2 })
-	Flicker.expect(report)
+	gap(14)
+	flush()
+	Flicker.steady(second, { stableFrames = 2 })
 
 	s:Destroy()
 	gui:Destroy()
 end)
-
-return {}

@@ -389,9 +389,9 @@ test("gate · gating off after an error clears the error", function()
 	a:Destroy()
 end)
 
+local pendingAsyncState: any = nil
 local asyncLifecycleSpec = {
 	init = function()
-		local source = Flux.signal(1 :: any)
 		local state = {
 			requestSeq = 0,
 			activeSeq = nil :: number?,
@@ -410,7 +410,15 @@ local asyncLifecycleSpec = {
 			inFlightOverwroteMutate = false,
 			updatedAfterDestroy = false,
 		}
+		pendingAsyncState = state
+		return state
+	end,
+	setup = function()
+		local state = pendingAsyncState
+		pendingAsyncState = nil
+		local source = Flux.signal(1 :: any)
 		local sut: any = {
+			state = state,
 			source = source,
 			threads = {} :: { [number]: thread },
 			node = nil :: any,
@@ -436,7 +444,7 @@ local asyncLifecycleSpec = {
 		end)
 		flush()
 		state.status = "pending"
-		return state, sut
+		return sut
 	end,
 	teardown = function(sut)
 		if sut.scope ~= nil then
@@ -457,10 +465,11 @@ local asyncLifecycleSpec = {
 	end,
 	commands = {
 		ChangeSource = {
-			gen = function(g)
+			gen = function(_state, g)
 				return g:int(1, 8)
 			end,
-			run = function(sut, val, state)
+			run = function(sut, val)
+				local state = sut.state
 				local beforeSeq = state.requestSeq
 				sut.source(val)
 				flush()
@@ -478,10 +487,11 @@ local asyncLifecycleSpec = {
 			end,
 		},
 		ToggleGate = {
-			gen = function(g)
+			gen = function(_state, g)
 				return g:bool()
 			end,
-			run = function(sut, gatedOff, state)
+			run = function(sut, gatedOff)
+				local state = sut.state
 				local beforeSeq = state.requestSeq
 				if gatedOff then
 					sut.source(false)
@@ -507,7 +517,8 @@ local asyncLifecycleSpec = {
 			end,
 		},
 		Refetch = {
-			run = function(sut, _, state)
+			run = function(sut)
+				local state = sut.state
 				local beforeSeq = state.requestSeq
 				sut.node:refetch("manual")
 				return state.requestSeq > beforeSeq
@@ -520,7 +531,7 @@ local asyncLifecycleSpec = {
 			end,
 		},
 		Mutate = {
-			gen = function(g)
+			gen = function(_state, g)
 				return `mut-{g:int(1, 50)}`
 			end,
 			run = function(sut, val)
@@ -540,7 +551,7 @@ local asyncLifecycleSpec = {
 			end,
 		},
 		ResolveInFlight = {
-			gen = function(g, state)
+			gen = function(state, g)
 				local pending: { number } = {}
 				for seq, entry in state.inFlight do
 					if not entry.settled then
@@ -553,7 +564,8 @@ local asyncLifecycleSpec = {
 				table.sort(pending)
 				return g:pick(pending)
 			end,
-			run = function(sut, seq, state)
+			run = function(sut, seq)
+				local state = sut.state
 				if seq == 0 then
 					return
 				end
@@ -595,7 +607,7 @@ local asyncLifecycleSpec = {
 			end,
 		},
 		RejectInFlight = {
-			gen = function(g, state)
+			gen = function(state, g)
 				local pending: { number } = {}
 				for seq, entry in state.inFlight do
 					if not entry.settled then
@@ -608,7 +620,8 @@ local asyncLifecycleSpec = {
 				table.sort(pending)
 				return g:pick(pending)
 			end,
-			run = function(sut, seq, state)
+			run = function(sut, seq)
+				local state = sut.state
 				if seq == 0 then
 					return
 				end
@@ -649,7 +662,8 @@ local asyncLifecycleSpec = {
 		},
 		Destroy = {
 			weight = 1,
-			run = function(sut, _, state)
+			run = function(sut)
+				local state = sut.state
 				if not state.destroyed then
 					state.snapshotAtDestroy = {
 						status = sut.node.state:peek(),
@@ -666,21 +680,18 @@ local asyncLifecycleSpec = {
 			end,
 		},
 	},
-	never = {
-		staleRequestOverwroteLatest = function(state)
-			return state.staleOverwrote
-		end,
-		inFlightOverwroteManualMutate = function(state)
-			return state.inFlightOverwroteMutate
-		end,
-		updatedAfterDestroy = function(state, sut)
-			if not state.destroyed then
-				return false
-			end
-			return state.updatedAfterDestroy or sut.node._effect ~= nil
-		end,
-	},
 	invariants = {
+		staleRequestNeverOverwritesLatest = function(state)
+			expect(not state.staleOverwrote, "stale request never overwrites latest")
+		end,
+		inFlightNeverOverwritesManualMutate = function(state)
+			expect(not state.inFlightOverwroteMutate, "in-flight request never overwrites manual mutate")
+		end,
+		neverUpdatedAfterDestroy = function(state, sut)
+			if state.destroyed then
+				expect(not state.updatedAfterDestroy and sut.node._effect == nil, "never updated after Destroy")
+			end
+		end,
 		lifecycleMatchesReference = function(state, sut)
 			if state.destroyed then
 				expect(sut.node._effect == nil, "destroyed Async node cleared its internal effect")
@@ -704,4 +715,36 @@ sert.model(
 	}
 )
 
-return {}
+test("async · overlapping fetches never overwrite a later mutate or resolve after Destroy", function()
+	local src = Flux.signal(1)
+	local parked: { thread } = {}
+	local a = Async(src, function(v)
+		table.insert(parked, coroutine.running())
+		return coroutine.yield() or v
+	end, "init")
+	flush()
+	src(2)
+	flush()
+	expect(#parked == 2, "two overlapping fetches parked")
+
+	a:mutate("manual")
+	coroutine.resume(parked[1], "stale-1")
+	coroutine.resume(parked[2], "stale-2")
+	expect(a.data() == "manual" and a.loading() == false, "neither overlapping fetch overwrites manual mutate")
+	a:Destroy()
+
+	local src2 = Flux.signal(1)
+	local parked2: { thread } = {}
+	local b = Async(src2, function(v)
+		table.insert(parked2, coroutine.running())
+		return coroutine.yield() or v
+	end, "init")
+	flush()
+	src2(2)
+	flush()
+	expect(#parked2 == 2, "two overlapping fetches parked before Destroy")
+	b:Destroy()
+	coroutine.resume(parked2[1], "after-destroy-1")
+	coroutine.resume(parked2[2], "after-destroy-2")
+	expect(b._effect == nil and b.data == nil, "neither overlapping fetch mutates state after Destroy")
+end)

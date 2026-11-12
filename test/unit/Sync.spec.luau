@@ -534,16 +534,16 @@ local FluxSyncSpec = sert.sim.spec({
 			expectedOverrides = table.clone(sut.expectedOverrides),
 		}
 	end,
-	actions = {
+	commands = {
 		serverWriteV = {
-			gen = { 1, 2, 6, 14, 28, 39 },
+			args = { 1, 2, 6, 14, 28, 39 },
 			next = function(state, val)
 				state.expectedOverrides = table.clone(state.own)
 				state.v = val
 			end,
 		},
 		serverWritePlayerV = {
-			gen = {
+			args = {
 				{ player = 1, value = 2 },
 				{ player = 2, value = 7 },
 				{ player = 3, value = 19 },
@@ -555,14 +555,14 @@ local FluxSyncSpec = sert.sim.spec({
 			end,
 		},
 		serverClearPlayerV = {
-			gen = { 1, 2, 3 },
+			args = { 1, 2, 3 },
 			next = function(state, idx)
 				state.own[idx] = nil
 				state.expectedOverrides[idx] = nil
 			end,
 		},
 		clientWriteV = {
-			gen = {
+			args = {
 				{ player = 1, value = 5 },
 				{ player = 1, value = 12 },
 				{ player = 2, value = 45 },
@@ -570,13 +570,13 @@ local FluxSyncSpec = sert.sim.spec({
 			next = function() end,
 		},
 		serverWriteOther = {
-			gen = { "a", "b", "c" },
+			args = { "a", "b", "c" },
 			next = function(state, val)
 				state.other = val
 			end,
 		},
 		touchPlayerV = {
-			gen = { 1, 2, 3 },
+			args = { 1, 2, 3 },
 			next = function(state, idx)
 				state.hasOwn = true
 				if state.own[idx] == nil then
@@ -589,11 +589,11 @@ local FluxSyncSpec = sert.sim.spec({
 			next = function() end,
 		},
 		flushClient = {
-			gen = { 1, 2, 3 },
+			args = { 1, 2, 3 },
 			next = function() end,
 		},
 		deliverServer = {
-			gen = {
+			args = {
 				{ joined = false, hasValue = false, player = 1, value = 0 },
 				{ joined = true, hasValue = true, player = 1, value = 5 },
 				{ joined = true, hasValue = true, player = 1, value = 12 },
@@ -615,32 +615,22 @@ local FluxSyncSpec = sert.sim.spec({
 			end,
 		},
 		deliverClient = {
-			gen = { 1, 2, 3 },
+			args = { 1, 2, 3 },
 			next = function() end,
 		},
 	},
-	never = {
-		unvalidatedServerValue = function(state)
-			if state.v % 5 == 0 or state.v > 40 then
-				return true
-			end
-			for _, v in state.own do
-				if v % 5 == 0 or v > 40 then
-					return true
-				end
-			end
-			return false
-		end,
-		sharedWriteClobbersOverride = function(state)
-			for idx, expected in state.expectedOverrides do
-				if state.own[idx] ~= expected then
-					return true
-				end
-			end
-			return false
-		end,
-	},
 	invariants = {
+		neverUnvalidatedServerValue = function(state)
+			sert(state.v % 5 ~= 0 and state.v <= 40, "server V never holds unvalidated value")
+			for _, v in state.own do
+				sert(v % 5 ~= 0 and v <= 40, "per-player override never holds unvalidated value")
+			end
+		end,
+		sharedWriteNeverClobbersOverride = function(state)
+			for idx, expected in state.expectedOverrides do
+				sert.eq(state.own[idx], expected, `shared write never clobbers player {idx} override`)
+			end
+		end,
 		authoritativeStateValid = function(state, sut)
 			sert(state.v >= 1 and state.v <= 39 and state.v % 5 ~= 0, "server V stays sanitized")
 			sert(state.other == "a" or state.other == "b" or state.other == "c", "server Other stays valid")
@@ -652,13 +642,28 @@ local FluxSyncSpec = sert.sim.spec({
 	},
 })
 
-sert.sim.checkSpec("sync · pure state specification holds", FluxSyncSpec, {
-	maxStates = 200,
-	maxDepth = 6,
-})
+test("sync · pure state specification holds", function()
+	sert.sim.check(FluxSyncSpec, {
+		maxStates = 200,
+		maxDepth = 6,
+	})
+end)
 
 local syncModelSpec = {
 	init = function()
+		return {
+			pub = 1,
+			map = { a = 1, b = 1 },
+			priv = { [1] = nil :: number?, [2] = nil :: number?, [3] = nil :: number? },
+			privHistory = { [1] = { [0] = true }, [2] = { [0] = true }, [3] = { [0] = true } },
+			aim = 0,
+			joined = { [1] = true, [2] = true, [3] = false },
+			pendingAllowed = { [1] = false, [2] = false, [3] = false },
+			lastRejected = { [1] = nil :: number?, [2] = nil :: number?, [3] = nil :: number? },
+			converged = false,
+		}
+	end,
+	setup = function()
 		local simWorld = sert.sim.new({ mode = "manual", faults = "none" })
 		local srv = simWorld:server()
 		local srvEnv = srv:env()
@@ -719,21 +724,9 @@ local syncModelSpec = {
 		peers[2].inst:start()
 		simWorld:step()
 
-		local state = {
-			pub = 1,
-			map = { a = 1, b = 1 },
-			priv = { [1] = nil :: number?, [2] = nil :: number?, [3] = nil :: number? },
-			privHistory = { [1] = { [0] = true }, [2] = { [0] = true }, [3] = { [0] = true } },
-			aim = 0,
-			joined = { [1] = true, [2] = true, [3] = false },
-			pendingAllowed = { [1] = false, [2] = false, [3] = false },
-			lastRejected = { [1] = nil :: number?, [2] = nil :: number?, [3] = nil :: number? },
-			converged = false,
-		}
-		local sut = {
+		return {
 			simWorld = simWorld,
 			srv = srv,
-			net = simWorld:remotes(srv),
 			serverSync = serverSync,
 			serverInst = serverInst,
 			pub = pub,
@@ -742,7 +735,6 @@ local syncModelSpec = {
 			aim = aim,
 			peers = peers,
 		}
-		return state, sut
 	end,
 	teardown = function(sut)
 		sut.serverInst:destroy()
@@ -752,7 +744,7 @@ local syncModelSpec = {
 	end,
 	commands = {
 		ServerSetPublic = {
-			gen = function(g)
+			gen = function(_state, g)
 				return {
 					pub = validServerInt(g),
 					aim = g:int(1, 50),
@@ -769,7 +761,7 @@ local syncModelSpec = {
 			end,
 		},
 		ServerUpdateMap = {
-			gen = function(g)
+			gen = function(_state, g)
 				return {
 					key = g:pick({ "a", "b" }),
 					val = g:int(1, 30),
@@ -786,7 +778,7 @@ local syncModelSpec = {
 			end,
 		},
 		ServerSetPrivate = {
-			gen = function(g)
+			gen = function(_state, g)
 				local peer = g:int(1, 3)
 				return {
 					peer = peer,
@@ -811,7 +803,7 @@ local syncModelSpec = {
 			end,
 		},
 		ClientPatchAllowed = {
-			gen = function(g)
+			gen = function(_state, g)
 				return {
 					peer = g:int(1, 3),
 					val = validServerInt(g) + g:pick({ 0, 20 }),
@@ -830,7 +822,7 @@ local syncModelSpec = {
 			end,
 		},
 		ClientPatchRejected = {
-			gen = function(g)
+			gen = function(_state, g)
 				return {
 					peer = g:int(1, 3),
 					val = g:int(1, 10) * 5,
@@ -846,10 +838,13 @@ local syncModelSpec = {
 			end,
 		},
 		FlushFrame = {
-			gen = function(g)
+			gen = function(_state, g)
 				return g:pick({ "step", "settle" })
 			end,
 			run = function(sut, mode)
+				if mode == "settle" then
+					sut.simWorld.faults.drop = 0
+				end
 				sut.serverInst:flush()
 				for _, peer in sut.peers do
 					peer.inst:flush()
@@ -868,15 +863,16 @@ local syncModelSpec = {
 						sut.simWorld:step()
 					end
 				end
+				return sut.pub:peek()
 			end,
-			next = function(state, mode, _, sut)
+			next = function(state, mode, pubVal)
 				if mode == "settle" then
 					for idx = 1, 3 do
 						state.joined[idx] = true
 						state.pendingAllowed[idx] = false
 					end
-					if sut ~= nil then
-						state.pub = sut.pub:peek()
+					if pubVal ~= nil then
+						state.pub = pubVal
 					end
 					state.converged = true
 				else
@@ -885,31 +881,24 @@ local syncModelSpec = {
 			end,
 		},
 		DeliverOrDropPacket = {
-			gen = function(g)
+			gen = function(_state, g)
 				return {
 					dropUnreliable = g:bool(0.5),
 					advance = g:bool(0.75),
 				}
 			end,
 			run = function(sut, arg)
-				if arg.dropUnreliable then
-					local q = sut.net.queue
-					for i = #q, 1, -1 do
-						if q[i].channel == "SyncUnreliable" then
-							table.remove(q, i)
-							break
-						end
-					end
-				end
+				sut.simWorld.faults.drop = if arg.dropUnreliable then 1 else 0
 				if arg.advance then
 					sut.simWorld:step()
 				else
-					sut.net:flush()
+					sut.simWorld.scheduler:drain()
 				end
+				return sut.pub:peek()
 			end,
-			next = function(state, _, _, sut)
-				if sut ~= nil then
-					state.pub = sut.pub:peek()
+			next = function(state, _, pubVal)
+				if pubVal ~= nil then
+					state.pub = pubVal
 				end
 				state.converged = false
 			end,
@@ -923,60 +912,37 @@ local syncModelSpec = {
 					sut.serverInst:flush()
 					sut.simWorld:step()
 				end
+				return sut.pub:peek()
 			end,
-			next = function(state, _, _, sut)
+			next = function(state, _, pubVal)
 				state.joined[3] = true
-				if sut ~= nil then
-					state.pub = sut.pub:peek()
+				if pubVal ~= nil then
+					state.pub = pubVal
 				end
 				state.converged = false
 			end,
 		},
 	},
-	never = {
-		divergedAfterConverge = function(state, sut)
+	invariants = {
+		convergesAfterSettle = function(state, sut)
 			if not state.converged then
-				return false
+				return
 			end
 			for idx, peer in sut.peers do
-				if not peer.inst.joined then
-					return true
-				end
+				sert(peer.inst.joined, `peer {idx} joined on settle`)
 				local expectedPriv = state.priv[idx] or 0
-				if peer.pub:peek() ~= sut.pub:peek() or peer.priv:peek() ~= expectedPriv then
-					return true
-				end
+				sert.eq(peer.pub:peek(), sut.pub:peek(), `peer {idx} Public converged to server`)
+				sert.eq(peer.priv:peek(), expectedPriv, `peer {idx} Private converged to server`)
 				local m = peer.map:peek()
 				local sm = sut.map:peek()
-				if m.a ~= sm.a or m.b ~= sm.b then
-					return true
-				end
-			end
-			return false
-		end,
-		privateStateLeakedToOtherPeer = function(state, sut)
-			for idx, peer in sut.peers do
-				local observed = peer.priv:peek()
-				if not state.privHistory[idx][observed] then
-					return true
-				end
-			end
-			return false
-		end,
-		rejectedClientPatchPersistedAfterAck = function(state, sut)
-			if not state.converged then
-				return false
-			end
-			for idx, peer in sut.peers do
+				sert.eq(m.a, sm.a, `peer {idx} Map.a converged`)
+				sert.eq(m.b, sm.b, `peer {idx} Map.b converged`)
 				local rejected = state.lastRejected[idx]
-				if rejected ~= nil and peer.pub:peek() == rejected then
-					return true
+				if rejected ~= nil then
+					sert.ne(peer.pub:peek(), rejected, `rejected client patch reverted on peer {idx}`)
 				end
 			end
-			return false
 		end,
-	},
-	invariants = {
 		serverAuthoritativeNeverCorrupted = function(_, sut)
 			local v = sut.pub:peek()
 			sert(type(v) == "number" and v >= 1 and v <= 39 and v % 5 ~= 0, "server Public stays valid and sanitized")
@@ -1110,7 +1076,7 @@ test("sync · replicates across sert.sim server and client peers over RemoteEven
 	c2Inst:destroy()
 end)
 
-sert.rtest("sync · the default instance creates its remotes on the server without yielding", function()
+sert.test.roblox("sync · the default instance creates its remotes on the server without yielding", function()
 	local RunService = game:GetService("RunService")
 	if not RunService:IsServer() then
 		return
@@ -1127,5 +1093,3 @@ sert.rtest("sync · the default instance creates its remotes on the server witho
 	Flux.Sync.flush()
 	expect(Flux.Sync.SyncSpecDefault == signal, "lazy indexing finds it")
 end)
-
-return {}

@@ -5,7 +5,7 @@ local env = if game ~= nil
 local Flux, sert = env.Flux, env.sert
 
 local test = sert.test
-local rtest = sert.rtest
+local rtest = sert.test.roblox
 local expect = sert
 
 test("frame · effects auto-flush on the frame hookup", function()
@@ -53,7 +53,7 @@ rtest("frame · the hookup flushes at PreRender on a client and at Heartbeat els
 		end)
 	end)
 	expect(
-		sert.frames(function()
+		env.frames(function()
 			return atStep ~= nil
 		end),
 		"the step ran"
@@ -61,5 +61,3 @@ rtest("frame · the hookup flushes at PreRender on a client and at Heartbeat els
 	expect.eq(atStep, 2, `the {if client then "PreRender" else "Heartbeat"} step itself flushed the effect`)
 	e:Destroy()
 end)
-
-return {}

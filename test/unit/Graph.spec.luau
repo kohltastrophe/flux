@@ -16,9 +16,9 @@ local Flux = env.Flux
 local sert = env.sert
 local IS_ROBLOX = env.IS_ROBLOX
 local test = sert.test
-local rtest = sert.rtest
+local rtest = sert.test.roblox
 local expect = sert
-local expectError = sert.fails
+local expectError = sert.throws
 local new = Flux
 local flush = Flux.flush
 local untrack = Flux.untrack
@@ -1378,7 +1378,7 @@ test("dispose · nil and primitives are silent no-ops", function()
 	for _, value in { 42, "hello", true } :: { any } do
 		Flux.dispose(value)
 	end
-end)
+end, { smoke = true })
 
 test("dispose · cancels a suspended thread, and tolerates a dead one", function()
 	local resumed = false
@@ -2232,5 +2232,3 @@ sert.laws.differential(
 	},
 	{ runs = 80 }
 )
-
-return {}

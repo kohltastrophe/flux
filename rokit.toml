@@ -1,4 +1,5 @@
 [tools]
+luau = "luau-lang/luau@0.724"
 rojo = "rojo-rbx/rojo@7.7.1"
 StyLua = "JohnnyMorganz/StyLua@2.6.0"
 luau-lsp = "JohnnyMorganz/luau-lsp@1.70.1"

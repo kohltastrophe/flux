@@ -6,11 +6,11 @@ local env = if game ~= nil
 local Flux, Compat, sert, IS_ROBLOX = env.Flux, env.Compat, env.sert, env.IS_ROBLOX
 
 local test = sert.test
-local rtest = sert.rtest
+local rtest = sert.test.roblox
 local expect = sert
 local eq = sert.eq
 local near = sert.near
-local fails = sert.fails
+local fails = sert.throws
 
 local Clock = Flux.Clock
 
@@ -355,11 +355,13 @@ test("compat · an enum item's EnumType is its enum", function()
 	eq(tostring(quad), "Enum.EasingStyle.Quad")
 	eq(tostring(quad.EnumType), "EasingStyle")
 	if not IS_ROBLOX then
-		local enumName = env.fresh("CustomEnum")
-		local enumA = Compat.Enum[enumName]
-		local enumB = Compat.Enum[enumName]
+		local enumA = Compat.Enum.EasingStyle
+		local enumB = Compat.Enum.EasingStyle
 		expect(rawequal(enumA, enumB), "enum table is cached on Compat.Enum")
-		expect(rawequal(enumA.Alpha, enumA.Alpha), "enum item is cached on its enum")
+		expect(rawequal(enumA.Quad, enumA.Quad), "enum item is cached on its enum")
+		sert.throws(function()
+			local _ = (Compat.Enum :: any)[env.fresh("CustomEnum")]
+		end)
 	end
 end)
 
@@ -476,6 +478,7 @@ rtest("clock · a manual clock steps subscribers, motion and flush; engine defer
 	end)
 end)
 
+local pendingClockInit: any = nil
 local clockModelSpec = {
 	init = function()
 		local wasManual = Clock.isManual()
@@ -491,12 +494,17 @@ local clockModelSpec = {
 			cancelledFired = false,
 			outOfOrderFired = false,
 		}
-		local sut = {
-			wasManual = wasManual,
+		pendingClockInit = { wasManual = wasManual, state = state }
+		return state
+	end,
+	setup = function()
+		local info = pendingClockInit
+		pendingClockInit = nil
+		return {
+			wasManual = info.wasManual,
 			threads = {} :: { [number]: thread },
-			state = state,
+			state = info.state,
 		}
-		return state, sut
 	end,
 	teardown = function(sut)
 		Clock.reset()
@@ -507,10 +515,11 @@ local clockModelSpec = {
 	end,
 	commands = {
 		ScheduleDelay = {
-			gen = function(g)
+			gen = function(_state, g)
 				return g:int(0, 12) * 0.025
 			end,
-			run = function(sut, delaySec, state)
+			run = function(sut, delaySec)
+				local state = sut.state
 				local id = state.nextSeq + 1
 				local due = state.now + delaySec
 				local th = Clock.delay(delaySec, function()
@@ -550,7 +559,8 @@ local clockModelSpec = {
 			end,
 		},
 		ScheduleDefer = {
-			run = function(sut, _, state)
+			run = function(sut)
+				local state = sut.state
 				local id = state.nextSeq + 1
 				local th = Clock.defer(function()
 					local entry = state.defers[id]
@@ -574,7 +584,7 @@ local clockModelSpec = {
 			end,
 		},
 		CancelTimer = {
-			gen = function(g, state)
+			gen = function(state, g)
 				local active: { number } = {}
 				for id, t in state.timers do
 					if not t.cancelled and not t.fired then
@@ -609,11 +619,11 @@ local clockModelSpec = {
 			end,
 		},
 		StepDelta = {
-			gen = function(g)
+			gen = function(_state, g)
 				return g:int(0, 8) * 0.025
 			end,
-			run = function(_, dt, state)
-				table.clear(state.firedTimers)
+			run = function(sut, dt)
+				table.clear(sut.state.firedTimers)
 				Clock.step(dt)
 			end,
 			next = function(state, dt)
@@ -640,10 +650,10 @@ local clockModelSpec = {
 		},
 		Reset = {
 			weight = 1,
-			run = function(sut, _, state)
+			run = function(sut)
 				Clock.reset()
 				table.clear(sut.threads)
-				table.clear(state.firedTimers)
+				table.clear(sut.state.firedTimers)
 			end,
 			next = function(state)
 				table.clear(state.timers)
@@ -652,15 +662,13 @@ local clockModelSpec = {
 			end,
 		},
 	},
-	never = {
-		cancelledTimerFired = function(state)
-			return state.cancelledFired
-		end,
-		outOfOrderDeadlineFired = function(state)
-			return state.outOfOrderFired
-		end,
-	},
 	invariants = {
+		cancelledTimerNeverFired = function(state)
+			expect(not state.cancelledFired, "cancelled timer never fired")
+		end,
+		outOfOrderDeadlineNeverFired = function(state)
+			expect(not state.outOfOrderFired, "timers never fire out of (due, seq) order")
+		end,
 		virtualNowMatchesReference = function(state)
 			near(Clock.now(), state.now, 1e-9, "Clock.now() matches reference virtual time")
 		end,
@@ -686,4 +694,53 @@ sert.model("clock · priority-queue scheduler matches reference virtual time and
 	length = 30,
 })
 
-return {}
+test("clock · multi-child heap ordering, step validation, phase defer draining, and double cancel", function()
+	manual(function()
+		expect(not (pcall(Clock.step, -0.1)), "Clock.step rejects negative seconds")
+		expect(not (pcall(Clock.step, 0.1, 0)), "Clock.step rejects non-positive frameLength")
+
+		local fired = {}
+		for _, delaySec in { 0.08, 0.03, 0.07, 0.01, 0.06, 0.02, 0.05, 0.04 } do
+			local d = delaySec
+			Clock.delay(d, function()
+				table.insert(fired, math.round(d * 100))
+			end)
+		end
+		Clock.step(0.1, 0.005)
+		eq(fired, { 1, 2, 3, 4, 5, 6, 7, 8 }, "8 out-of-order timers fire in strict min-heap deadline order")
+
+		local tDelay = Clock.delay(1, function()
+			error("should not run")
+		end)
+		local tDefer = Clock.defer(function()
+			error("should not run")
+		end)
+		Clock.cancel(tDelay)
+		Clock.cancel(tDelay) -- idempotent second cancel
+		Clock.cancel(tDefer)
+		Clock.cancel(tDefer) -- idempotent second cancel
+		Clock.step(2)
+
+		local trace = {}
+		local c1 = Clock.connect("PreRender", function()
+			table.insert(trace, "pre")
+			Clock.defer(function()
+				table.insert(trace, "pre-defer")
+			end)
+		end)
+		local c2 = Clock.connect("Heartbeat", function()
+			table.insert(trace, "hb")
+			Clock.defer(function()
+				table.insert(trace, "hb-defer")
+			end)
+		end)
+		Clock.step(1 / 60, 1 / 60)
+		c1()
+		c2()
+		eq(
+			trace,
+			{ "pre", "pre-defer", "hb", "hb-defer" },
+			"Clock.defer drains between PreRender and Heartbeat and at frame end"
+		)
+	end)
+end)
