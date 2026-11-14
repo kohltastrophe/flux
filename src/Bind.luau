@@ -20,11 +20,18 @@ local read = Graph.read
 local untrack = Graph.untrack
 local isNode = Graph.isNode
 local isReactive = Graph.isReactive
-local withOwner = Graph.withOwner
+local withOwner: any = Graph.withOwner
 
 local MODEL_SYMBOL: any = table.freeze({ type = "Model" })
+local PORTAL_SYMBOL: any = table.freeze({ type = "Portal" })
 local NO_VALUE: any = nil
 local NOOP = function() end
+
+--- @ignore
+type MountedPortal = {
+	spec: any,
+	stop: () -> (),
+}
 
 --- @ignore
 type BindData = {
@@ -34,9 +41,14 @@ type BindData = {
 	flushed: boolean,
 	destroyCleanup: (() -> ())?,
 	pin: number?,
+	scratchChildren: { Instance }?,
+	scratchPortals: { any }?,
+	scratchIncoming: { [Instance]: true }?,
 	children: {
 		cleanupConnection: RBXScriptConnection?,
 		list: { Instance },
+		portals: { MountedPortal }?,
+		nextPortals: { MountedPortal }?,
 		parent: Instance?,
 		order: number?,
 		token: number?,
@@ -45,6 +57,9 @@ type BindData = {
 
 local bindData: { [Graph.Node<any>]: BindData } = setmetatable({}, { __mode = "k" })
 local bindGeneration = 0
+
+--- @ignore
+export type Portal = Type.Portal
 
 -- The source that currently drives each instance property or attribute (attributes keyed with a `$` prefix). An edit
 -- that sets the key again, bound or static, releases the previous claim first, so the newest value wins and stays
@@ -99,17 +114,101 @@ local function isInstance(value: any): boolean
 	return kindOf(value) == "Instance"
 end
 
-local function collectChildren(value: any, into: { Instance }): { Instance }
+local function isPortal(value: unknown): boolean
+	local rawValue: any = value
+	return type(value) == "table" and rawget(rawValue, 1) == PORTAL_SYMBOL
+end
+
+local mountPortal: (portal: any) -> () -> ()
+
+local function stopPortals(portals: { () -> () }?)
+	if portals == nil then
+		return
+	end
+	for _, stop in portals do
+		stop()
+	end
+	table.clear(portals)
+end
+
+local function stopMountedPortals(portals: { MountedPortal }?)
+	if portals == nil then
+		return
+	end
+	for _, entry in portals do
+		entry.stop()
+	end
+	table.clear(portals)
+end
+
+local function collectChildren(value: any, into: { Instance }, portals: { any }): { Instance }
 	if isInstance(value) then
 		table.insert(into, value)
 	elseif isNode(value) then
-		collectChildren(get(value), into)
+		collectChildren(get(value), into, portals)
+	elseif isPortal(value) then
+		table.insert(portals, value)
 	elseif type(value) == "table" then
 		for _, child in value do
-			collectChildren(child, into)
+			collectChildren(child, into, portals)
 		end
 	end
 	return into
+end
+
+local function syncPortals(data: any, portals: { any }, count: number)
+	local oldPortals = data.portals
+	if count == 0 then
+		stopMountedPortals(oldPortals)
+		return
+	end
+	local mounted = data.nextPortals
+	if mounted == nil then
+		mounted = {}
+	else
+		data.nextPortals = nil
+		table.clear(mounted)
+	end
+	if oldPortals ~= nil and oldPortals[1] ~= nil then
+		local nOld = #oldPortals
+		for i = 1, count do
+			local spec = portals[i]
+			local matched: MountedPortal? = nil
+			for j = 1, nOld do
+				local oldEntry = oldPortals[j]
+				if oldEntry and oldEntry.spec == spec then
+					matched = oldEntry
+					oldPortals[j] = false :: any
+					break
+				end
+			end
+			mounted[i] = matched or { spec = spec, stop = NOOP }
+		end
+		for j = 1, nOld do
+			local oldEntry = oldPortals[j]
+			if oldEntry then
+				oldEntry.stop()
+			end
+		end
+		table.clear(oldPortals)
+	else
+		for i = 1, count do
+			mounted[i] = { spec = portals[i], stop = NOOP }
+		end
+	end
+	data.portals = mounted
+	if oldPortals ~= nil then
+		data.nextPortals = oldPortals
+	end
+	for i = 1, count do
+		local entry = mounted[i]
+		if entry.stop == NOOP then
+			local spec = entry.spec
+			entry.stop = withOwner(NO_VALUE, function()
+				return mountPortal(spec)
+			end)
+		end
+	end
 end
 
 local function applyChildren(bind: BindData, value: any)
@@ -125,8 +224,25 @@ local function applyChildren(bind: BindData, value: any)
 		value = get(value)
 	end
 
-	if type(value) == "table" and not isInstance(value) then
-		local children = collectChildren(value, {})
+	if isPortal(value) then
+		for _, child in list do
+			if child.Parent == parent then
+				child.Parent = nil
+			end
+		end
+		table.clear(list)
+		local portals: { any } = bind.scratchPortals or {}
+		bind.scratchPortals = nil
+		portals[1] = value
+		syncPortals(data, portals, 1)
+		table.clear(portals)
+		bind.scratchPortals = portals
+	elseif type(value) == "table" and not isInstance(value) then
+		local children: { Instance } = bind.scratchChildren or {}
+		bind.scratchChildren = nil
+		local portals: { any } = bind.scratchPortals or {}
+		bind.scratchPortals = nil
+		collectChildren(value, children, portals)
 		if list[1] ~= nil then
 			if children[2] == nil then
 				local first = children[1]
@@ -136,7 +252,8 @@ local function applyChildren(bind: BindData, value: any)
 					end
 				end
 			else
-				local incoming: { [Instance]: true } = {}
+				local incoming: { [Instance]: true } = bind.scratchIncoming or {}
+				bind.scratchIncoming = nil
 				for _, child in children do
 					incoming[child] = true
 				end
@@ -145,14 +262,23 @@ local function applyChildren(bind: BindData, value: any)
 						child.Parent = nil
 					end
 				end
+				table.clear(incoming)
+				bind.scratchIncoming = incoming
 			end
 			table.clear(list)
 		end
 		for count, child in children do
 			layoutOrder = applyLayoutOrder(child, layoutOrder)
 			list[count] = child
-			child.Parent = parent
+			if child.Parent ~= parent then
+				child.Parent = parent
+			end
 		end
+		syncPortals(data, portals, #portals)
+		table.clear(children)
+		table.clear(portals)
+		bind.scratchChildren = children
+		bind.scratchPortals = portals
 	else
 		for _, child in list do
 			if child.Parent == parent and child ~= value then
@@ -160,11 +286,14 @@ local function applyChildren(bind: BindData, value: any)
 			end
 		end
 		table.clear(list)
+		syncPortals(data, list, 0)
 		if value ~= nil and isInstance(value) then
 			local child = value :: Instance
 			applyLayoutOrder(child, layoutOrder)
 			list[1] = child
-			child.Parent = parent
+			if child.Parent ~= parent then
+				child.Parent = parent
+			end
 		end
 	end
 end
@@ -328,6 +457,7 @@ local function cleanupChildrenBind<T>(node: Graph.Node<T>, parent: Instance?)
 	if children.cleanupConnection then
 		children.cleanupConnection:Disconnect()
 	end
+	stopMountedPortals(children.portals)
 	for _, child in children.list do
 		local current = child and child.Parent
 		if current ~= nil and (parent == nil or current == parent) then
@@ -487,7 +617,7 @@ Returns `true` when `value` is a [`Flux.model`](https://flux.kohl.gg/guide/roblo
 ]]
 function Bind.isModel(value: unknown): boolean
 	local rawValue: any = value
-	return type(value) == "table" and rawValue[1] == MODEL_SYMBOL
+	return type(value) == "table" and rawget(rawValue, 1) == MODEL_SYMBOL
 end
 
 --[[
@@ -879,5 +1009,133 @@ function Bind.attach(instance: Instance, property: string, isAttribute: boolean?
 		table.insert(claim, releaser)
 	end
 end
+
+--- @ignore
+function Bind.isPortal(value: unknown): boolean
+	return isPortal(value)
+end
+
+--[[
+Creates a portal mounting `children` into `target` (static [`Instance`](https://create.roblox.com/docs/reference/engine/classes/Instance)
+or reactive target node) without transferring ownership of `target`.
+Mounted children are unparented when the owning scope tears down, the target changes, or the portal host is destroyed.
+
+[Open Documentation](https://flux.kohl.gg/guide/roblox/creation#portals-flux-portal)
+]]
+function Bind.portal(target: Graph.Reactive<Instance?>, children: any): Portal
+	if target ~= nil and not isInstance(target) and not Graph.isDynamic(target) then
+		error(`Flux.portal expects an Instance, reactive target, or nil, got {compatTypeof(target)}`, 2)
+	end
+	local wrapped: any = table.freeze({ PORTAL_SYMBOL, target, children })
+	return wrapped
+end
+
+--- @ignore
+function mountPortal(portal: any): () -> ()
+	local targetSpec = portal[2]
+	local content = portal[3]
+	local mountedInstances: { Instance } = {}
+	local subCleanups: { () -> () } = {}
+	local targetConn: RBXScriptConnection? = nil
+	local currentTarget: Instance? = nil
+	local eff: any = nil
+	local stopped = false
+
+	local function clearMounted()
+		if targetConn ~= nil then
+			targetConn:Disconnect()
+			targetConn = nil
+		end
+		stopPortals(subCleanups)
+		local target = currentTarget
+		currentTarget = nil
+		if target ~= nil then
+			for _, inst in mountedInstances do
+				if inst.Parent == target then
+					inst.Parent = nil
+				end
+			end
+		end
+		table.clear(mountedInstances)
+	end
+
+	local function mountItem(target: Instance, item: any, order: number): number
+		if isInstance(item) then
+			order = applyLayoutOrder(item, order)
+			table.insert(mountedInstances, item)
+			item.Parent = target
+			return order
+		elseif isNode(item) then
+			table.insert(subCleanups, Bind.children(item, target, order))
+			return order + 1
+		elseif isPortal(item) then
+			table.insert(subCleanups, mountPortal(item))
+			return order
+		elseif type(item) == "table" then
+			for _, sub in item do
+				order = mountItem(target, sub, order)
+			end
+		end
+		return order
+	end
+
+	local function mountTo(target: any)
+		clearMounted()
+		if stopped or target == nil then
+			return
+		end
+		if not isInstance(target) then
+			error(`Flux.portal target must resolve to an Instance or nil, got {compatTypeof(target)}`, 2)
+		end
+		currentTarget = target
+		targetConn = target.Destroying:Once(clearMounted)
+		local ok, err: any = pcall(mountItem, target, content, 1)
+		if not ok then
+			clearMounted()
+			error(err, 0)
+		end
+	end
+
+	local function stop()
+		if stopped then
+			return
+		end
+		stopped = true
+		if eff ~= nil then
+			eff:Destroy()
+			eff = nil
+		end
+		clearMounted()
+	end
+
+	if Graph.isDynamic(targetSpec) then
+		local pendingTarget: any = nil
+		local function applyTarget()
+			local nextTarget = pendingTarget
+			pendingTarget = nil
+			mountTo(nextTarget)
+		end
+		local function mountUntracked()
+			untrack(applyTarget)
+		end
+		eff = withOwner(NO_VALUE, function()
+			return effect(function()
+				pendingTarget = read(targetSpec)
+				withOwner(NO_VALUE, mountUntracked)
+			end)
+		end)
+	else
+		mountTo(targetSpec)
+	end
+
+	if getOwner() ~= nil then
+		cleanup(stop)
+	end
+
+	return stop
+end
+
+--- @ignore
+Bind.mountPortal = mountPortal
 
 return table.freeze(Bind)

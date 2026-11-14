@@ -1146,3 +1146,74 @@ test("bind · idle BindData teardown fires onUnobserved and cleanly rebinds acro
 	s:Destroy()
 	kidsSig:Destroy()
 end)
+
+test("bind · applyChildren keeps unchanged portals mounted and stops removed portals before replacements", function()
+	local overlay = Instance.new("Frame")
+	overlay.Parent = workspace
+	local host = Instance.new("Frame")
+	host.Parent = workspace
+	local sharedChild = Instance.new("Frame")
+	local extra = Instance.new("Frame")
+
+	local portal1 = Flux.portal(overlay, sharedChild)
+	local kids = Flux.signal({ portal1 } :: any)
+	local stop = Bind.children(kids, host)
+	expect(sharedChild.Parent == overlay, "initial portal mounts child into overlay")
+
+	local ancestryParents: { any } = {}
+	local conn = sharedChild.AncestryChanged:Connect(function()
+		table.insert(ancestryParents, if sharedChild.Parent == nil then "nil" else sharedChild.Parent)
+	end)
+
+	kids:set({ portal1, extra })
+	flush()
+	expect(
+		#ancestryParents == 0 and sharedChild.Parent == overlay and extra.Parent == host,
+		`unchanged portal stays mounted without AncestryChanged (got {#ancestryParents})`
+	)
+
+	local portal2 = Flux.portal(overlay, sharedChild)
+	kids:set({ portal2 })
+	flush()
+	expect(
+		sharedChild.Parent == overlay
+			and #ancestryParents == 2
+			and ancestryParents[1] == "nil"
+			and ancestryParents[2] == overlay,
+		`removed portal stops before replacement shares child ({#ancestryParents})`
+	)
+
+	conn:Disconnect()
+	stop()
+	overlay:Destroy()
+	host:Destroy()
+	sharedChild:Destroy()
+	extra:Destroy()
+	kids:Destroy()
+end)
+
+test("bind · mountPortal cleans up already-mounted children when a nested item errors", function()
+	local overlay = Instance.new("Frame")
+	overlay.Parent = workspace
+	local host = Instance.new("Frame")
+	host.Parent = workspace
+	local goodChild = Instance.new("Frame")
+	local throwing = Flux.computed(function()
+		error("nested portal boom", 0)
+	end)
+
+	local portal = Flux.portal(overlay, { goodChild, throwing })
+	local ok, err = pcall(function()
+		Bind.children(Flux.signal(portal :: any), host)
+	end)
+	expect(
+		not ok and string.find(tostring(err), "nested portal boom", 1, true) ~= nil,
+		"nested portal error propagates"
+	)
+	expect(goodChild.Parent == nil, "already-mounted portal child is cleaned up on error")
+
+	throwing:Destroy()
+	goodChild:Destroy()
+	overlay:Destroy()
+	host:Destroy()
+end)

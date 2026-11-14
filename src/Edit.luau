@@ -19,6 +19,9 @@ local effect = Graph.effect
 local getOwner = Graph.getOwner
 local cleanup = Graph.cleanup
 local bindContext = Graph.bindContext
+local untrack = Graph.untrack
+local withOwner = Graph.withOwner
+local NOOP = function() end
 
 local bindFrom = Bind.from
 local bindTo = Bind.to
@@ -278,6 +281,13 @@ local Find = table.freeze({
 
 -- Split ---------------------------------------------------------------------------------------------------------------
 
+-- A handle returned by `Flux.portal(target, children)` that mounts UI into `target`.
+--- @ignore
+export type Portal = Bind.Portal
+-- A component schema marker returned by `Flux.prop(default)`.
+--- @ignore
+export type DefaultProp<T> = Type.DefaultProp<T>
+
 -- `T` with every property optional.
 --- @ignore
 export type Partial<T> = Type.Partial<T>
@@ -289,30 +299,124 @@ export type Pick<T, G> = Type.Pick<T, G>
 --- @ignore
 export type Omit<T, G> = Type.Omit<T, G>
 
+local PROP_DEFAULT: any = table.freeze({ type = "PropDefault" })
+local mergeSources: { [any]: { n: number, [number]: any } } = setmetatable({}, { __mode = "k" })
+
+local MergeMT: { [string]: any } = {
+	__index = function(self: any, key: any): any
+		local sources = mergeSources[self]
+		if sources == nil then
+			return nil
+		end
+		for index = sources.n, 1, -1 do
+			local source = sources[index]
+			if source ~= nil then
+				local value = source[key]
+				if value ~= nil then
+					return value
+				end
+			end
+		end
+		return nil
+	end,
+	__newindex = function()
+		error("Flux.merge tables are read-only", 2)
+	end,
+	__len = function(self: any): number
+		local sources = mergeSources[self]
+		if sources == nil then
+			return 0
+		end
+		local maxLen = 0
+		for index = 1, sources.n do
+			local source = sources[index]
+			if source ~= nil then
+				local len = #source
+				if len > maxLen then
+					maxLen = len
+				end
+			end
+		end
+		return maxLen
+	end,
+	__iter = function(self: any)
+		local sources = mergeSources[self]
+		local snap: { [any]: any } = {}
+		if sources ~= nil then
+			for index = 1, sources.n do
+				local source = sources[index]
+				if source ~= nil then
+					for key, value in source do
+						snap[key] = value
+					end
+				end
+			end
+		end
+		return next, snap
+	end,
+}
+
+local function merge(...: any): any
+	local count = select("#", ...)
+	for index = 1, count do
+		local source = select(index, ...)
+		if source ~= nil and type(source) ~= "table" then
+			error(`Flux.merge expects tables or nil, got {compatTypeof(source)}`, 2)
+		end
+	end
+	local proxy = setmetatable({}, MergeMT)
+	mergeSources[proxy] = table.pack(...)
+	return proxy
+end
+
+type MergeProps = <A, B, C, D>(a: A, b: B?, c: C?, d: D?) -> Type.MergeTables<A, B, C, D>
+
+local function applySchemaDefaults(own: { [any]: any }, schema: { [any]: any })
+	for key, spec in schema do
+		if own[key] == nil and type(spec) == "table" and rawget(spec, 1) == PROP_DEFAULT then
+			own[key] = rawget(spec, 2)
+		end
+	end
+end
+
 local function split(props: any, keys: any, ...: any): ...any
 	if keys == nil and select("#", ...) == 0 then
-		return if type(props) == "table" then table.clone(props) else {}
+		if type(props) ~= "table" then
+			return {}
+		elseif getmetatable(props) == MergeMT then
+			local out: { [any]: any } = {}
+			for key, value in props do
+				out[key] = value
+			end
+			return out
+		end
+		return table.clone(props)
 	elseif select("#", ...) == 0 then
 		local own = {}
 		local rest = {}
-		if type(props) == "table" then
+		if type(keys) == "table" then
 			if keys[1] ~= nil then
-				for _, key in keys do
-					local val = props[key]
-					if val ~= nil then
-						own[key] = val
+				if type(props) == "table" then
+					for _, key in keys do
+						local val = props[key]
+						if val ~= nil then
+							own[key] = val
+						end
 					end
-				end
-				for key, value in props do
-					if own[key] == nil then
-						rest[key] = value
+					for key, value in props do
+						if own[key] == nil then
+							rest[key] = value
+						end
 					end
 				end
 			else
-				for key, value in props do
-					local target = if keys[key] ~= nil then own else rest
-					target[key] = value
+				if type(props) == "table" then
+					for key, value in props do
+						local target = if keys[key] ~= nil then own else rest
+						target[key] = value
+					end
 				end
+				applySchemaDefaults(own, keys)
 			end
 		end
 		return own, rest
@@ -351,6 +455,23 @@ local function split(props: any, keys: any, ...: any): ...any
 		end
 	end
 
+	for index = 1, count do
+		local group = groups[index]
+		if group[1] == nil then
+			local target = results[index]
+			for key, spec in group do
+				if
+					owners[key] == index
+					and target[key] == nil
+					and type(spec) == "table"
+					and rawget(spec, 1) == PROP_DEFAULT
+				then
+					target[key] = rawget(spec, 2)
+				end
+			end
+		end
+	end
+
 	return table.unpack(results, 1, count + 1)
 end
 
@@ -359,9 +480,19 @@ type Split =
 	& (<T, G>(props: T, keys: G) -> (Pick<T, G>, Omit<T, G>))
 	& (<T>(props: T, first: { [any]: any }, second: { [any]: any }, ...{ [any]: any }) -> ...Partial<T>)
 
--- Marks a key in a component prop schema at runtime; pair with a type cast (`Flux.prop() :: Flux.Reactive<string>`).
-local function prop(): any
-	return true
+-- Marks a key in a component prop schema at runtime; pair with a type cast (`Flux.prop() :: Flux.Reactive<string>`)
+-- or pass a `default` value (`Flux.prop(16)`).
+type Prop = (() -> any) & (<T>(default: T) -> Type.DefaultProp<T>)
+
+local function prop(...: any): any
+	if select("#", ...) == 0 then
+		return true
+	end
+	local default = select(1, ...)
+	if default == nil then
+		return true
+	end
+	return table.freeze({ PROP_DEFAULT, default })
 end
 
 type Own = <A, B, C, D>(a: A, b: B?, c: C?, d: D?) -> Type.MergeOwn<A, B, C, D>
@@ -790,7 +921,9 @@ local function finalizeEdit(
 			elseif isNode(child) then
 				table.insert(_CLEAN, Bind.children(child, instance, order))
 				order += 1
-			elseif child[1] == FIND_SYMBOL then
+			elseif Bind.isPortal(child) then
+				table.insert(_CLEAN, Bind.mountPortal(child))
+			elseif rawget(child, 1) == FIND_SYMBOL then
 				resolveFind(child, instance, applyEdit)
 			else
 				order = applyEdit(instance, child, seenAttrs, seenProps, _CLEAN, order)
@@ -932,7 +1065,7 @@ local function edit(
 				table.insert(actions :: { any }, value)
 			elseif type(value) == "table" then
 				if not isModel(value) then
-					if value[1] ~= FIND_SYMBOL and not isNode(value) then
+					if rawget(value, 1) ~= FIND_SYMBOL and not Bind.isPortal(value) and not isNode(value) then
 						hasFlatten = true
 					end
 					childKeys = childKeys or {}
@@ -1001,9 +1134,142 @@ local function new(className: string, properties: any): Instance
 	return editInstance(instance, properties)
 end
 
+type MountedPortal = {
+	spec: any,
+	stop: () -> (),
+}
+
+local function collectMountedPortals(item: any, into: { any })
+	while isNode(item) do
+		item = get(item)
+	end
+	if item == nil then
+		return
+	elseif Bind.isPortal(item) then
+		table.insert(into, item)
+	elseif type(item) == "table" and kindOf(item) ~= "Instance" then
+		for _, child in item do
+			collectMountedPortals(child, into)
+		end
+	end
+end
+
+local function mountTopPortals(item: any)
+	if item == nil then
+		return
+	elseif Bind.isPortal(item) then
+		cleanup(Bind.mountPortal(item))
+	elseif isNode(item) then
+		local active: { MountedPortal } = {}
+		local stopped = false
+		local function stopAll()
+			if stopped then
+				return
+			end
+			stopped = true
+			for _, entry in active do
+				entry.stop()
+			end
+			table.clear(active)
+		end
+		cleanup(stopAll)
+		effect(function()
+			if stopped then
+				return
+			end
+			local desired: { any } = {}
+			collectMountedPortals(item, desired)
+			local nextActive: { MountedPortal } = {}
+			for i = 1, #desired do
+				local spec = desired[i]
+				local matched: MountedPortal? = nil
+				for j = 1, #active do
+					local oldEntry = active[j]
+					if oldEntry and oldEntry.spec == spec then
+						matched = oldEntry
+						active[j] = false :: any
+						break
+					end
+				end
+				nextActive[i] = matched or { spec = spec, stop = NOOP }
+			end
+			for j = 1, #active do
+				local oldEntry = active[j]
+				if oldEntry then
+					oldEntry.stop()
+				end
+			end
+			table.clear(active)
+			active = nextActive
+			for i = 1, #active do
+				local entry = active[i]
+				if entry.stop == NOOP then
+					local spec = entry.spec
+					entry.stop = withOwner(nil, function()
+						return untrack(function()
+							return Bind.mountPortal(spec)
+						end)
+					end)
+				end
+			end
+		end)
+	elseif type(item) == "table" and kindOf(item) ~= "Instance" then
+		for _, child in item do
+			mountTopPortals(child)
+		end
+	end
+end
+
+local function mount(fn: () -> any, target: Graph.Reactive<Instance?>?): () -> ()
+	if type(fn) ~= "function" then
+		error(`Flux.mount expects a function, got {compatTypeof(fn)}`, 2)
+	elseif target ~= nil and kindOf(target) ~= "Instance" and not Graph.isDynamic(target) then
+		error(`Flux.mount expects an Instance target, reactive target, or nil, got {compatTypeof(target)}`, 2)
+	end
+
+	local root = Graph.scope(function()
+		local result = fn()
+		if target ~= nil then
+			cleanup(Bind.mountPortal(Bind.portal(target, result)))
+		elseif result ~= nil then
+			mountTopPortals(result)
+		end
+	end)
+
+	local done = false
+	local targetConn: RBXScriptConnection? = nil
+	local function disconnectTarget()
+		if targetConn ~= nil then
+			targetConn:Disconnect()
+			targetConn = nil
+		end
+	end
+	local function unmount()
+		if done then
+			return
+		end
+		done = true
+		disconnectTarget()
+		root:Destroy()
+	end
+
+	root:onDestroy(disconnectTarget)
+	if target ~= nil and kindOf(target) == "Instance" then
+		targetConn = (target :: Instance).Destroying:Once(unmount)
+	end
+	return unmount
+end
+
 return table.freeze({
 	edit = editInstance,
 	new = new,
+	--[[
+	Runs `fn` inside a new root [scope](https://flux.kohl.gg/guide/concepts/scopes), mounts the returned UI into `target` (or mounts returned portals when `target` is omitted), and returns an idempotent `unmount` function. Never destroys `target`.
+
+	[Open Documentation](https://flux.kohl.gg/guide/roblox/creation#mounting-a-root-flux-mount)
+	]]
+	mount = mount,
+	portal = Bind.portal,
 	Flags = Flags,
 	Defaults = Defaults,
 	Find = Find,
@@ -1024,15 +1290,21 @@ return table.freeze({
 	]]
 	split = split :: Split,
 	--[[
-	Marks a key in a component prop schema for `Flux.split`; cast the call to declare the property's `--!strict` type.
+	Marks a key in a component prop schema for `Flux.split`; cast a bare call to declare the type (`Flux.prop() :: Flux.Reactive<string>`), or pass `default` (`Flux.prop(16)`) to fill missing/`nil` values automatically.
 
 	[Open Documentation](https://flux.kohl.gg/guide/concepts/components#splitting-props-with-flux-split)
 	]]
-	prop = prop,
+	prop = prop :: Prop,
 	--[[
 	Merges one or more component prop schemas into a single frozen schema table for `Flux.Props` and `Flux.split`.
 
 	[Open Documentation](https://flux.kohl.gg/guide/concepts/components#splitting-props-with-flux-split)
 	]]
 	own = own :: Own,
+	--[[
+	Returns a read-only live view merging 1-4 prop tables left-to-right where the rightmost non-`nil` value wins.
+
+	[Open Documentation](https://flux.kohl.gg/guide/concepts/components#merging-props-with-flux-merge)
+	]]
+	merge = merge :: MergeProps,
 })

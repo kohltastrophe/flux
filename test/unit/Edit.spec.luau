@@ -1604,6 +1604,291 @@ test("edit · defaults, scope cleanup, Parent/model replacement, tag refcounts, 
 	tagHost:Destroy()
 end)
 
+test(
+	"mount · mounts returned instances and portals without owning target; target destroy and unmount clean up",
+	function()
+		expectError(function()
+			Flux.mount("not a function" :: any)
+		end, "Flux.mount expects a function")
+		expectError(function()
+			Flux.mount(function()
+				return nil
+			end, 123 :: any)
+		end, "Flux.mount expects an Instance target")
+
+		local target = Instance.new("Folder")
+		target.Name = "MountTarget"
+		local tick = Flux.signal(0)
+		local runs, cleanups = 0, 0
+		local rawChild = Instance.new("Folder")
+		rawChild.Name = "RawChild"
+
+		local unmount = Flux.mount(function()
+			Flux.effect(function()
+				tick()
+				runs += 1
+			end)
+			Flux.cleanup(function()
+				cleanups += 1
+			end)
+			return {
+				Flux.new("Frame")({ Name = "MountedCard" }),
+				rawChild,
+			}
+		end, target)
+
+		flush()
+		expect(
+			target:FindFirstChild("MountedCard") ~= nil and rawChild.Parent == target and runs == 1,
+			"mount parents returned Flux and raw instances into target and runs scoped effects"
+		)
+
+		tick:set(1)
+		flush()
+		expect(runs == 2, "mounted effects stay active while mounted")
+
+		unmount()
+		unmount()
+		tick:set(2)
+		flush()
+		expect(
+			cleanups == 1 and runs == 2 and target:FindFirstChild("MountedCard") == nil and rawChild.Parent == nil,
+			"idempotent unmount destroys mounted scope and raw instances while sparing target"
+		)
+		target:Destroy()
+
+		-- Target destruction automatically unmounts
+		local autoTarget = Instance.new("Folder")
+		local autoRuns, autoCleanups = 0, 0
+		local autoSig = Flux.signal(1)
+		Flux.mount(function()
+			Flux.effect(function()
+				autoSig()
+				autoRuns += 1
+			end)
+			Flux.cleanup(function()
+				autoCleanups += 1
+			end)
+			return Flux.new("Frame")({ Name = "AutoChild" })
+		end, autoTarget)
+		flush()
+		autoTarget:Destroy()
+		autoSig:set(2)
+		flush()
+		expect(autoCleanups == 1 and autoRuns == 1, "destroying target automatically unmounts scope and stops effects")
+
+		-- Mounting with nil target mounts returned nested/top-level portals
+		local overlay = Instance.new("Folder")
+		overlay.Name = "Overlay"
+		local modal = Instance.new("Frame")
+		modal.Name = "Modal"
+		local unmountNil = Flux.mount(function()
+			return {
+				Flux.portal(overlay, modal),
+			}
+		end)
+		expect(modal.Parent == overlay, "mount with nil target activates returned portals")
+		unmountNil()
+		expect(modal.Parent == nil, "unmount clears top-level portals without destroying overlay")
+		overlay:Destroy()
+	end
+)
+
+test("portal · mounts static, reactive target, conditional, and array children safely", function()
+	expectError(function()
+		Flux.portal(123 :: any, {})
+	end, "Flux.portal expects an Instance")
+
+	local overlayA = Instance.new("Folder")
+	overlayA.Name = "OverlayA"
+	local overlayB = Instance.new("Folder")
+	overlayB.Name = "OverlayB"
+
+	local targetSig = Flux.signal(overlayA :: Instance?)
+	local showModal = Flux.signal(true)
+
+	local portaledStatic = Instance.new("Frame")
+	portaledStatic.Name = "PortaledStatic"
+	local condModal = Instance.new("Frame")
+	condModal.Name = "CondModal"
+	local arrayBadge = Instance.new("Frame")
+	arrayBadge.Name = "ArrayBadge"
+	local inlineChild = Instance.new("Frame")
+	inlineChild.Name = "InlineChild"
+
+	local arrayPortalChild = Flux.new("Frame")({ Name = "ArrayPortalChild" })
+	local dynArray = Flux.computed(function()
+		return {
+			inlineChild,
+			Flux.portal(overlayB, arrayPortalChild),
+		}
+	end)
+
+	local host = Flux.new("Frame")({
+		Name = "Host",
+		Flux.portal(overlayA, portaledStatic),
+		Flux.show(showModal, function()
+			return Flux.portal(targetSig, {
+				condModal,
+				Flux.portal(overlayB, arrayBadge),
+			})
+		end),
+		dynArray,
+	})
+	flush()
+
+	expect(
+		portaledStatic.Parent == overlayA and host:FindFirstChild("PortaledStatic") == nil,
+		"portal in children mounts into target instead of host"
+	)
+	expect(condModal.Parent == overlayA, "conditional portal mounts to reactive target A")
+	expect(arrayBadge.Parent == overlayB, "nested portal mounts to its own target B")
+	expect(
+		inlineChild.Parent == host and overlayB:FindFirstChild("ArrayPortalChild") ~= nil,
+		"array child mixes normal instances into host and portals into target"
+	)
+
+	targetSig:set(overlayB)
+	flush()
+	expect(condModal.Parent == overlayB, "reactive portal target switch moves child cleanly")
+
+	targetSig:set(nil)
+	flush()
+	expect(condModal.Parent == nil, "nil reactive target unparents portal children cleanly")
+
+	targetSig:set(overlayA)
+	flush()
+	expect(condModal.Parent == overlayA, "non-nil reactive target remounts portal children")
+
+	showModal:set(false)
+	flush()
+	expect(
+		condModal.Parent == nil and arrayBadge.Parent == nil,
+		"falsy show unmounts conditional portal and nested portal"
+	)
+
+	host:Destroy()
+	flush()
+	expect(
+		portaledStatic.Parent == nil and overlayB:FindFirstChild("ArrayPortalChild") == nil,
+		"destroying host unparents all portaled children without destroying targets"
+	)
+
+	-- Destroying portal target cleans up without throwing
+	local ephemeral = Instance.new("Folder")
+	local orphan = Instance.new("Frame")
+	local s = Flux.scope(function()
+		Flux.new("Frame")({
+			Flux.portal(ephemeral, orphan),
+		})
+	end)
+	expect(orphan.Parent == ephemeral, "mounted into ephemeral target")
+	ephemeral:Destroy()
+	s:Destroy()
+
+	-- Invalid runtime target throws
+	local badTarget = Flux.signal("bad" :: any)
+	local badHost = Flux.new("Frame")({
+		Flux.portal(badTarget, Instance.new("Frame")),
+	})
+	local warnings = env.warnings(flush)
+	expect(
+		#warnings == 1
+			and string.find(warnings[1], "Flux.portal target must resolve to an Instance or nil", 1, true) ~= nil,
+		"invalid runtime portal target reports error"
+	)
+	badHost:Destroy()
+	dynArray:Destroy()
+	portaledStatic:Destroy()
+	condModal:Destroy()
+	arrayBadge:Destroy()
+	inlineChild:Destroy()
+	arrayPortalChild:Destroy()
+	orphan:Destroy()
+	overlayA:Destroy()
+	overlayB:Destroy()
+end)
+
+test("split · Flux.prop(default) fills missing or nil values while preserving false", function()
+	local SCHEMA = Flux.own({
+		gap = Flux.prop(16),
+		visible = Flux.prop(false),
+		enabled = Flux.prop(true),
+		label = Flux.prop() :: string?,
+	})
+
+	local own1, rest1 = Flux.split({ label = "Hi", enabled = false, Name = "Card" }, SCHEMA)
+	expect(
+		own1.gap == 16
+			and own1.visible == false
+			and own1.enabled == false
+			and own1.label == "Hi"
+			and rest1.Name == "Card",
+		"single-group split applies defaults for missing keys and keeps explicit false"
+	)
+
+	local ownNil = Flux.split(nil :: any, SCHEMA)
+	expect(
+		ownNil.gap == 16 and ownNil.visible == false and ownNil.enabled == true and ownNil.label == nil,
+		"single-group split applies defaults when props is nil"
+	)
+
+	local SCHEMA_B = {
+		gap = Flux.prop(99),
+		tone = Flux.prop("solid"),
+	}
+	local g1, g2, gRest = Flux.split({ enabled = false, Name = "Multi" } :: any, SCHEMA, SCHEMA_B)
+	expect(
+		g1.gap == 16 and g1.enabled == false and g2.gap == nil and g2.tone == "solid" and gRest.Name == "Multi",
+		"multi-group split applies schema defaults per group without stealing prior owner's key"
+	)
+end)
+
+test("merge · merges live tables rightmost-first with read-only proxy semantics", function()
+	expectError(function()
+		Flux.merge({}, 123 :: any)
+	end, "Flux.merge expects tables or nil")
+
+	local base = { gap = 8, label = "Default", "a", "b" }
+	local store = Flux.store({ gap = 12, accent = "blue" })
+	local overrides: { [any]: any } = { label = "Custom" }
+
+	local merged = Flux.merge(nil, base, store, nil, overrides)
+	expect(
+		merged.gap == 12 and merged.label == "Custom" and merged.accent == "blue",
+		"rightmost non-nil values override earlier tables"
+	)
+	expect(#merged == 2, "__len returns max array length across sources")
+
+	overrides.label = "Updated"
+	store.gap = 24
+	expect(merged.label == "Updated" and merged.gap == 24, "merged proxy stays live when plain tables or stores mutate")
+
+	local iterated: { [any]: any } = {}
+	for k, v in merged do
+		iterated[k] = v
+	end
+	expect(
+		iterated.gap == 24 and iterated.label == "Updated" and iterated.accent == "blue" and iterated[1] == "a",
+		"__iter yields merged keys with rightmost winning"
+	)
+
+	expectError(function()
+		(merged :: any).gap = 0
+	end, "Flux.merge tables are read-only")
+
+	local cloned = Flux.split(merged)
+	expect(
+		getmetatable(cloned) == nil and cloned.gap == 24 and cloned.label == "Updated",
+		"1-arg Flux.split materializes a plain writable table from a merged proxy"
+	)
+
+	local frame = Flux.new("Frame")(Flux.merge({ Name = "Base", ZIndex = 1 }, { ZIndex = 5 }))
+	expect(frame.Name == "Base" and frame.ZIndex == 5, "Flux.new applies merged property tables")
+	frame:Destroy()
+	Flux.dispose(store)
+end)
+
 test("edit · forKey and forValue reorder updates auto LayoutOrder while preserving static 0 and 10 pins", function()
 	local pinZero = Flux.new("Frame")({ Name = "PinZero", LayoutOrder = 0 })
 	local pinTen = Flux.new("Frame")({ Name = "PinTen", LayoutOrder = 10 })
@@ -1656,6 +1941,124 @@ test("edit · forKey and forValue reorder updates auto LayoutOrder while preserv
 	rows:Destroy()
 	vals:Destroy()
 end)
+
+test(
+	"mount · preserves caller-owned instances and unowned portals, supports nil-target conditional portals and reactive target switching",
+	function()
+		-- 1. Caller-owned instances and unowned portals survive unmount()
+		local target = Instance.new("Folder")
+		local overlay = Instance.new("Folder")
+		local callerOwned = Instance.new("Frame")
+		callerOwned.Name = "CallerOwned"
+		callerOwned.Parent = target
+		local callerOverlayItem = Instance.new("Frame")
+		callerOverlayItem.Name = "CallerOverlayItem"
+		callerOverlayItem.Parent = overlay
+
+		local unmountOther = Flux.mount(function()
+			return Flux.portal(overlay, Instance.new("Frame"))
+		end, target)
+
+		local ownedModal = Instance.new("Frame")
+		ownedModal.Name = "OwnedModal"
+		local unmountMain = Flux.mount(function()
+			return {
+				Flux.new("Frame")({ Name = "MountedChild" }),
+				Flux.portal(overlay, ownedModal),
+			}
+		end, target)
+		flush()
+		expect(
+			target:FindFirstChild("MountedChild") ~= nil
+				and target:FindFirstChild("CallerOwned") == callerOwned
+				and ownedModal.Parent == overlay
+				and #overlay:GetChildren() == 3,
+			"mounted children and portal coexist with caller-owned and external portal instances"
+		)
+
+		unmountMain()
+		expect(
+			target:FindFirstChild("MountedChild") == nil
+				and callerOwned.Parent == target
+				and ownedModal.Parent == nil
+				and callerOverlayItem.Parent == overlay
+				and #overlay:GetChildren() == 2,
+			"unmount preserves caller-owned instances and unowned portals"
+		)
+		unmountOther()
+
+		-- 2. Nil target mounts conditional Flux.show(..., portal)
+		local showPortal = Flux.signal(true)
+		local condModal = Instance.new("Frame")
+		local unmountCond = Flux.mount(function()
+			return Flux.show(showPortal, function()
+				return Flux.portal(overlay, condModal)
+			end)
+		end)
+		flush()
+		expect(condModal.Parent == overlay, "nil-target mount activates conditional Flux.show portal")
+		showPortal:set(false)
+		flush()
+		expect(condModal.Parent == nil, "toggling Flux.show off unmounts conditional portal")
+		showPortal:set(true)
+		flush()
+		expect(condModal.Parent == overlay, "toggling Flux.show back on remounts conditional portal")
+		unmountCond()
+		expect(condModal.Parent == nil, "unmounting cleans up conditional portal")
+
+		-- 3. Reactive target switching
+		local targetA = Instance.new("Folder")
+		local targetB = Instance.new("Folder")
+		local targetSig = Flux.signal(targetA :: Instance?)
+		local moving = Instance.new("Frame")
+		moving.Name = "MovingChild"
+		local sideModal = Instance.new("Frame")
+		local unmountSwitch = Flux.mount(function()
+			return {
+				moving,
+				Flux.portal(overlay, sideModal),
+			}
+		end, targetSig)
+		flush()
+		expect(moving.Parent == targetA and sideModal.Parent == overlay, "reactive mount targets A initially")
+
+		targetSig:set(targetB)
+		flush()
+		expect(moving.Parent == targetB and sideModal.Parent == overlay, "reactive mount switches target to B")
+
+		targetA:Destroy()
+		expect(moving.Parent == targetB, "destroying old target A does not unmount target B")
+
+		targetSig:set(nil)
+		flush()
+		expect(
+			moving.Parent == nil and sideModal.Parent == nil,
+			"switching reactive target to nil unparents mounted child and portal"
+		)
+
+		targetSig:set(targetB)
+		flush()
+		expect(
+			moving.Parent == targetB and sideModal.Parent == overlay,
+			"switching reactive target back from nil remounts child and portal"
+		)
+
+		unmountSwitch()
+		expect(
+			moving.Parent == nil and sideModal.Parent == nil,
+			"unmount clears reactively mounted children and portals"
+		)
+
+		targetB:Destroy()
+		target:Destroy()
+		overlay:Destroy()
+		condModal:Destroy()
+		moving:Destroy()
+		sideModal:Destroy()
+		showPortal:Destroy()
+		targetSig:Destroy()
+	end
+)
 
 test("own · ignores nil schema arguments and rejects non-table inputs", function()
 	local a = Flux.own({ alpha = Flux.prop() :: number })

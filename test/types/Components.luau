@@ -105,4 +105,55 @@ local _partialInter: Flux.Partial<IntersectedProps> = {}
 local clonedOpt = Flux.split(nil :: SchemaProps?)
 local _clonedName: Flux.Reactive<string>? = clonedOpt.Name
 
+local DEFAULT_BASE = Flux.own({
+	gap = Flux.prop(8),
+})
+local DEFAULT_OWN = Flux.own(DEFAULT_BASE, {
+	size = Flux.prop(16),
+	label = Flux.prop() :: Flux.Reactive<string>,
+})
+type DefaultProps = Flux.Props<"Frame", typeof(DEFAULT_OWN)>
+local function DefaultComp(props: DefaultProps): Frame
+	local own, rest = Flux.split(props, DEFAULT_OWN)
+	local _gap: number = own.gap
+	local _size: number = own.size
+	local _label: Flux.Reactive<string> = own.label
+	local merged = Flux.merge(rest, { Name = "DefaultFrame" })
+	return Flux.new("Frame")({
+		Name = merged.Name,
+		Flux.portal(merged.Parent, {
+			Flux.new("TextLabel")({ Text = "Portaled" }),
+		}),
+	})
+end
+local _defaultInst: Frame = DefaultComp({ label = "Hi" })
+local _defaultWithOpt: Frame = DefaultComp({ label = "Hi", size = 24, gap = 4 })
+
+local function OptDefaultComp(props: DefaultProps?): Frame
+	local own, _rest = Flux.split(props, DEFAULT_OWN)
+	local _gap: number = own.gap
+	local _size: number = own.size
+	return Flux.new("Frame")({})
+end
+local _optDefaultInst: Frame = OptDefaultComp(nil)
+
+local narrowedMerge = Flux.merge({ size = nil :: number?, label = "a" }, { size = 12 })
+local _narrowedSize: number = narrowedMerge.size
+local _narrowedLabel: string = narrowedMerge.label
+
+type BranchConfig = { gap: number, shared: string } | { gap: string, shared: number }
+local branchBase = ({ gap = 4, shared = "a" }) :: BranchConfig
+local branchOverride = Flux.merge(branchBase, { shared = true })
+local _branchShared: boolean = branchOverride.shared
+local _branchGap: number | string = branchOverride.gap
+
+local _unmountRoot: () -> () = Flux.mount(function()
+	return Flux.new("Frame")({})
+end, nil :: Instance?)
+
+local reactiveTarget = Flux.signal(nil :: Instance?)
+local _unmountReactive: () -> () = Flux.mount(function()
+	return Flux.new("Frame")({})
+end, reactiveTarget)
+
 return nil

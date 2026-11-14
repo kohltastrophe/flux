@@ -32,6 +32,8 @@ export type Component<P, I = Instance> = (props: P) -> I
 export type Partial<T> = Edit.Partial<T>
 export type Pick<T, G> = Edit.Pick<T, G>
 export type Omit<T, G> = Edit.Omit<T, G>
+export type Portal = Type.Portal
+export type DefaultProp<T> = Type.DefaultProp<T>
 export type Async<T> = Async.Async<T>
 export type AsyncState = Async.AsyncState
 export type Context<T> = Graph.Context<T>
@@ -197,6 +199,7 @@ local Flux = table.freeze(setmetatable({
 	split = Edit.split,
 	prop = Edit.prop,
 	own = Edit.own,
+	merge = Edit.merge,
 	safe = Graph.safe,
 
 	-- Instances and control flow
@@ -205,6 +208,7 @@ local Flux = table.freeze(setmetatable({
 	model = Bind.model,
 	isModel = Bind.isModel,
 	modelNode = Bind.modelNode,
+	portal = Edit.portal,
 	show = Conditional.show,
 	showKeyed = Conditional.showKeyed,
 	switch = Conditional.switch,
@@ -229,6 +233,8 @@ local Flux = table.freeze(setmetatable({
 	gradient = Layout.gradient,
 	sizeConstraint = Layout.sizeConstraint,
 	textSizeConstraint = Layout.textSizeConstraint,
+
+	mount = Edit.mount,
 
 	--- Applies reactive properties, events, children, and directives to an existing [`Instance`](https://create.roblox.com/docs/reference/engine/classes/Instance).
 	--- [Open Documentation](https://flux.kohl.gg/guide/roblox/hydration#the-flux-edit-function)

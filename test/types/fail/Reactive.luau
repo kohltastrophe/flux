@@ -52,5 +52,7 @@ local _badOn = Flux.on(count, takesStr) -- expect-error: Flux.on unwraps depende
 type TypedSig = { Connect: (self: any, fn: (value: number) -> ()) -> () -> () }
 local typedSig: TypedSig = nil :: any
 local _badFromSig: Flux.Node<string?> = Flux.fromSignal(typedSig) -- expect-error: fromSignal preserves signal payload type
+local mergedRo = Flux.merge({ label = "Hi" }, { count = 1 })
+mergedRo.count = 2 -- expect-error: merged props table is read-only
 
 return nil
