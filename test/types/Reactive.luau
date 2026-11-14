@@ -232,6 +232,12 @@ local _onEffect = Flux.effect(Flux.on(count, function(cur: number): ()
 	local _ = cur + 1
 end))
 
+local tweenObj: Flux.Tween<number> = Flux.tween(count, TweenInfo.new(0.2))
+local _setTween: number = tweenObj:set(10)
+local _setSpring: number = spring:set(10)
+local _snappedTween: Flux.Tween<number> = tweenObj:snap():snap(5)
+local _snappedSpring: Flux.Spring<number> = spring:snap():snap(10)
+
 local _flexNum: UIFlexItem = Flux.flex(1)
 local _flexCustom: UIFlexItem = Flux.flex("custom")
 local _flexCfg: UIFlexItem = Flux.flex({ mode = "custom", grow = 2, shrink = 1, lineAlign = "center" })
@@ -283,6 +289,10 @@ return {
 	onSingle,
 	onTuple,
 	_onEffect,
+	_setTween,
+	_setSpring,
+	_snappedTween,
+	_snappedSpring,
 	_flexNum,
 	_flexCustom,
 	_flexCfg,

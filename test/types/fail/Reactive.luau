@@ -60,4 +60,11 @@ end, function(_i, v: number)
 	return v
 end, "not a fn") -- expect-error: fallback must be a function
 
+local function _badNumToStr(_n: number): string
+	return "wrong"
+end
+local _badSpring = Flux.spring(0)
+local _badSpringSet = _badSpring:set("wrong") -- expect-error: set expects number | Node<number>
+local _badSpringUpdate = _badSpring:update(_badNumToStr) -- expect-error: update fn must return number | Node<number>
+
 return nil

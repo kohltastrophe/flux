@@ -333,16 +333,15 @@ prop("motion · setVelocity replaces every earlier impulse", function(g)
 	scope:Destroy()
 end, { runs = 150 })
 
-test("motion · impulse/setVelocity/setCurrent/snap warn on a tween node", function()
+test("motion · impulse/setVelocity/setCurrent warn on a tween node", function()
 	local tw = Flux.tween(0, info(0.2)) :: any
 	local warnings = env.warnings(function()
 		tw:impulse(100)
 		tw:setVelocity(100)
 		tw:setCurrent(50)
-		tw:snap(50)
 	end)
-	expect(#warnings == 4, `one warning per spring-only method, got {#warnings}`)
-	for index, method in { "impulse", "setVelocity", "setCurrent", "snap" } do
+	expect(#warnings == 3, `one warning per spring-only method, got {#warnings}`)
+	for index, method in { "impulse", "setVelocity", "setCurrent" } do
 		expect(string.find(warnings[index], `:{method}() is only valid on a spring`, 1, true) ~= nil, warnings[index])
 	end
 	sert.near(tw:get(), 0, nil, "tween value unchanged by velocity controls")
@@ -1571,6 +1570,51 @@ test("motion · spring:update(fn) and tween:update(fn) retarget from current val
 	tw:Destroy()
 end)
 
+test("motion · tween:snap and 0-arg :snap jump to target and reset repeats", function()
+	local tw = Flux.tween(0, info(0.4, "Quad", "Out", 2, true))
+	tw:set(100)
+	advance(0.1)
+	expect(tw:snap(200) == tw, "tween:snap(value) returns self")
+	expect(tw:peek() == 200, "tween:snap jumps immediately to provided value")
+	advance(0.2)
+	expect(tw:peek() == 200, "tween:snap clears active animation and repeats")
+
+	tw:set(300)
+	advance(0.5)
+	expect(tw:snap() == tw, "0-arg tween:snap() returns self")
+	expect(tw:peek() == 300, "0-arg tween:snap() snaps to current target and cancels reversing")
+	advance(0.5)
+	expect(tw:peek() == 300, "0-arg tween:snap() stays settled at target")
+
+	local spr = Flux.spring(0, 4, 1)
+	spr:set(100)
+	advance(0.05)
+	expect(spr:snap() == spr, "0-arg spring:snap() returns self")
+	expect(spr:peek() == 100, "0-arg spring:snap() snaps to current target")
+	advance(0.2)
+	expect(spr:peek() == 100, "0-arg spring:snap() zeroes velocity at target")
+
+	expectError(function()
+		(tw :: any):snap("bad")
+	end, "Cannot snap a number tween to a string value")
+
+	tw:Destroy()
+	local warnings = env.warnings(function()
+		expect(tw:snap(10) == tw, "destroyed tween:snap still returns self")
+	end)
+	expect(#warnings == 1, "destroyed tween:snap emits one warning")
+	expect(string.find(warnings[1], ":snap() called on a destroyed motion node", 1, true) ~= nil, warnings[1])
+
+	local nilMotion
+	env.warnings(function()
+		nilMotion = Flux.spring(nil :: any)
+	end)
+	expect(nilMotion:snap() == nilMotion and nilMotion:peek() == nil, "nil fallback snap() with no arg returns self")
+	expect(nilMotion:snap("ready") == nilMotion and nilMotion:peek() == "ready", "nil fallback snap(v) updates value")
+	nilMotion:Destroy()
+	spr:Destroy()
+end)
+
 test("motion · :set and call return goal and mid-flight :update reads target untracked", function()
 	local spr = Flux.spring(0, 10, 1)
 	local setRet = spr:set(100)
@@ -1596,8 +1640,8 @@ test("motion · :set and call return goal and mid-flight :update reads target un
 	expect(seenTarget == 200, `mid-flight spring:update reads target (200), not peek ({midVal}), got {seenTarget}`)
 	advance(0.05)
 	expect(trackedRuns == 1, "spring:update reads target untracked without subscribing outer effect")
-	advance(2)
-	sert.near(spr:peek(), 250, 1e-3, "spring:update applied target 250")
+	spr:snap()
+	expect(spr:peek() == 250, "spring:update applied target 250")
 
 	local tw = Flux.tween(0, info(1, "Linear"))
 	expect(tw:set(100) == 100, "tween:set returns goal")

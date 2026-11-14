@@ -84,3 +84,182 @@ test("init · Flux(signal, initial?) bridges signals via __call", function()
 	node:Destroy()
 	expect(disconnected, "node:Destroy() disconnects signal created through Flux()")
 end)
+
+test("init · exports mount, portal, merge, scale, and fromSignal", function()
+	expect(type(Flux.mount) == "function", "Flux.mount is exported")
+	expect(type(Flux.portal) == "function", "Flux.portal is exported")
+	expect(type(Flux.merge) == "function", "Flux.merge is exported")
+	expect(type(Flux.scale) == "function", "Flux.scale is exported")
+	expect(type(Flux.fromSignal) == "function", "Flux.fromSignal is exported")
+end)
+
+test("init · exports every public API and namespace member", function()
+	local topLevelFns = {
+		"signal",
+		"computed",
+		"effect",
+		"createSignal",
+		"createMemo",
+		"createEffect",
+		"getter",
+		"setter",
+		"scope",
+		"flush",
+		"cleanup",
+		"dispose",
+		"getOwner",
+		"withOwner",
+		"read",
+		"raw",
+		"untrack",
+		"retrack",
+		"isNode",
+		"isReactive",
+		"on",
+		"listen",
+		"context",
+		"bindContext",
+		"async",
+		"selector",
+		"store",
+		"split",
+		"prop",
+		"own",
+		"merge",
+		"safe",
+		"property",
+		"fromSignal",
+		"model",
+		"isModel",
+		"modelNode",
+		"portal",
+		"show",
+		"showKeyed",
+		"switch",
+		"presence",
+		"pick",
+		"fallback",
+		"forValue",
+		"forIndex",
+		"forKey",
+		"spring",
+		"tween",
+		"padding",
+		"corner",
+		"stroke",
+		"aspectRatio",
+		"list",
+		"grid",
+		"flex",
+		"scale",
+		"gradient",
+		"sizeConstraint",
+		"textSizeConstraint",
+		"mount",
+		"edit",
+		"new",
+	}
+	for _, key in topLevelFns do
+		expect(type((Flux :: any)[key]) == "function", `Flux.{key} is exported`)
+	end
+	expect(type(Flux.otherwise) == "table", "Flux.otherwise sentinel is exported")
+
+	local namespaces: { [string]: { string } } = {
+		Clock = {
+			"now",
+			"wall",
+			"delay",
+			"wait",
+			"defer",
+			"cancel",
+			"connect",
+			"manual",
+			"isManual",
+			"step",
+			"drain",
+			"reset",
+		},
+		Color = {
+			"lighten",
+			"saturate",
+			"rotateHue",
+			"grayscale",
+			"mix",
+			"luminance",
+			"contrast",
+			"readable",
+		},
+		Interact = { "pointIn", "sunk", "covered", "hover", "press", "selected", "focused" },
+		Motion = { "step" },
+		Store = { "insert", "remove", "move", "reconcile", "unwrap", "Destroy" },
+		Find = {
+			"Ancestor",
+			"AncestorClass",
+			"AncestorIsA",
+			"Child",
+			"ChildClass",
+			"ChildIsA",
+			"Descendant",
+			"Parent",
+			"Path",
+			"Query",
+			"QueryFirst",
+		},
+	}
+	for ns, members in namespaces do
+		local tbl = (Flux :: any)[ns]
+		expect(type(tbl) == "table", `Flux.{ns} is a table`)
+		for _, member in members do
+			expect(type(tbl[member]) == "function", `Flux.{ns}.{member} is a function`)
+		end
+	end
+	expect(type(Flux.Color.Oklab) == "table" and type(Flux.Color.sRGB) == "table", "Flux.Color sub-tables exported")
+
+	expect(type(Flux.Responsive) == "table", "Flux.Responsive is a table")
+	expect(type(Flux.Responsive.config) == "table", "Flux.Responsive.config is a table")
+	expect(
+		type(Flux.Responsive.scaleOf) == "function" and type(Flux.Responsive.breakpointOf) == "function",
+		"Flux.Responsive factories are functions"
+	)
+	local responsiveNodes = {
+		"platform",
+		"viewport",
+		"scale",
+		"breakpoint",
+		"displaySize",
+		"input",
+		"textSize",
+		"reducedMotion",
+		"preferredTransparency",
+	}
+	for _, member in responsiveNodes do
+		expect(Flux.isNode((Flux.Responsive :: any)[member]), `Flux.Responsive.{member} is a Node`)
+	end
+
+	expect(type(Flux.Flags) == "table" and type(Flux.Flags.defaults) == "boolean", "Flux.Flags.defaults is a boolean")
+	expect(type(Flux.Sync) == "table", "Flux.Sync is exported as a table")
+
+	local defaultClasses = {
+		"Part",
+		"BillboardGui",
+		"ScreenGui",
+		"SurfaceGui",
+		"Frame",
+		"ImageButton",
+		"ImageLabel",
+		"VideoFrame",
+		"ViewportFrame",
+		"ScrollingFrame",
+		"TextBox",
+		"TextButton",
+		"TextLabel",
+		"UIListLayout",
+		"UIGridLayout",
+		"UITableLayout",
+		"UIPageLayout",
+	}
+	expect(type(Flux.Defaults) == "table", "Flux.Defaults is a table")
+	for _, className in defaultClasses do
+		expect(type((Flux.Defaults :: any)[className]) == "table", `Flux.Defaults.{className} is a table`)
+	end
+end)

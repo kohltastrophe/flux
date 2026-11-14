@@ -39,6 +39,7 @@ export type AsyncState = Async.AsyncState
 export type Context<T> = Graph.Context<T>
 export type Selector<K> = Conditional.Selector<K>
 export type Spring<T> = Motion.Spring<T>
+export type Tween<T> = Motion.Tween<T>
 export type SyncSignal<T = any> = Sync.SyncSignal<T>
 export type SyncValidator<T> = Sync.Validator<T>
 export type SyncNamespace = Sync.SyncNamespace
