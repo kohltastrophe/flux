@@ -225,8 +225,21 @@ local function call(self: any, value: any?, force: boolean?): any
 	return self:set(value, force)
 end
 
--- Forces a write of the current value so in-place table mutations replicate.
-local function update(self: any): any
+-- Forces a write of the current value so in-place table mutations replicate, or updates from the current value untracked when `fn` is given.
+local function update(self: any, fn: ((current: any) -> any)?): any
+	if fn ~= nil then
+		if type(fn) ~= "function" then
+			error(`Flux.Sync:update expected a function or nil, got {typeof(fn)}`, 2)
+		end
+		local current = self:peek()
+		local nextValue = if Graph.isReactive()
+			then Graph.untrack(function()
+				return fn(current)
+			end)
+			else fn(current)
+		self:set(nextValue)
+		return self
+	end
 	self:set(nodeValue(self), true)
 	return self
 end

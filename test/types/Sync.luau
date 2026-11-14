@@ -49,5 +49,8 @@ end)
 Flux.Sync.flush()
 local ready: boolean = Flux.Sync.ready()
 assert(coins:peek() == 5)
+local updatedCoins: Flux.SyncSignal<number> = coins:update(function(cur: number): number
+	return cur + 1
+end)
 
-return { ready, n, s, t, forPlayer, chained, asNode, label, unwrapped, doubled, volume }
+return { ready, n, s, t, forPlayer, chained, asNode, label, unwrapped, doubled, volume, updatedCoins }

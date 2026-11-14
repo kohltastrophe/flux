@@ -41,5 +41,9 @@ setCount("not a number") -- expect-error: createSignal setter checks value type
 local _badNodeGet: string = Flux.getter(count)() -- expect-error: Flux.getter preserves node type
 Flux.setter(name)(123) -- expect-error: Flux.setter checks value type
 Flux.model("not a node") -- expect-error: model requires a writable node
+local function badNumToStr(cur: number): string
+	return tostring(cur)
+end
+count:update(badNumToStr) -- expect-error: functional update return must match State<T>
 
 return nil

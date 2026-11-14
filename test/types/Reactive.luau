@@ -186,4 +186,39 @@ end)
 local _a: number = a
 local _b: string = b
 
-return nil
+local updatedCount: Flux.State<number> = count:update(function(cur: number): number
+	return cur + 1
+end)
+local updatedNode: Node<number> = (hooked :: Node<number>):update(function(cur: number)
+	return cur + 1
+end)
+local _updatedSpring: Flux.Spring<number> = spring:update(function(cur: number)
+	return cur + 5
+end)
+
+local retriedSafe: Node<number> = Flux.safe(function()
+	return count()
+end, function(_err, reset)
+	reset()
+	return 0
+end)
+local staticSafe: Node<number> = Flux.safe(function()
+	return count()
+end, 0)
+
+local prevMemo = Flux.computed(function(prev: number?): number
+	return (prev or 0) + count()
+end)
+local prevFast: () -> number = Flux.createMemo(function(prev: number?): number
+	return (prev or 0) + 1
+end)
+
+return {
+	updatedCount,
+	updatedNode,
+	_updatedSpring,
+	retriedSafe,
+	staticSafe,
+	prevMemo,
+	prevFast,
+}

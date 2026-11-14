@@ -1120,7 +1120,8 @@ sert.test.roblox("sync · the default instance creates its remotes on the server
 	if not RunService:IsServer() then
 		return
 	end
-	local signal = Flux.Sync("SyncSpecDefault", 1)
+	local key = env.fresh("SyncSpecDefault")
+	local signal = Flux.Sync(key, 1)
 	expect(signal() == 1, "created synchronously")
 	local module = game:GetService("ReplicatedStorage").Flux.Sync
 	expect(module:FindFirstChild("SyncEvent") and module.SyncEvent:IsA("RemoteEvent"), "SyncEvent exists")
@@ -1130,7 +1131,63 @@ sert.test.roblox("sync · the default instance creates its remotes on the server
 	)
 	signal(2)
 	Flux.Sync.flush()
-	expect(Flux.Sync.SyncSpecDefault == signal, "lazy indexing finds it")
+	expect(Flux.Sync[key] == signal, "lazy indexing finds it")
+end)
+
+test("sync · functional update computes untracked, skips no-op writes, and supports player signals", function()
+	local w = world(1)
+	local c1 = w.clients[1]
+	local bonus = Flux.signal(5)
+	local serverScore = w.server("Score", 10)
+	local clientScore = c1.sync("Score")
+	w.joinAll()
+
+	local readCount = 0
+	local eff = Flux.effect(function()
+		serverScore:update(function(cur)
+			readCount += 1
+			return cur + bonus()
+		end)
+	end)
+	w.settle()
+	expect.eq(clientScore(), 15, "functional update replicates new score")
+
+	-- changing bonus must not re-run eff since fn ran untracked
+	bonus:set(100)
+	w.settle()
+	expect.eq(readCount, 1, "Sync:update runs fn untracked")
+
+	-- returning current value is a clean no-op without dirtying remotes
+	local logBefore = #w.log
+	expect.eq(
+		serverScore:update(function(cur)
+			return cur
+		end),
+		serverScore,
+		"Sync:update returns self"
+	)
+	w.settle()
+	expect.eq(#w.log, logBefore, "identical Sync:update skips batch replication")
+
+	-- per-player PlayerMT also supports functional update
+	local own = serverScore:of(c1)
+	expect.eq(
+		own:update(function(cur)
+			return cur + 10
+		end),
+		own,
+		"PlayerMT:update returns self"
+	)
+	w.settle()
+	expect.eq(clientScore(), 25, "per-player functional update replicates to target player")
+
+	sert.throws(function()
+		serverScore:update("bad" :: any)
+	end, "expected a function or nil")
+
+	eff:Destroy()
+	bonus:Destroy()
+	w.destroy()
 end)
 
 test(

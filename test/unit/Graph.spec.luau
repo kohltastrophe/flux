@@ -2531,6 +2531,200 @@ test(
 	end
 )
 
+test("signal / computed · functional update computes untracked and returns self", function()
+	local count = new(10)
+	local bonus = new(5)
+	local runs = 0
+	local e = Flux.effect(function()
+		count()
+		runs += 1
+	end)
+	flush()
+	sert.eq(runs, 1)
+
+	local effectBonusReads = 0
+	local outer = Flux.effect(function()
+		count:update(function(cur)
+			effectBonusReads += 1
+			return cur + bonus()
+		end)
+	end)
+	flush()
+	sert.eq(count:peek(), 15)
+	sert.eq(runs, 2)
+
+	-- bonus change must not re-run outer because update(fn) ran fn untracked
+	bonus:set(20)
+	flush()
+	sert.eq(effectBonusReads, 1)
+	sert.eq(count:peek(), 15)
+
+	-- 0-arg update still forces dependents for in-place table mutations
+	local tbl = { items = { "a" } }
+	local sig = new(tbl)
+	local tableRuns = 0
+	local e2 = Flux.effect(function()
+		sig()
+		tableRuns += 1
+	end)
+	flush()
+	table.insert(tbl.items, "b")
+	sert.eq(sig:update(), sig, "0-arg update returns self")
+	flush()
+	sert.eq(tableRuns, 2)
+
+	-- returned self from 1-arg update chains cleanly
+	sert.eq(
+		count:update(function(cur)
+			return cur + 1
+		end),
+		count,
+		"1-arg update returns self"
+	)
+	sert.eq(count:peek(), 16)
+
+	sert.throws(function()
+		count:update(123 :: any)
+	end, "expected a function or nil")
+
+	e:Destroy()
+	outer:Destroy()
+	e2:Destroy()
+	count:Destroy()
+	bonus:Destroy()
+	sig:Destroy()
+end)
+
+test("safe · retry reset re-evaluates fallback, unsubscribes on heal, and ignores post-destroy reset", function()
+	local attempt = 0
+	local shouldFail = true
+	local lastReset: (() -> ())? = nil
+	local node = Flux.safe(function()
+		attempt += 1
+		if shouldFail then
+			error(`fail #{attempt}`, 0)
+		end
+		return `ok #{attempt}`
+	end, function(_err, reset)
+		lastReset = reset
+		return `err #{attempt}`
+	end)
+
+	sert.eq(node:get(), "err #1")
+	sert(type(lastReset) == "function", "safe recovery receives reset callback")
+	local reset = lastReset :: () -> ()
+
+	-- calling reset retries immediately on next read even without source dependency changes
+	reset()
+	sert.eq(node:get(), "err #2")
+
+	shouldFail = false
+	reset()
+	sert.eq(node:get(), "ok #3")
+
+	-- once healed, stale reset does not force a re-run
+	reset()
+	sert.eq(node:get(), "ok #3")
+	sert.eq(attempt, 3)
+
+	-- calling reset after Destroy is a safe no-op
+	node:Destroy()
+	reset()
+	sert.eq(attempt, 3)
+end)
+
+test("computed / createMemo · passes previous value with and without custom equals", function()
+	local step = new(1)
+	local seenPrevs = {}
+	local acc = Flux.computed(function(prev)
+		table.insert(seenPrevs, if prev == nil then false else prev)
+		return (prev or 0) + step()
+	end)
+	sert.eq(acc:get(), 1)
+	step:set(2)
+	sert.eq(acc:get(), 3)
+	sert.eq(seenPrevs, { false, 1 })
+
+	local memoPrevs = {}
+	local memo = Flux.createMemo(function(prev)
+		table.insert(memoPrevs, if prev == nil then false else prev)
+		return (prev or 10) + step()
+	end, function(a, b)
+		return a == b
+	end)
+	sert.eq(memo(), 12)
+	step:set(0)
+	sert.eq(memo(), 12)
+	step:set(5)
+	sert.eq(memo(), 17)
+	sert.eq(memoPrevs, { false, 12, 12 })
+
+	acc:Destroy()
+	step:Destroy()
+end)
+
+test("safe · observed Flux.safe recovers from late throws across multiple reset() cycles", function()
+	local fail = Flux.signal(false)
+	local value = Flux.signal(1)
+	local resets = 0
+	local savedReset: (() -> ())? = nil
+	local seen = {}
+
+	local s = Flux.safe(function(): number
+		if fail:get() then
+			error("late safe boom", 0)
+		end
+		return value:get()
+	end, function(_err, resetFn)
+		resets += 1
+		savedReset = resetFn
+		return -resets
+	end)
+
+	local eff = Flux.effect(function()
+		table.insert(seen, s:get())
+	end)
+	flush()
+	sert.eq(seen, { 1 }, "observed baseline")
+
+	local function runReset()
+		assert(savedReset ~= nil, "reset callback should be captured")
+		savedReset()
+	end
+
+	-- Late throw while observed
+	fail:set(true)
+	flush()
+	expect(resets == 1 and seen[#seen] == -1 and savedReset ~= nil, "late throw enters fallback once")
+
+	-- Calling reset while still failing re-evaluates and re-enters fallback cleanly
+	runReset()
+	flush()
+	expect(resets == 2 and seen[#seen] == -2 and savedReset ~= nil, "reset while broken re-runs recovery handler")
+
+	-- Heal and recover via reset
+	fail:set(false)
+	value:set(10)
+	runReset()
+	flush()
+	expect(s:get() == 10 and seen[#seen] == 10, "reset recovers to live value after heal")
+
+	-- Second late throw + second reset cycle continues tracking upstream changes
+	fail:set(true)
+	flush()
+	expect(resets == 3 and seen[#seen] == -3, "second late throw enters fallback cleanly")
+	fail:set(false)
+	value:set(42)
+	runReset()
+	flush()
+	expect(s:get() == 42 and seen[#seen] == 42, "second reset() cycle restores live tracking")
+
+	eff:Destroy()
+	s:Destroy()
+	fail:Destroy()
+	value:Destroy()
+end)
+
 test(
 	"onObserved · deferred ownerless untracked hooks handle self writes, observer Destroy, and late onUnobserved",
 	function()

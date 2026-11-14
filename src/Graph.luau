@@ -2239,6 +2239,8 @@ local function onHook(node: node, which: number, fn: () -> ())
 	anyHooks = true
 end
 
+local untrack: (fn: (() -> ...any)?) -> ...any
+
 local Node: any = {
 	__call = function(self: any, value: any?, force: boolean?): any
 		local node = rawget(self, 1)
@@ -2280,11 +2282,24 @@ local Node: any = {
 		return setData(rawget(self, 1), value, force)
 	end,
 	--[[
-	Notifies the node's dependents without changing its value, useful after mutating a table in place.
+	Notifies the node's dependents without changing its value, or updates it untracked via `fn(current)` when `fn` is provided.
 
 	[Open Documentation](https://flux.kohl.gg/guide/concepts/signals#forcing-an-update)
 	]]
-	update = function(self: any): any
+	update = function(self: any, fn: ((current: any) -> any)?): any
+		if fn ~= nil then
+			if type(fn) ~= "function" then
+				error(`node:update expected a function or nil, got {compatTypeof(fn)}`, 2)
+			end
+			local current = self:peek()
+			local nextValue = if curNode ~= nil
+				then untrack(function()
+					return fn(current)
+				end)
+				else fn(current)
+			self:set(nextValue)
+			return self
+		end
 		updateNode(rawget(self, 1))
 		return self
 	end,
@@ -2650,7 +2665,7 @@ local function finishUntrack(
 	return ...
 end
 
-local function untrack(fn: (() -> ...any)?): ...any
+function untrack(fn: (() -> ...any)?): ...any
 	local n = curNode
 	if not fn then
 		if n then
@@ -3000,7 +3015,7 @@ local function memoSlow(n: any, needTrack: boolean): any
 	return n[VALUE]
 end
 
-local function createMemo<T>(fn: () -> T, equals: ((T, T) -> boolean)?): () -> T
+local function createMemo<T>(fn: (prev: any) -> T, equals: ((T, T) -> boolean)?): () -> T
 	local node: any = { nil, 1, 0, false, 0, 0, fn, SRC1, false, false, nil, nil }
 	if equals then
 		wrapComputedEquals(node, fn, equals)
@@ -3049,12 +3064,12 @@ local function new(obj: any, isEffect: boolean?, equals: any): any
 	return signal(obj, equals)
 end
 
-local safe: <T>(tryFn: () -> T, fallback: T | (err: unknown) -> T, equals: ((a: T, b: T) -> boolean)?) -> Node<T>
+local safe: (tryFn: () -> any, fallback: any, equals: any) -> Node<any>
 do
-	local function recoverSafe<T>(handler: (err: unknown) -> T, err: unknown): T
+	local function recoverSafe(handler: (err: unknown, reset: () -> ()) -> any, err: unknown, reset: () -> ()): any
 		local n, s, sr = curNode, susp, suspRun
 		curNode, susp, curChildren = nil, nil, nil
-		local ok, result = pcall(handler, err)
+		local ok, result = pcall(handler, err, reset)
 		curNode, susp, suspRun, curChildren = n, s, sr, nil
 		if not ok then
 			error(result, 0)
@@ -3062,9 +3077,14 @@ do
 		return result
 	end
 
-	function safe<T>(tryFn: () -> T, fallback: T | (err: unknown) -> T, equals: ((a: T, b: T) -> boolean)?): Node<T>
+	local function noop() end
+
+	function safe(tryFn: () -> any, fallback: any, equals: any): Node<any>
+		local retries: any = nil
+		local resetFn: (() -> ())? = nil
+		local destroyed = false
 		return computed(function()
-			local self = evalNode
+			local self = curNode
 			local pSuspRun, pOwner, pCtx, pExtra = suspRun, curOwner, curCtx, ownExtra
 			local ok, result = pcall(tryFn)
 			if ok then
@@ -3076,7 +3096,23 @@ do
 				susp, suspRun, curOwner, ownerSet, curCtx, ownExtra = nil, pSuspRun, pOwner, false, pCtx, pExtra
 			end
 			if type(fallback) == "function" then
-				return recoverSafe(fallback :: (unknown) -> T, result)
+				if retries == nil and not destroyed and self and self[FN] ~= nil then
+					local retryNode: { any } = { 0, nil, 0, 0, 0, nil }
+					retries = retryNode
+					resetFn = function()
+						if not destroyed then
+							setSignal(retryNode, retryNode[VALUE] + 1)
+						end
+					end
+					onDestroy(self, function()
+						destroyed = true
+						disposeOne(retryNode)
+					end)
+				end
+				if retries ~= nil then
+					getData(retries)
+				end
+				return recoverSafe(fallback, result, resetFn or noop)
 			end
 			return fallback
 		end, equals)
@@ -3147,11 +3183,11 @@ export type Node<T = any> = setmetatable<{
 	]]
 	read set: (self: any, value: any, force: boolean?) -> T,
 	--[[
-	Notifies the node's dependents without changing its value, useful after mutating a table in place.
+	Notifies the node's dependents without changing its value, or updates it untracked via `fn(current)` when `fn` is provided.
 
 	[Open Documentation](https://flux.kohl.gg/guide/concepts/signals#forcing-an-update)
 	]]
-	read update: <N>(self: N) -> N,
+	read update: <N>(self: N, fn: ((current: T) -> any)?) -> N,
 	--[[
 	Disconnects the node from its sources and observers, then runs its pending [`Flux.cleanup`](https://flux.kohl.gg/guide/concepts/effects#cleanup-with-flux-cleanup)
 	values and `onDestroy` callbacks. Later reads return `nil`.
@@ -3194,11 +3230,11 @@ export type State<T = any> = setmetatable<{
 	]]
 	read set: (self: any, value: T, force: boolean?) -> T,
 	--[[
-	Notifies the node's dependents without changing its value, useful after mutating a table in place.
+	Notifies the node's dependents without changing its value, or updates it untracked via `fn(current)` when `fn` is provided.
 
 	[Open Documentation](https://flux.kohl.gg/guide/concepts/signals#forcing-an-update)
 	]]
-	read update: <N>(self: N) -> N,
+	read update: <N>(self: N, fn: ((current: T) -> T)?) -> N,
 	--[[
 	Disconnects the node from its sources and observers, then runs its pending [`Flux.cleanup`](https://flux.kohl.gg/guide/concepts/effects#cleanup-with-flux-cleanup)
 	values and `onDestroy` callbacks. Later reads return `nil`.
@@ -3287,6 +3323,22 @@ end
 -- An owner handle from `getOwner`, for `withOwner`.
 export type Owner = { any }
 
+--- @ignore
+type function NonFunction(t: type): type
+	if t:is("function") then
+		return types.never
+	elseif t:is("union") then
+		local keep = {}
+		for _, c in t:components() do
+			if not c:is("function") then
+				table.insert(keep, c)
+			end
+		end
+		return if #keep == 0 then types.never elseif #keep == 1 then keep[1] else types.unionof(table.unpack(keep))
+	end
+	return t
+end
+
 local Graph = {
 	--[[
 	Wraps `obj` in a reactive node: a [signal](https://flux.kohl.gg/guide/concepts/signals) for a plain value, a
@@ -3318,7 +3370,7 @@ local Graph = {
 
 	[Open Documentation](https://flux.kohl.gg/guide/concepts/computeds)
 	]]
-	computed = computed :: <T>(fn: () -> T, equals: ((T, T) -> boolean)?) -> Node<T>,
+	computed = computed :: <T>(fn: (prev: any) -> T, equals: ((T, T) -> boolean)?) -> Node<T>,
 	--[[
 	Schedules `fn` to run on the next flush and re-run whenever any node it reads changes. Owned by the enclosing scope or
 	stopped manually with `node:Destroy()`.
@@ -3488,12 +3540,16 @@ local Graph = {
 	read = read :: <T>(object: T) -> Unwrap<T>,
 	--[[
 	Creates a [computed](https://flux.kohl.gg/guide/concepts/computeds) that evaluates `tryFn` and returns `fallback` (a
-	static value or an untracked `(err) -> T` function) if `tryFn` throws. Automatically recovers when tracked dependencies
-	change.
+	static value or an untracked `(err, reset) -> T` function) if `tryFn` throws. Automatically recovers when tracked
+	dependencies change or when `reset()` is called.
 
 	[Open Documentation](https://flux.kohl.gg/guide/tips/errors#structured-error-handling-flux-safe)
 	]]
-	safe = safe,
+	safe = safe :: (<T>(
+		tryFn: () -> T,
+		fallback: (err: unknown, reset: () -> ()) -> T,
+		equals: ((a: T, b: T) -> boolean)?
+	) -> Node<T>) & (<T>(tryFn: () -> T, fallback: NonFunction<T>, equals: ((a: T, b: T) -> boolean)?) -> Node<T>),
 	--[[
 	Creates a [context](https://flux.kohl.gg/guide/concepts/context) with the given `default` value for passing data down a
 	component tree without prop drilling.

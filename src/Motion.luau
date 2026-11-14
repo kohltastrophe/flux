@@ -31,8 +31,10 @@ local warn = Compat.warn
 local clock = Clock.now
 local effect = Graph.effect
 local isDynamic = Graph.isDynamic
+local isReactive = Graph.isReactive
 local raw = Graph.raw
 local read = Graph.read
+local untrack = Graph.untrack
 local sampleSignal: any = Graph.signal(nil)
 local SignalMT: any = getmetatable(sampleSignal)
 local getSignal = SignalMT.get
@@ -48,7 +50,7 @@ export type Spring<T> = setmetatable<
 		read peek: (self: any) -> T,
 		read get: (self: any) -> T,
 		read set: (self: any, value: any, force: boolean?) -> T,
-		read update: <N>(self: N) -> N,
+		read update: <N>(self: N, fn: ((current: T) -> any)?) -> N,
 		read Destroy: (self: any) -> (),
 		read onDestroy: (self: any, fn: (oldValue: T) -> ()) -> (),
 		-- Adds `delta` to the spring's current velocity without changing its target.
@@ -1026,6 +1028,34 @@ function MotionStateMetatable.set(self: any, value: any, _force: boolean?): any
 	end
 	Engine.setTarget(motion, pack(tempArray, goal, typeString))
 	return goal
+end
+
+--[[
+Retargets the animation relative to its current target (not its current mid-flight value), calling `fn(target)` untracked.
+
+[Open Documentation](https://flux.kohl.gg/guide/concepts/signals#forcing-an-update)
+]]
+function MotionStateMetatable.update<N>(self: N, fn: ((current: any) -> any)?): N
+	if fn ~= nil then
+		if type(fn) ~= "function" then
+			error(`node:update expected a function or nil, got {typeof(fn)}`, 2)
+		end
+		local motion = NodeToMotion[self]
+		if motion == nil then
+			warn("[Flux] :update() called on a destroyed motion node; ignoring")
+			return self
+		end
+		local current = motion.unpack(motion.target)
+		local nextValue = if isReactive()
+			then untrack(function()
+				return fn(current)
+			end)
+			else fn(current);
+		(self :: any):set(nextValue)
+		return self
+	end
+	SignalMT.update(self)
+	return self
 end
 
 --[[

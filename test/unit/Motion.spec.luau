@@ -1548,15 +1548,71 @@ rtest(
 	end
 )
 
-test("motion · :set and call return goal", function()
+test("motion · spring:update(fn) and tween:update(fn) retarget from current value and return self", function()
+	local spr = Flux.spring(10, 4, 1)
+	expect(spr:update(function(cur)
+		return cur + 15
+	end) == spr, "spring:update returns self")
+	advance(0.05)
+	local mid = spr:peek()
+	expect(mid > 10 and mid < 25, `spring animates toward updated goal, got {mid}`)
+
+	local tw = Flux.tween(100, info(0.2))
+	expect(tw:update(function(cur)
+		return cur - 40
+	end) == tw, "tween:update returns self")
+	advance(0.1)
+	local twMid = tw:peek()
+	expect(twMid < 100 and twMid > 60, `tween eases toward updated goal, got {twMid}`)
+	advance(0.15)
+	sert.near(tw:peek(), 60, 1e-4, "tween reaches updated target")
+
+	spr:Destroy()
+	tw:Destroy()
+end)
+
+test("motion · :set and call return goal and mid-flight :update reads target untracked", function()
 	local spr = Flux.spring(0, 10, 1)
-	expect(spr:set(100) == 100, "spring:set returns goal")
-	expect(spr(200) == 200, "spring(goal) returns goal")
+	local setRet = spr:set(100)
+	expect(setRet == 100, "spring:set returns goal")
+	local callRet = spr(200)
+	expect(callRet == 200, "spring(goal) returns goal")
+
+	advance(0.05)
+	local midVal = spr:peek()
+	expect(midVal > 0 and midVal < 200, `spring is mid-flight ({midVal})`)
+
+	local seenTarget
+	local trackedRuns = 0
+	local eff = Flux.effect(function()
+		trackedRuns += 1
+		local updRet = spr:update(function(curTarget)
+			seenTarget = curTarget
+			return curTarget + 50
+		end)
+		expect(updRet == spr, "spring:update returns self")
+	end)
+	flush()
+	expect(seenTarget == 200, `mid-flight spring:update reads target (200), not peek ({midVal}), got {seenTarget}`)
+	advance(0.05)
+	expect(trackedRuns == 1, "spring:update reads target untracked without subscribing outer effect")
+	advance(2)
+	sert.near(spr:peek(), 250, 1e-3, "spring:update applied target 250")
 
 	local tw = Flux.tween(0, info(1, "Linear"))
 	expect(tw:set(100) == 100, "tween:set returns goal")
+	advance(0.25)
+	local twMid = tw:peek()
+	expect(twMid > 0 and twMid < 100, `tween is mid-flight ({twMid})`)
+	local twSeen
+	local twUpd = tw:update(function(curTarget)
+		twSeen = curTarget
+		return curTarget + 25
+	end)
+	expect(twSeen == 100 and twUpd == tw, "mid-flight tween:update reads target and returns self")
 	expect(tw(300) == 300, "tween(goal) returns goal")
 
+	eff:Destroy()
 	spr:Destroy()
 	tw:Destroy()
 end)
