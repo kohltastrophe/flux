@@ -61,3 +61,26 @@ rtest("frame · the hookup flushes at PreRender on a client and at Heartbeat els
 	expect.eq(atStep, 2, `the {if client then "PreRender" else "Heartbeat"} step itself flushed the effect`)
 	e:Destroy()
 end)
+
+test("init · Flux(signal, initial?) bridges signals via __call", function()
+	local listener: ((string) -> ())? = nil
+	local disconnected = false
+	local customSignal = {
+		Connect = function(_self, fn: (string) -> ())
+			listener = fn
+			return {
+				Disconnect = function()
+					disconnected = true
+				end,
+			}
+		end,
+	}
+	local node = Flux(customSignal, "start")
+	expect.eq(node:peek(), "start", "Flux(signal, initial) seeds initial value")
+	if listener then
+		listener("fired")
+	end
+	expect.eq(node:peek(), "fired", "Flux(signal, initial) receives emitted payloads")
+	node:Destroy()
+	expect(disconnected, "node:Destroy() disconnects signal created through Flux()")
+end)

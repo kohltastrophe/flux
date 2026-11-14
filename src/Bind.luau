@@ -8,6 +8,7 @@ local compatTypeof = Compat.typeof
 local warn = Compat.warn
 
 local cleanup = Graph.cleanup
+local dispose = Graph.dispose
 local effect = Graph.effect
 local get = Graph.Node.get
 local getOwner = Graph.getOwner
@@ -631,6 +632,64 @@ local function follow(instance: Instance, property: string): Graph.Node<any>
 	return (Bind.from(signal(NO_VALUE), instance, property))
 end
 
+local function getSignalConnector(obj: any): ((any, (any) -> ()) -> any)?
+	if isNode(obj) or isInstance(obj) then
+		return nil
+	end
+	if kindOf(obj) == "RBXScriptSignal" then
+		return (obj :: any).Connect
+	end
+	if type(obj) ~= "table" then
+		return nil
+	end
+	local mt = getmetatable(obj :: any)
+	if mt == nil then
+		local connect = rawget(obj :: any, "Connect")
+		if type(connect) == "function" then
+			return connect
+		end
+		local lower = rawget(obj :: any, "connect")
+		return if type(lower) == "function" then lower else nil
+	end
+	local ok, connect = pcall(function()
+		return (obj :: any).Connect
+	end)
+	if ok and type(connect) == "function" then
+		return connect
+	end
+	local okLower, lower = pcall(function()
+		return (obj :: any).connect
+	end)
+	return if okLower and type(lower) == "function" then lower else nil
+end
+
+local function fromSignal(sig: any, initial: any): Graph.Node<any>
+	local connect = getSignalConnector(sig)
+	if connect == nil then
+		error(`Flux.fromSignal expects an RBXScriptSignal or signal with :Connect(), got {compatTypeof(sig)}`, 2)
+	end
+	local node = signal(initial)
+	local conn = connect(sig, function(value: any)
+		node:set(value)
+	end)
+	local stop = bindDestroy(node, function()
+		dispose(conn)
+	end)
+	if getOwner() ~= nil then
+		cleanup(stop)
+	end
+	return node
+end
+
+--[[
+Creates a [node](https://flux.kohl.gg/guide/concepts/signals#bridging-signals) updated from an
+[`RBXScriptSignal`](https://create.roblox.com/docs/reference/engine/datatypes/RBXScriptSignal) or signal table with
+`:Connect()` / `:connect()`, seeding from `initial`. Disconnects automatically when the node or its owning scope is
+destroyed.
+]]
+Bind.fromSignal =
+	fromSignal :: (<S>(signal: S) -> Graph.Node<Type.SignalPayload<S>?>) & (<S, I>(signal: S, initial: I) -> Graph.Node<Type.SignalPayload<S> | I>)
+
 -- The `"Name"` singleton in `property`'s type keeps a literal argument from widening to `string`, so `K` stays the key.
 --[[
 Creates a [node](https://flux.kohl.gg/guide/concepts/signals) mirroring an [`Instance`](https://create.roblox.com/docs/reference/engine/classes/Instance) property, an attribute (`$Name` or `_attr_Name`), or a [`CollectionService`](https://create.roblox.com/docs/reference/engine/classes/CollectionService) tag (`#Tag` or `_tag_Tag`).
@@ -653,10 +712,11 @@ function Bind.property<I, K>(instance: I & Instance, property: K | "Name"): Grap
 	return follow(instance, property)
 end
 
--- The core constructor behind `Flux(...)`: a value becomes a signal, a function a computed, and an Instance with a
--- property, `"$Attribute"` / `"_attr_Attribute"`, or `"#Tag"` / `"_tag_Tag"` name a `Bind.property` node.
+-- The core constructor behind `Flux(...)`: a value becomes a signal, a function a computed, an Instance with a
+-- property, `"$Attribute"` / `"_attr_Attribute"`, or `"#Tag"` / `"_tag_Tag"` name a `Bind.property` node, and a signal
+-- object with `:Connect()` / `:connect()` a `Bind.fromSignal` node.
 --- @ignore
-function Bind.node(obj: any, second: string?): Graph.Node<any>
+function Bind.node(obj: any, second: any?): Graph.Node<any>
 	if isInstance(obj) then
 		if type(second) ~= "string" then
 			error(
@@ -665,8 +725,13 @@ function Bind.node(obj: any, second: string?): Graph.Node<any>
 			)
 		end
 		return follow(obj, second)
+	elseif getSignalConnector(obj) ~= nil then
+		return (Bind.fromSignal :: any)(obj, second)
 	elseif second ~= nil then
-		error(`Flux(value) takes a single argument; only an Instance takes a property name`, 3)
+		error(
+			`Flux(value) takes a single argument; only an Instance takes a property name (or a signal an initial value)`,
+			3
+		)
 	end
 	return new(obj)
 end
@@ -678,19 +743,21 @@ Pass `defer = true` to skip the initial run and fire only when `deps` change.
 [Open Documentation](https://flux.kohl.gg/guide/concepts/tracking#flux-on)
 ]]
 function Bind.on<D, R>(
-	deps: any,
-	fn: (input: any, prevInput: any?, prevResult: R?) -> R,
+	deps: D,
+	fn: (input: Type.OnInput<D>, prevInput: Type.OnInput<D>?, prevResult: R?) -> R,
 	defer: boolean?
 ): (prevResult: R?) -> R?
-	local isArray = type(deps) == "table" and not isNode(deps)
-	local count = if isArray then #(deps :: { any }) else 0
+	local rawDeps: any = deps
+	local rawFn: (any, any, any) -> any = fn
+	local isArray = type(rawDeps) == "table" and not isNode(rawDeps)
+	local count = if isArray then #(rawDeps :: { any }) else 0
 	local prevInput: any = nil
 	local curInput: any = nil
 	local curPrevResult: any = nil
 	local function runOnFn(): R
 		local input, prevRes = curInput, curPrevResult
 		curInput, curPrevResult = nil, nil
-		return fn(input, prevInput, prevRes)
+		return rawFn(input, prevInput, prevRes)
 	end
 
 	return function(prevResult: R?): R?
@@ -698,10 +765,10 @@ function Bind.on<D, R>(
 		if isArray then
 			input = table.create(count)
 			for i = 1, count do
-				input[i] = read(deps[i])
+				input[i] = read(rawDeps[i])
 			end
 		else
-			input = read(deps)
+			input = read(rawDeps)
 		end
 
 		if defer then

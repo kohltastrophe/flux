@@ -991,6 +991,81 @@ sert.test("bind.from · cleans up destroys entries on instance destroy and prese
 	sharedSig:Destroy()
 end)
 
+test("fromSignal · bridges RBXScriptSignal and custom Connect/connect tables and cleans up", function()
+	local disconnected = 0
+	local listeners = {}
+	local customUpper = {
+		Connect = function(_self, fn)
+			table.insert(listeners, fn)
+			return {
+				Disconnect = function()
+					disconnected += 1
+					local idx = table.find(listeners, fn)
+					if idx then
+						table.remove(listeners, idx)
+					end
+				end,
+			}
+		end,
+	}
+
+	local node = Flux.fromSignal(customUpper, "idle")
+	expect(node:peek() == "idle", "fromSignal seeds initial value")
+	listeners[1]("active")
+	expect(node:peek() == "active", "fromSignal updates node when Connect signal fires")
+	node:Destroy()
+	expect(disconnected == 1, "fromSignal disconnects on node:Destroy()")
+
+	local scopeDisconnected = 0
+	local lowerListeners = {}
+	local customLower = {
+		connect = function(_self, fn)
+			table.insert(lowerListeners, fn)
+			return function()
+				scopeDisconnected += 1
+				local idx = table.find(lowerListeners, fn)
+				if idx then
+					table.remove(lowerListeners, idx)
+				end
+			end
+		end,
+	}
+
+	local scope, scopedNode = Flux.scope(function()
+		return Flux.fromSignal(customLower)
+	end)
+	expect(scopedNode:peek() == nil, "fromSignal defaults initial to nil")
+	lowerListeners[1](42)
+	expect(scopedNode:peek() == 42, "lowercase :connect signal fires node")
+	scope:Destroy()
+	expect(scopeDisconnected == 1, "enclosing scope teardown disconnects fromSignal listener")
+
+	-- RBXScriptSignal via Instance.Changed
+	local box = Instance.new("TextBox")
+	box.Text = "one"
+	local changedNode = Flux.fromSignal(box.Changed, "Text")
+	expect(changedNode:peek() == "Text", "fromSignal supports RBXScriptSignal with initial")
+	box.Text = "two"
+	settle()
+	expect(changedNode:peek() == "Text", "RBXScriptSignal event updates node")
+	changedNode:Destroy()
+	box:Destroy()
+
+	-- Strict proxy metatable table passed to Flux(proxy) does not fail getSignalConnector
+	local strictProxy = setmetatable({}, {
+		__index = function(_, key)
+			error(`strict miss: {key}`)
+		end,
+	})
+	local proxySig = Flux(strictProxy)
+	expect(proxySig:peek() == strictProxy, "Flux(strictProxy) creates a signal rather than crashing")
+	proxySig:Destroy()
+
+	expectError(function()
+		Flux.fromSignal(123 :: any)
+	end, "Flux.fromSignal expects an RBXScriptSignal or signal with :Connect()")
+end)
+
 test("bind · idle BindData teardown fires onUnobserved and cleanly rebinds across listen, to, and children", function()
 	local s = Flux.signal("A")
 	local obs, unobs = 0, 0

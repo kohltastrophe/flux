@@ -196,6 +196,14 @@ local _updatedSpring: Flux.Spring<number> = spring:update(function(cur: number)
 	return cur + 5
 end)
 
+local button = Flux.new("TextButton")({})
+local activatedNode: Node<InputObject?> = Flux.fromSignal(button.Activated)
+local downNode: Node<number> = Flux.fromSignal(button.MouseButton1Down, 0)
+type CustomSignal<T> = { Connect: (self: CustomSignal<T>, listener: (payload: T) -> ()) -> () -> () }
+local customSignal: CustomSignal<string> = nil :: any
+local customMaybe: Node<string?> = Flux.fromSignal(customSignal)
+local customSeeded: Node<string> = Flux.fromSignal(customSignal, "idle")
+
 local retriedSafe: Node<number> = Flux.safe(function()
 	return count()
 end, function(_err, reset)
@@ -213,12 +221,30 @@ local prevFast: () -> number = Flux.createMemo(function(prev: number?): number
 	return (prev or 0) + 1
 end)
 
+local onSingle: Node<number?> = Flux.computed(Flux.on(count, function(cur: number, prev: number?, acc: number?)
+	return (acc or 0) + cur - (prev or 0)
+end))
+local onTuple: Node<(number | string)?> =
+	Flux.computed(Flux.on({ count, name }, function(cur: { number | string }, _prev: { number | string }?)
+		return cur[1]
+	end))
+local _onEffect = Flux.effect(Flux.on(count, function(cur: number): ()
+	local _ = cur + 1
+end))
+
 return {
 	updatedCount,
 	updatedNode,
 	_updatedSpring,
+	activatedNode,
+	downNode,
+	customMaybe,
+	customSeeded,
 	retriedSafe,
 	staticSafe,
 	prevMemo,
 	prevFast,
+	onSingle,
+	onTuple,
+	_onEffect,
 }

@@ -45,5 +45,12 @@ local function badNumToStr(cur: number): string
 	return tostring(cur)
 end
 count:update(badNumToStr) -- expect-error: functional update return must match State<T>
+local function takesStr(cur: string): string
+	return cur
+end
+local _badOn = Flux.on(count, takesStr) -- expect-error: Flux.on unwraps dependency type
+type TypedSig = { Connect: (self: any, fn: (value: number) -> ()) -> () -> () }
+local typedSig: TypedSig = nil :: any
+local _badFromSig: Flux.Node<string?> = Flux.fromSignal(typedSig) -- expect-error: fromSignal preserves signal payload type
 
 return nil

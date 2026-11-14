@@ -509,4 +509,162 @@ export type Pick<T, G> = pickWhere<T, G, nil, true>
 --- @private
 export type Omit<T, G> = pickWhere<T, nil, G, false>
 
+-- Extracts the first payload type accepted by a signal's `Connect` / `connect` listener, defaulting to `any`.
+--- @within Flux
+--- @private
+export type function SignalPayload(sig: type): type
+	local connectKey = types.singleton("Connect")
+	local lowerConnectKey = types.singleton("connect")
+
+	local function fromObject(t: type): type?
+		local current: type? = t
+		while current and (current:is("extern") or current:is("table")) do
+			local connector = current:readproperty(connectKey) or current:readproperty(lowerConnectKey)
+			if connector and connector:is("function") then
+				local params = connector:parameters().head
+				local listener = if params
+						and params[2]
+						and params[2]:is("function")
+					then params[2]
+					elseif params and params[1] and params[1]:is("function") then params[1]
+					else nil
+				if listener then
+					local cb = listener:parameters()
+					if cb.head and cb.head[1] ~= nil then
+						return cb.head[1]
+					elseif cb.tail == nil then
+						return types.singleton(nil)
+					end
+					return types.any
+				end
+			end
+			current = if current:is("extern") then current:readparent() else nil
+		end
+		return nil
+	end
+
+	local function resolve(t: type): type?
+		if t:is("any") or t:is("unknown") then
+			return types.any
+		elseif t:is("nil") then
+			return nil
+		elseif t:is("union") then
+			local parts: { type } = {}
+			for _, part in t:components() do
+				local found = resolve(part)
+				if found ~= nil and not table.find(parts, found) then
+					table.insert(parts, found)
+				end
+			end
+			if #parts == 0 then
+				return nil
+			end
+			return if #parts == 1 then parts[1] else types.unionof(table.unpack(parts))
+		elseif t:is("intersection") then
+			for _, part in t:components() do
+				local found = resolve(part)
+				if found ~= nil then
+					return found
+				end
+			end
+			return nil
+		end
+		return fromObject(t)
+	end
+
+	return resolve(sig) or types.any
+end
+
+-- Unwraps the dependency shape passed to `Flux.on`: a node, getter, plain value, or array of them.
+--- @within Flux
+--- @private
+export type function OnInput(deps: type): type
+	local function returned(fn: type): type
+		local head = fn:returns().head
+		return if head and head[1] then head[1] else types.singleton(nil)
+	end
+
+	local function nodeValue(t: type): type?
+		if not t:is("table") then
+			return nil
+		end
+		local get = t:readproperty(types.singleton("get"))
+		if get and get:is("function") and t:readproperty(types.singleton("peek")) then
+			return returned(get)
+		end
+		return nil
+	end
+
+	local function unwrapValue(t: type): type
+		if t:is("any") or t:is("unknown") then
+			return types.any
+		elseif t:is("union") then
+			local parts: { type } = {}
+			local function add(part: type)
+				if part:is("union") then
+					for _, member in part:components() do
+						add(member)
+					end
+				elseif not table.find(parts, part) then
+					table.insert(parts, part)
+				end
+			end
+			for _, part in t:components() do
+				add(unwrapValue(part))
+			end
+			return if #parts == 1 then parts[1] else types.unionof(table.unpack(parts))
+		elseif t:is("intersection") then
+			for _, part in t:components() do
+				local found = nodeValue(part)
+				if found then
+					return found
+				end
+			end
+			return t
+		elseif t:is("function") then
+			return returned(t)
+		end
+		return nodeValue(t) or t
+	end
+
+	local function resolve(t: type): type
+		if t:is("any") or t:is("unknown") then
+			return types.any
+		elseif t:is("union") then
+			local parts: { type } = {}
+			for _, part in t:components() do
+				local resolved = resolve(part)
+				if not table.find(parts, resolved) then
+					table.insert(parts, resolved)
+				end
+			end
+			return if #parts == 1 then parts[1] else types.unionof(table.unpack(parts))
+		elseif t:is("intersection") then
+			for _, part in t:components() do
+				local found = nodeValue(part)
+				if found then
+					return found
+				end
+			end
+			return t
+		elseif t:is("function") then
+			return returned(t)
+		elseif t:is("table") then
+			local found = nodeValue(t)
+			if found then
+				return found
+			end
+			local indexer = t:indexer()
+			if indexer and indexer.readresult then
+				local elem = unwrapValue(indexer.readresult)
+				return types.newtable(nil, { index = types.number, readresult = elem, writeresult = elem })
+			end
+			return t
+		end
+		return t
+	end
+
+	return resolve(deps)
+end
+
 return nil

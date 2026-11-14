@@ -81,10 +81,10 @@ local Constructors: ConstructorMap = setmetatable({} :: ConstructorMap, {
 })
 
 local FluxMT = table.freeze({
-	--- Terse untyped constructor for a [signal](https://flux.kohl.gg/guide/concepts/signals) (`Flux(value)`), [computed](https://flux.kohl.gg/guide/concepts/computeds) (`Flux(fn)`), or [instance property node](https://flux.kohl.gg/guide/concepts/signals#binding-from-an-instance-property) (`Flux(instance, key)`).
+	--- Terse untyped constructor for a [signal](https://flux.kohl.gg/guide/concepts/signals) (`Flux(value)`), [computed](https://flux.kohl.gg/guide/concepts/computeds) (`Flux(fn)`), [instance property node](https://flux.kohl.gg/guide/concepts/signals#binding-from-an-instance-property) (`Flux(instance, key)`), or [event signal node](https://flux.kohl.gg/guide/concepts/signals#bridging-signals) (`Flux(signal, initial?)`).
 	--- [Open Documentation](https://flux.kohl.gg/guide/concepts/signals#creating-a-signal)
-	__call = function(_: any, obj: any, propertyName: string?): Graph.Node<any>
-		local node = Bind.node(obj, propertyName)
+	__call = function(_: any, obj: any, second: any?): Graph.Node<any>
+		local node = Bind.node(obj, second)
 		return node
 	end,
 })
@@ -201,6 +201,7 @@ local Flux = table.freeze(setmetatable({
 
 	-- Instances and control flow
 	property = Bind.property,
+	fromSignal = Bind.fromSignal,
 	model = Bind.model,
 	isModel = Bind.isModel,
 	modelNode = Bind.modelNode,
