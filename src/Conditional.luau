@@ -324,9 +324,21 @@ local function destroyMapperRows(
 	table.clear(currentKeys)
 end
 
-local function createMapper(list: any, mapFn: any, keyedByValue: boolean, keyOf: ((any) -> any)?): Node<any>
+local function createMapper(
+	list: any,
+	mapFn: any,
+	keyedByValue: boolean,
+	keyOf: ((any) -> any)?,
+	fallbackFn: any?
+): Node<any>
 	local map: (any, any) -> any = mapFn
 	assert(type(mapFn) == "function", "mapFn must be a function")
+	local emptyFn: (() -> any)? = nil
+	if fallbackFn ~= nil then
+		local fb: () -> any = fallbackFn
+		assert(type(fallbackFn) == "function", "fallback must be a function")
+		emptyFn = fb
+	end
 	local cache: { [any]: any } = {}
 	local nodes: { [any]: Node<any> } = {}
 	local items: { [any]: Node<any> }? = if keyOf ~= nil then {} else nil
@@ -334,6 +346,21 @@ local function createMapper(list: any, mapFn: any, keyedByValue: boolean, keyOf:
 	local cacheN = 0
 	local rebuildAborted = false
 	local rowA: any, rowB: any
+	local fallbackOwner: Node<any>? = nil
+	local fallbackItem: any = nil
+	local fallbackOut: { any }? = nil
+
+	local function clearFallback()
+		local owner = fallbackOwner
+		if owner ~= nil then
+			local item = fallbackItem
+			fallbackOwner = nil
+			fallbackItem = nil
+			fallbackOut = nil
+			destroyNode(owner)
+			dispose(item)
+		end
+	end
 
 	local function build()
 		local a, b = rowA, rowB
@@ -344,8 +371,9 @@ local function createMapper(list: any, mapFn: any, keyedByValue: boolean, keyOf:
 	local self = computed(function()
 		local current = read(list) :: { any }
 		if type(current) ~= "table" then
-			if cacheN > 0 or rebuildAborted or next(nodes) ~= nil then
+			if cacheN > 0 or rebuildAborted or next(nodes) ~= nil or fallbackOwner ~= nil then
 				untrack()
+				clearFallback()
 				destroyMapperRows(nodes, items, cache, currentKeys)
 				cacheN = 0
 				rebuildAborted = false
@@ -443,10 +471,28 @@ local function createMapper(list: any, mapFn: any, keyedByValue: boolean, keyOf:
 			cacheN += added
 		end
 
+		if seen == 0 and emptyFn ~= nil then
+			if fallbackOwner == nil then
+				local ok, branch, mapped = mountBranch(emptyFn, nil, nil)
+				if not ok then
+					retrack()
+					error(branch, 0)
+				end
+				fallbackOwner = branch
+				fallbackItem = mapped
+				fallbackOut = if mapped == nil then {} else { mapped }
+			end
+			retrack()
+			return fallbackOut :: { any }
+		end
+
+		clearFallback()
+		retrack()
 		return out
 	end)
 
 	self:onDestroy(function()
+		clearFallback()
 		destroyMapperRows(nodes, items, cache, currentKeys)
 	end)
 
@@ -455,36 +501,35 @@ end
 
 --[[
 Maps `list` by numeric index, running `mapFn(index, item)` once per slot and updating `item` in place when the value at that index changes.
+When `fallback` is given, mounts `fallback()` in a child [scope](https://flux.kohl.gg/guide/concepts/scopes) while `list` is empty.
 
 [Open Documentation](https://flux.kohl.gg/guide/concepts/mapping#flux-forindex-keyed-by-index)
 ]]
-local function forIndex<L, U>(list: L, mapFn: (index: number, item: Node<Item<L>>) -> U): Node<{ U }>
-	return createMapper(list, mapFn, false)
+local function forIndex(list: any, mapFn: any, fallback: any?): Node<any>
+	return createMapper(list, mapFn, false, nil, fallback)
 end
 
 --[[
 Maps `list` by item identity, running `mapFn(index, value)` once per unique value and updating `index` when an item moves.
 Values must be unique (use `Flux.forIndex` for primitive or duplicate values).
+When `fallback` is given, mounts `fallback()` in a child [scope](https://flux.kohl.gg/guide/concepts/scopes) while `list` is empty.
 
 [Open Documentation](https://flux.kohl.gg/guide/concepts/mapping#flux-forvalue-keyed-by-value)
 ]]
-local function forValue<L, U>(list: L, mapFn: (index: Node<number>, value: Item<L>) -> U): Node<{ U }>
-	return createMapper(list, mapFn, true)
+local function forValue(list: any, mapFn: any, fallback: any?): Node<any>
+	return createMapper(list, mapFn, true, nil, fallback)
 end
 
 --[[
 Maps `list` by `keyOf(item)`, running `mapFn(index, item)` once per unique key and updating both `index` and `item` in place when entries with that key move or rebuild.
 Entries whose key is `nil` fall back to item identity. Keys must be unique.
+When `fallback` is given, mounts `fallback()` in a child [scope](https://flux.kohl.gg/guide/concepts/scopes) while `list` is empty.
 
 [Open Documentation](https://flux.kohl.gg/guide/concepts/mapping#flux-forkey-keyed-by-function)
 ]]
-local function forKey<L, U>(
-	list: L,
-	keyOf: (item: Item<L>) -> any,
-	mapFn: (index: Node<number>, item: Node<Item<L>>) -> U
-): Node<{ U }>
+local function forKey(list: any, keyOf: any, mapFn: any, fallback: any?): Node<any>
 	assert(type(keyOf) == "function", "keyOf must be a function")
-	return createMapper(list, mapFn, true, keyOf)
+	return createMapper(list, mapFn, true, keyOf, fallback)
 end
 
 -- Selector ------------------------------------------------------------------------------------------------------------
@@ -649,6 +694,14 @@ local function selector<S, K>(source: S, equals: ((sourceValue: Graph.Unwrap<S>,
 	return self
 end
 
+--- @ignore
+type function NonUnknown(t: type): type
+	if t:is("unknown") or t:is("never") then
+		return types.never
+	end
+	return t
+end
+
 return table.freeze({
 	--[[
 	Catch-all branch key for [`Flux.switch`](https://flux.kohl.gg/guide/concepts/conditionals#a-catch-all-branch) maps when `source` matches no explicit key.
@@ -688,8 +741,21 @@ return table.freeze({
 	presence = presence,
 	pick = pick,
 	fallback = fallback,
-	forIndex = forIndex,
-	forValue = forValue,
-	forKey = forKey,
+	forIndex = forIndex :: <L, U, F>(
+		list: L,
+		mapFn: (index: number, item: Node<Item<L>>) -> U,
+		fallback: (() -> F)?
+	) -> Node<{ U | NonUnknown<F> }>,
+	forValue = forValue :: <L, U, F>(
+		list: L,
+		mapFn: (index: Node<number>, value: Item<L>) -> U,
+		fallback: (() -> F)?
+	) -> Node<{ U | NonUnknown<F> }>,
+	forKey = forKey :: <L, U, F>(
+		list: L,
+		keyOf: (item: Item<L>) -> any,
+		mapFn: (index: Node<number>, item: Node<Item<L>>) -> U,
+		fallback: (() -> F)?
+	) -> Node<{ U | NonUnknown<F> }>,
 	selector = selector,
 })

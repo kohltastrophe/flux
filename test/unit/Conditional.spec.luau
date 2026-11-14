@@ -2412,6 +2412,277 @@ test("forValue / forKey / selector · handles NaN safely without table index err
 end)
 
 test(
+	"forIndex / forValue / forKey · empty-list fallback caches scope while empty and disposes on fill, non-table, or destroy",
+	function()
+		local emptyRuns, emptyCleanups = 0, 0
+		local list = Flux.signal({} :: { any })
+
+		for _, entry in
+			{
+				{
+					name = "forIndex",
+					make = function(src: any, fb: any)
+						return Flux.forIndex(src, function(_i, item)
+							return Flux.new("Frame")({ Name = tostring(item()) })
+						end, fb)
+					end,
+				},
+				{
+					name = "forValue",
+					make = function(src: any, fb: any)
+						return Flux.forValue(src, function(_i, value)
+							return Flux.new("Frame")({ Name = tostring(value) })
+						end, fb)
+					end,
+				},
+				{
+					name = "forKey",
+					make = function(src: any, fb: any)
+						return Flux.forKey(src, function(item)
+							return item.id
+						end, function(_i, item)
+							return Flux.new("Frame")({ Name = item().name })
+						end, fb)
+					end,
+				},
+			}
+		do
+			emptyRuns, emptyCleanups = 0, 0
+			list:set({})
+			local tick = Flux.signal(0)
+			local tickEffects = 0
+			local mapped = entry.make(list, function()
+				emptyRuns += 1
+				Flux.effect(function()
+					tick()
+					tickEffects += 1
+				end)
+				Flux.cleanup(function()
+					emptyCleanups += 1
+				end)
+				return Flux.new("TextLabel")({ Name = `Empty_{emptyRuns}` })
+			end)
+			local host = Flux.new("Frame")({
+				mapped,
+			})
+			flush()
+			local firstOut = host:FindFirstChild("Empty_1")
+			expect(emptyRuns == 1 and firstOut ~= nil, `{entry.name}: initial empty list mounts fallback`)
+			expect(tickEffects == 1, `{entry.name}: fallback scoped effect ran`)
+
+			list:set({})
+			flush()
+			expect(
+				emptyRuns == 1 and host:FindFirstChild("Empty_1") == firstOut and emptyCleanups == 0,
+				`{entry.name}: staying empty reuses cached fallback without remounting`
+			)
+
+			list:set({ if entry.name == "forKey" then { id = 1, name = "Row1" } else "Row1" })
+			flush()
+			expect(
+				emptyCleanups == 1 and host:FindFirstChild("Empty_1") == nil and host:FindFirstChild("Row1") ~= nil,
+				`{entry.name}: filling list disposes fallback scope and swaps to mapped row`
+			)
+
+			tick:set(1)
+			flush()
+			expect(tickEffects == 1, `{entry.name}: disposed fallback effect no longer reacts`)
+
+			list:set({})
+			flush()
+			expect(
+				emptyRuns == 2 and host:FindFirstChild("Empty_2") ~= nil and host:FindFirstChild("Row1") == nil,
+				`{entry.name}: emptying list again mounts fresh fallback`
+			)
+
+			list:set(nil :: any)
+			flush()
+			expect(emptyCleanups == 2 and #host:GetChildren() == 0, `{entry.name}: non-table disposes active fallback`)
+
+			list:set({})
+			flush()
+			expect(
+				emptyRuns == 3 and host:FindFirstChild("Empty_3") ~= nil,
+				`{entry.name}: returning to empty table remounts fallback`
+			)
+			host:Destroy()
+			flush()
+			expect(
+				#host:GetChildren() == 0 and emptyCleanups == 2,
+				`{entry.name}: destroying host unparents fallback child while keeping unowned mapper alive`
+			)
+			mapped:Destroy()
+			flush()
+			expect(emptyCleanups == 3, `{entry.name}: destroying mapper disposes active fallback`)
+		end
+
+		-- Edge cases: nil-returning fallback, throwing fallback, and non-function fallback
+		local emptySrc = Flux.signal({} :: { string })
+		local nilRuns = 0
+		local nilNode = Flux.forValue(emptySrc, function(_i, v)
+			return v
+		end, function()
+			nilRuns += 1
+			return nil
+		end)
+		expect(#nilNode() == 0 and nilRuns == 1, "nil-returning fallback produces empty array and caches")
+		emptySrc:set({})
+		expect(#nilNode() == 0 and nilRuns == 1, "cached nil-returning fallback does not rerun")
+		nilNode:Destroy()
+
+		local boomNode = Flux.forIndex({}, function()
+			return 1
+		end, function()
+			error("empty boom")
+		end)
+		sert.throws(function()
+			boomNode()
+		end, "empty boom")
+		boomNode:Destroy()
+
+		sert.throws(function()
+			Flux.forIndex({}, function()
+				return 1
+			end, "not a function" :: any)
+		end, "fallback must be a function")
+
+		-- Unowned cleanable returned by fallback is disposed when items mount
+		local unownedDisposed = 0
+		local unownedSrc = Flux.signal({} :: { string })
+		local unownedNode = Flux.forValue(unownedSrc, function(_i, v)
+			return v
+		end, function()
+			return {
+				Destroy = function()
+					unownedDisposed += 1
+				end,
+			}
+		end)
+		expect(#unownedNode() == 1 and unownedDisposed == 0, "unowned fallback cleanable stays alive while empty")
+		unownedSrc:set({ "x" })
+		expect(unownedNode()[1] == "x" and unownedDisposed == 1, "filling list disposes unowned fallback cleanable")
+		unownedNode:Destroy()
+
+		-- Mapper row sweep accounting: replacing 2 rows with 1 new row (seen == cacheN - added) still sweeps old rows
+		local sweepCleaned: { [string]: number } = {}
+		local sweepSrc = Flux.signal({ "a", "b" })
+		local sweepNode = Flux.forValue(sweepSrc, function(_i, v)
+			Flux.cleanup(function()
+				sweepCleaned[v] = (sweepCleaned[v] or 0) + 1
+			end)
+			return v
+		end)
+		expect(#sweepNode() == 2, "initial 2-item list builds both rows")
+		sweepSrc:set({ "c" })
+		expect(
+			#sweepNode() == 1 and sweepCleaned.a == 1 and sweepCleaned.b == 1 and sweepCleaned.c == nil,
+			"shrinking to 1 disjoint item sweeps both removed rows"
+		)
+		sweepSrc:set({})
+		expect(#sweepNode() == 0 and sweepCleaned.c == 1, "emptying list sweeps final row")
+		sweepNode:Destroy()
+
+		-- forKey NaN key falls back to item identity and preserves mapped row across moves
+		local nanRow = { name = "nan" }
+		local okRow = { id = "ok", name = "ok" }
+		local nanSrc = Flux.signal({ nanRow } :: { any })
+		local nanBuilds, nanCleanups = 0, 0
+		local nanLastIdx: any = nil
+		local nanNode: any
+		local nanWarns = env.warnings(function()
+			nanNode = Flux.forKey(nanSrc, function(item)
+				return if item == nanRow then 0 / 0 else item.id
+			end, function(idx, item)
+				if item() == nanRow then
+					nanBuilds += 1
+					nanLastIdx = idx
+					Flux.cleanup(function()
+						nanCleanups += 1
+					end)
+				end
+				return item().name
+			end)
+			expect(nanNode()[1] == "nan" and nanBuilds == 1 and nanLastIdx() == 1, "forKey builds NaN-key row")
+			nanSrc:set({ okRow, nanRow })
+			expect(
+				nanNode()[1] == "ok"
+					and nanNode()[2] == "nan"
+					and nanBuilds == 1
+					and nanCleanups == 0
+					and nanLastIdx() == 2,
+				"forKey reuses NaN-key row by item identity when moved"
+			)
+		end)
+		expect(#nanWarns == 2, "forKey warns on each NaN key evaluation")
+		nanNode:Destroy()
+
+		-- Aborted mapper rebuild -> non-table reset cleans partial rows and preserves outer tracking
+		local shouldThrow = true
+		local abortSrc = Flux.signal({ "first", "boom" } :: { string }?)
+		local afterSrc = Flux.signal(0)
+		local firstCleaned = 0
+		local abortNode = Flux.forValue(abortSrc, function(_i, v)
+			if v == "boom" and shouldThrow then
+				error("row boom")
+			end
+			if v == "first" then
+				Flux.cleanup(function()
+					firstCleaned += 1
+				end)
+			end
+			return v
+		end)
+		sert.throws(function()
+			abortNode()
+		end, "row boom")
+		expect(firstCleaned == 0, "aborted rebuild leaves already-created row alive until reset")
+
+		local outerRuns = 0
+		local outer = Flux.computed(function()
+			outerRuns += 1
+			pcall(function()
+				return abortNode()
+			end)
+			return afterSrc()
+		end)
+		abortSrc:set(nil)
+		expect(outer() == 0 and firstCleaned == 1, "non-table transition after aborted rebuild cleans partial rows")
+		afterSrc:set(1)
+		expect(outer() == 1 and outerRuns == 2, "retrack after non-table cleanup keeps downstream reads tracked")
+		shouldThrow = false
+		abortSrc:set({ "recovered" })
+		expect(abortNode()[1] == "recovered", "mapper recovers cleanly after non-table reset")
+		outer:Destroy()
+		abortNode:Destroy()
+
+		-- Throwing empty fallback preserves outer reactive tracking via retrack
+		local errSrc = Flux.signal({} :: { string })
+		local errAfter = Flux.signal(10)
+		local errNode = Flux.forIndex(errSrc, function(_i, v)
+			return v
+		end, function()
+			error("empty retrack boom")
+		end)
+		local errOuterRuns = 0
+		local errOuter = Flux.computed(function()
+			errOuterRuns += 1
+			pcall(function()
+				return errNode()
+			end)
+			return errAfter()
+		end)
+		expect(errOuter() == 10 and errOuterRuns == 1, "outer computed captures fallback throw")
+		errAfter:set(20)
+		expect(
+			errOuter() == 20 and errOuterRuns == 2,
+			"retrack after throwing empty fallback keeps downstream reads tracked"
+		)
+		errOuter:Destroy()
+		errNode:Destroy()
+	end
+)
+
+test(
 	"forIndex, forValue, forKey · throwing mapFn or keyOf cleans up row state and preserves outer tracking",
 	function()
 		local function verifyThrowingMapper(

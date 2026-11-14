@@ -232,6 +232,35 @@ local _onEffect = Flux.effect(Flux.on(count, function(cur: number): ()
 	local _ = cur + 1
 end))
 
+local _mappedFallback: Node<{ string | number }> = Flux.forValue(function()
+	return { "a", "b" }
+end, function(_index, value)
+	return string.upper(value)
+end, function()
+	return 0
+end)
+local _indexedFallback: Node<{ number | string }> = Flux.forIndex(
+	Flux.signal({ 1, 2 }),
+	function(_index, item: Node<number>)
+		return item() * 2
+	end,
+	function()
+		return "empty"
+	end
+)
+local _keyedFallback: Node<{ string | boolean }> = Flux.forKey(
+	Flux.signal({ { id = 1, label = "A" } } :: { KeyedRow }),
+	function(row)
+		return row.id
+	end,
+	function(index, row: Node<KeyedRow>)
+		return `{index()}:{row().label}`
+	end,
+	function()
+		return false
+	end
+)
+
 return {
 	updatedCount,
 	updatedNode,
@@ -247,4 +276,7 @@ return {
 	onSingle,
 	onTuple,
 	_onEffect,
+	_mappedFallback,
+	_indexedFallback,
+	_keyedFallback,
 }
