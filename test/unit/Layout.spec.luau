@@ -824,3 +824,110 @@ ctest("layout · sert.roblox.Layout.settle, geometry and Flicker.steady verify n
 	s:Destroy()
 	gui:Destroy()
 end)
+
+test("layout · flex accepts nil, number, preset, config, or reactive node; scale creates UIScale", function()
+	local mode = Flux.signal(2 :: any)
+	local fill = Flux.signal(true)
+	local scaleVal = Flux.signal(1.25)
+
+	local flexDefault, flexNum, flexCustom, flexCfg, flexGrowCfg, flexSig, flexFn
+	local scaleDefault, scaleNum, scaleDyn
+	local s = Flux.scope(function()
+		flexDefault = Flux.flex()
+		flexNum = Flux.flex(2)
+		flexCustom = Flux.flex("custom")
+		flexCfg = Flux.flex({ grow = 3, shrink = 0.5, lineAlign = "center" })
+		flexGrowCfg = Flux.flex({ mode = "grow", shrink = 0 })
+		flexSig = Flux.flex(mode)
+		flexFn = Flux.flex(function()
+			return if fill() then 4 else "none"
+		end)
+
+		scaleDefault = Flux.scale()
+		scaleNum = Flux.scale(1.5)
+		scaleDyn = Flux.scale(scaleVal)
+	end)
+
+	expect(flexDefault:IsA("UIFlexItem") and flexDefault.FlexMode == Enum.UIFlexMode.Fill, "flex() defaults to Fill")
+	expect(
+		flexNum.FlexMode == Enum.UIFlexMode.Custom and flexNum.GrowRatio == 2,
+		"flex(number) enables Custom + GrowRatio"
+	)
+	expect(flexCustom.FlexMode == Enum.UIFlexMode.Custom, 'flex("custom") maps to UIFlexMode.Custom')
+	expect(
+		flexCfg.FlexMode == Enum.UIFlexMode.Custom
+			and flexCfg.GrowRatio == 3
+			and flexCfg.ShrinkRatio == 0.5
+			and flexCfg.ItemLineAlignment == Enum.ItemLineAlignment.Center,
+		"flex(config) applies grow/shrink/lineAlign and defaults mode to Custom"
+	)
+	expect(
+		flexGrowCfg.FlexMode == Enum.UIFlexMode.Grow and flexGrowCfg.ShrinkRatio == 0,
+		"flex(config) honors explicit mode alongside shrink"
+	)
+
+	expect(
+		flexSig.FlexMode == Enum.UIFlexMode.Custom and flexSig.GrowRatio == 2,
+		"reactive flex initializes from number"
+	)
+	mode:set("shrink")
+	flush()
+	expect(
+		flexSig.FlexMode == Enum.UIFlexMode.Shrink and flexSig.GrowRatio == 0,
+		"reactive flex switches from number to preset string and resets GrowRatio"
+	)
+	mode:set(nil)
+	flush()
+	expect(flexSig.FlexMode == Enum.UIFlexMode.Fill, "reactive flex falls back to Fill on nil")
+
+	expect(flexFn.FlexMode == Enum.UIFlexMode.Custom and flexFn.GrowRatio == 4, "function flex initializes")
+	fill:set(false)
+	flush()
+	expect(flexFn.FlexMode == Enum.UIFlexMode.None and flexFn.GrowRatio == 0, "function flex updates")
+
+	expect(scaleDefault:IsA("UIScale") and scaleDefault.Scale == 1, "scale() defaults to 1")
+	expect(scaleNum.Scale == 1.5, "scale(number) sets static Scale")
+	expect(scaleDyn.Scale == 1.25, "scale(node) binds initial Scale")
+	scaleVal:set(2)
+	flush()
+	expect(scaleDyn.Scale == 2, "scale(node) updates reactively")
+
+	flexSig:Destroy()
+	mode:set(5)
+	flush()
+	expect(mode:peek() == 5, "destroying UIFlexItem does not destroy the user's signal")
+
+	s:Destroy()
+end)
+
+test("layout · flex resolves unknown mode in static or reactive config with grow to Custom", function()
+	local staticBad = env.fresh("bogusFlexStatic")
+	local dynBad = env.fresh("bogusFlexDyn")
+	local modeSig = Flux.signal(dynBad :: any)
+	local noGrowSig = Flux.signal(env.fresh("bogusFlexNoGrow") :: any)
+
+	local fxStatic, fxDyn, fxNoGrow, sc
+	local warned = env.warnings(function()
+		sc = Flux.scope(function()
+			fxStatic = Flux.flex({ mode = staticBad, grow = 2 })
+			fxDyn = Flux.flex({ mode = modeSig, grow = 2 })
+			fxNoGrow = Flux.flex({ mode = noGrowSig })
+		end)
+		flush()
+	end)
+
+	expect(#warned >= 3, `unknown flex mode warns for static and reactive configs (got {#warned})`)
+	expect(
+		fxStatic.FlexMode == Enum.UIFlexMode.Custom and fxStatic.GrowRatio == 2,
+		"static flex config with unknown mode and grow falls back to UIFlexMode.Custom"
+	)
+	expect(
+		fxDyn.FlexMode == Enum.UIFlexMode.Custom and fxDyn.GrowRatio == 2,
+		"reactive flex config with unknown mode and grow falls back to UIFlexMode.Custom"
+	)
+	expect(fxNoGrow.FlexMode == Enum.UIFlexMode.Fill, "reactive flex config without grow falls back to UIFlexMode.Fill")
+
+	sc:Destroy()
+	modeSig:Destroy()
+	noGrowSig:Destroy()
+end)

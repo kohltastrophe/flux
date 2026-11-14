@@ -1,6 +1,6 @@
 --!strict
 --[[
-Layout instances with friendly, reactive arguments: `padding`, `corner`, `stroke`, `list`, `grid`, `flex`, `gradient`,
+Layout instances with friendly, reactive arguments: `padding`, `corner`, `stroke`, `list`, `grid`, `flex`, `scale`, `gradient`,
 `aspectRatio`, `sizeConstraint`, `textSizeConstraint`. Each is flat on `Flux`.
 
 ```luau
@@ -53,7 +53,14 @@ export type Align = "start" | "center" | "end"
 export type FlexAlign = Align | "between" | "around" | "evenly" | "stretch" | "fill" | "none"
 export type LineAlign = Align | "stretch" | "automatic"
 export type Direction = "x" | "y"
-export type FlexMode = "fill" | "grow" | "shrink" | "none"
+export type FlexMode = "fill" | "grow" | "shrink" | "none" | "custom"
+
+export type FlexConfig = {
+	mode: Reactive<FlexMode | Enum.UIFlexMode>?,
+	grow: Reactive<number>?,
+	shrink: Reactive<number>?,
+	lineAlign: Reactive<LineAlign | Enum.ItemLineAlignment>?,
+}
 
 export type PaddingSides = {
 	top: ReactiveLength?,
@@ -162,6 +169,7 @@ local FLEX_MODE: EnumMap = {
 	grow = Enum.UIFlexMode.Grow,
 	shrink = Enum.UIFlexMode.Shrink,
 	none = Enum.UIFlexMode.None,
+	custom = Enum.UIFlexMode.Custom,
 }
 local ASPECT_TYPE: EnumMap = {
 	fit = Enum.AspectType.FitWithinMaxSize,
@@ -211,8 +219,11 @@ local function enumProp(map: EnumMap, value: any, label: string, default: EnumIt
 			local resolved = resolveEnum(map, read(value), label)
 			return if resolved == nil then default else resolved
 		end
+	elseif value == nil then
+		return nil
 	end
-	return resolveEnum(map, value, label)
+	local resolved = resolveEnum(map, value, label)
+	return if resolved == nil then default else resolved
 end
 
 local function toUDim(value: any): UDim
@@ -532,23 +543,63 @@ function Layout.grid(config: GridConfig?): UIGridLayout
 end
 
 --[[
-Creates a [`UIFlexItem`](https://create.roblox.com/docs/reference/engine/classes/UIFlexItem) with `mode` (`"fill"` by default, `"grow"`, `"shrink"`, or `"none"`).
+Creates a [`UIFlexItem`](https://create.roblox.com/docs/reference/engine/classes/UIFlexItem) from `nil` (`"fill"`), a
+numeric `GrowRatio` (`Custom` mode), a preset `"fill"`/`"grow"`/`"shrink"`/`"none"`/`"custom"` string, or a `{ mode?, grow?, shrink?, lineAlign? }` config table.
 
 [Open Documentation](https://flux.kohl.gg/guide/utilities/layout#flex)
 ]]
-function Layout.flex(mode: Reactive<FlexMode | Enum.UIFlexMode>?): UIFlexItem
-	if isDynamic(mode) then
+function Layout.flex(config: (FlexConfig | Reactive<number | FlexMode | Enum.UIFlexMode>)?): UIFlexItem
+	if config == nil then
 		return construct("UIFlexItem", {
+			FlexMode = FLEX_MODE.fill,
+		})
+	elseif type(config) == "number" then
+		return construct("UIFlexItem", {
+			FlexMode = FLEX_MODE.custom,
+			GrowRatio = config,
+		})
+	elseif isDynamic(config) then
+		local isFn = type(config) == "function"
+		local source = if isFn then new(config) else config
+		return construct("UIFlexItem", {
+			__CLEAN = if isFn then { source } else nil,
 			FlexMode = function()
-				local value = read(mode)
-				return if value == nil
-					then FLEX_MODE.fill
-					else resolveEnum(FLEX_MODE, value, "flexMode") or FLEX_MODE.none
+				local value = read(source)
+				if type(value) == "number" then
+					return FLEX_MODE.custom
+				elseif value == nil then
+					return FLEX_MODE.fill
+				end
+				return resolveEnum(FLEX_MODE, value, "flexMode") or FLEX_MODE.none
 			end,
+			GrowRatio = function()
+				local value = read(source)
+				return if type(value) == "number" then value else 0
+			end,
+		})
+	elseif type(config) == "table" and typeof(config) ~= "EnumItem" then
+		local cfg: FlexConfig = config :: any
+		local defaultMode = if cfg.grow ~= nil or cfg.shrink ~= nil then FLEX_MODE.custom else FLEX_MODE.fill
+		return construct("UIFlexItem", {
+			FlexMode = if cfg.mode == nil then defaultMode else enumProp(FLEX_MODE, cfg.mode, "flexMode", defaultMode),
+			GrowRatio = cfg.grow,
+			ShrinkRatio = cfg.shrink,
+			ItemLineAlignment = enumProp(ITEM_LINE_ALIGN, cfg.lineAlign, "lineAlign", ITEM_LINE_ALIGN.automatic),
 		})
 	end
 	return construct("UIFlexItem", {
-		FlexMode = if mode == nil then FLEX_MODE.fill else resolveEnum(FLEX_MODE, mode, "flexMode"),
+		FlexMode = resolveEnum(FLEX_MODE, config, "flexMode"),
+	})
+end
+
+--[[
+Creates a [`UIScale`](https://create.roblox.com/docs/reference/engine/classes/UIScale) with `Scale` (`1` by default).
+
+[Open Documentation](https://flux.kohl.gg/guide/utilities/layout#scale)
+]]
+function Layout.scale(scale: Reactive<number>?): UIScale
+	return construct("UIScale", {
+		Scale = if scale == nil then 1 else scale,
 	})
 end
 

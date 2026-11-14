@@ -232,6 +232,13 @@ local _onEffect = Flux.effect(Flux.on(count, function(cur: number): ()
 	local _ = cur + 1
 end))
 
+local _flexNum: UIFlexItem = Flux.flex(1)
+local _flexCustom: UIFlexItem = Flux.flex("custom")
+local _flexCfg: UIFlexItem = Flux.flex({ mode = "custom", grow = 2, shrink = 1, lineAlign = "center" })
+local _flexSig: UIFlexItem = Flux.flex(count)
+local _scaleDefault: UIScale = Flux.scale()
+local _scaleSig: UIScale = Flux.scale(count)
+
 local _mappedFallback: Node<{ string | number }> = Flux.forValue(function()
 	return { "a", "b" }
 end, function(_index, value)
@@ -276,6 +283,12 @@ return {
 	onSingle,
 	onTuple,
 	_onEffect,
+	_flexNum,
+	_flexCustom,
+	_flexCfg,
+	_flexSig,
+	_scaleDefault,
+	_scaleSig,
 	_mappedFallback,
 	_indexedFallback,
 	_keyedFallback,
