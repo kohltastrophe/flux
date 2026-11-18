@@ -679,7 +679,7 @@ local function applyBindingOrValue(
 	else
 		releaseBinding(instance, name, false)
 		setProperty(instance, name, value)
-		if name == "LayoutOrder" and value == 0 then
+		if name == "LayoutOrder" then
 			Bind.pinOrder(instance)
 		end
 	end

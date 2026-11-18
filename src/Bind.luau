@@ -79,10 +79,16 @@ local function release(instance: Instance, property: string, isAttribute: boolea
 	end
 end
 local pinnedOrder: { [Instance]: boolean } = setmetatable({}, { __mode = "k" })
+local autoOrder: { [Instance]: boolean } = setmetatable({}, { __mode = "k" })
 
 local function applyLayoutOrder(child: Instance, order: number): number
-	if child:IsA("GuiObject") and (child :: GuiObject).LayoutOrder == 0 and not pinnedOrder[child] then
+	if
+		child:IsA("GuiObject")
+		and not pinnedOrder[child]
+		and ((child :: GuiObject).LayoutOrder == 0 or autoOrder[child] == true)
+	then
 		(child :: GuiObject).LayoutOrder = order
+		autoOrder[child] = true
 		return order + 1
 	end
 	return order
@@ -443,6 +449,7 @@ local Bind = {
 	--- @ignore
 	pinOrder = function(instance: Instance)
 		pinnedOrder[instance] = true
+		autoOrder[instance] = nil
 	end,
 	--- @ignore
 	applyLayoutOrder = applyLayoutOrder,

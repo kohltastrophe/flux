@@ -1456,3 +1456,48 @@ test("edit · LayoutOrder model/node pinning, Find numeric ordering, and __REF p
 	childB:Destroy()
 	childC:Destroy()
 end)
+
+test("edit · forIndex and forValue reorder updates auto LayoutOrder while preserving static 0 and 10 pins", function()
+	local pinZero = Flux.new("Frame")({ Name = "PinZero", LayoutOrder = 0 })
+	local pinTen = Flux.new("Frame")({ Name = "PinTen", LayoutOrder = 10 })
+	local rows = Flux.signal({ { id = "a" }, { id = "b" } })
+	local vals = Flux.signal({ "x", "y" })
+
+	local container = Flux.new("Frame")({
+		pinZero,
+		Flux.forIndex(rows, function(_idx, item)
+			return Flux.new("Frame")({ Name = `k_{item:peek().id}` })
+		end),
+		Flux.forValue(vals, function(_idx, label)
+			return Flux.new("Frame")({ Name = `v_{label}` })
+		end),
+		pinTen,
+	})
+	flush()
+
+	local ka = container:FindFirstChild("k_a") :: Frame
+	local kb = container:FindFirstChild("k_b") :: Frame
+	local vx = container:FindFirstChild("v_x") :: Frame
+	local vy = container:FindFirstChild("v_y") :: Frame
+	expect(
+		pinZero.LayoutOrder == 0
+			and pinTen.LayoutOrder == 10
+			and ka.LayoutOrder == 1
+			and kb.LayoutOrder == 2
+			and vx.LayoutOrder == 2
+			and vy.LayoutOrder == 3,
+		`initial LayoutOrder pins and auto-order ({ka.LayoutOrder},{kb.LayoutOrder},{vx.LayoutOrder},{vy.LayoutOrder})`
+	)
+
+	vals:set({ "y", "x" })
+	flush()
+
+	expect(
+		pinZero.LayoutOrder == 0 and pinTen.LayoutOrder == 10 and vy.LayoutOrder == 2 and vx.LayoutOrder == 3,
+		`reordered LayoutOrder updates while static 0/10 pins stay untouched ({vy.LayoutOrder},{vx.LayoutOrder})`
+	)
+
+	container:Destroy()
+	rows:Destroy()
+	vals:Destroy()
+end)
