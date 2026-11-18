@@ -984,10 +984,9 @@ end
 
 --- @class Spring
 local MotionStateMetatable: { [string]: any } = {
-	__call = function<T>(self: any, value: any?): any?
-		if value ~= nil then
-			self:set(value)
-			return
+	__call = function<T>(self: any, value: any?, force: boolean?): any?
+		if value ~= nil or force then
+			return self:set(value, force)
 		end
 		return getSignal(self)
 	end,
@@ -1005,11 +1004,11 @@ it's read once.
 
 [Open Documentation](https://flux.kohl.gg/guide/motion/spring#reactive-targets)
 ]]
-function MotionStateMetatable.set<T>(self: Graph.Node<T>, value: T)
+function MotionStateMetatable.set(self: any, value: any, _force: boolean?): any
 	local motion = NodeToMotion[self]
 	if motion == nil then
 		warn("[Flux] :set() called on a destroyed motion node; ignoring")
-		return
+		return raw(value)
 	end
 	local goal = raw(value)
 	local typeString = typeof(goal)
@@ -1017,6 +1016,7 @@ function MotionStateMetatable.set<T>(self: Graph.Node<T>, value: T)
 		error(`Cannot retarget a {motion.typeString} motion with a {typeString} value`, 2)
 	end
 	Engine.setTarget(motion, pack(tempArray, goal, typeString))
+	return goal
 end
 
 --[[

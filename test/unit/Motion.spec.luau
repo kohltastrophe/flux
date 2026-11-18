@@ -1547,3 +1547,16 @@ rtest(
 		cfSpring:Destroy()
 	end
 )
+
+test("motion · :set and call return goal", function()
+	local spr = Flux.spring(0, 10, 1)
+	expect(spr:set(100) == 100, "spring:set returns goal")
+	expect(spr(200) == 200, "spring(goal) returns goal")
+
+	local tw = Flux.tween(0, info(1, "Linear"))
+	expect(tw:set(100) == 100, "tween:set returns goal")
+	expect(tw(300) == 300, "tween(goal) returns goal")
+
+	spr:Destroy()
+	tw:Destroy()
+end)
