@@ -1,33 +1,4 @@
---!strict
-
-type AnimationPlayer = Instance
-type AppHandle = Instance
-type BackendReplicatedStorage = Instance
-type BackendServerScriptService = Instance
-type BackendServerStorage = Instance
-type CloudClientService = Instance
-type FeatureMatchingService = Instance
-type FeatureMatchingSession = Instance
-type FeatureMatchingTable = Instance
-type FriendsCallingInstance = Instance
-type FriendsCallingParticipant = Instance
-type FriendsCallingService = Instance
-type HiddenPlayerService = Instance
-type InputReplayService = Instance
-type InstanceRegistryService = Instance
-type IntegrityService = Instance
-type ParticleEmitter2D = Instance
-type ParticipantHandle = Instance
-type PhysicsActivitySensor = Instance
-type ProjectService = Instance
-type TestCoordinatorService = Instance
-type TestExecutionContext = Instance
-type TestFailure = Instance
-type TestResult = Instance
-type TestRunResult = Instance
-type TestSuite = Instance
-type TextDocument = Instance
-type UIBlur = Instance
+--!nocheck
 
 export type Creatable = {
 	Accessory: Accessory,
@@ -80,6 +51,8 @@ export type Creatable = {
 	AudioReverb: AudioReverb,
 	AudioSearchParams: AudioSearchParams,
 	AudioSpeechToText: AudioSpeechToText,
+	AudioStreamReader: AudioStreamReader,
+	AudioStreamWriter: AudioStreamWriter,
 	AudioTextToSpeech: AudioTextToSpeech,
 	AudioTremolo: AudioTremolo,
 	AudioWindSynthesizer: AudioWindSynthesizer,
@@ -89,6 +62,7 @@ export type Creatable = {
 	AvatarBodyRules: AvatarBodyRules,
 	AvatarClothingRules: AvatarClothingRules,
 	AvatarCollisionRules: AvatarCollisionRules,
+	AvatarEffectDescription: AvatarEffectDescription,
 	AvatarRules: AvatarRules,
 	Backpack: Backpack,
 	BallSocketConstraint: BallSocketConstraint,
@@ -172,6 +146,8 @@ export type Creatable = {
 	FloorWire: FloorWire,
 	FluidForceSensor: FluidForceSensor,
 	Folder: Folder,
+	FollowRotationBoneBehavior: FollowRotationBoneBehavior,
+	FollowTwistBoneBehavior: FollowTwistBoneBehavior,
 	ForceField: ForceField,
 	Frame: Frame,
 	FunctionalTest: FunctionalTest,
@@ -447,6 +423,7 @@ export type Editable = Creatable & {
 	BaseScript: BaseScript,
 	BaseWrap: BaseWrap,
 	BevelMesh: BevelMesh,
+	Blob: Blob,
 	BodyMover: BodyMover,
 	BranchService: BranchService,
 	BrowserService: BrowserService,
@@ -565,8 +542,10 @@ export type Editable = Creatable & {
 	FeatureMatchingService: FeatureMatchingService,
 	FeatureMatchingSession: FeatureMatchingSession,
 	FeatureRestrictionManager: FeatureRestrictionManager,
+	FeatureSearchParams: FeatureSearchParams,
 	File: File,
 	FileManagerService: FileManagerService,
+	FilePickerService: FilePickerService,
 	FileSyncReplicationService: FileSyncReplicationService,
 	FlagStandService: FlagStandService,
 	FlyweightService: FlyweightService,
@@ -576,6 +555,7 @@ export type Editable = Creatable & {
 	FriendsCallingInstance: FriendsCallingInstance,
 	FriendsCallingParticipant: FriendsCallingParticipant,
 	FriendsCallingService: FriendsCallingService,
+	GameDownloaderService: GameDownloaderService,
 	GamePassService: GamePassService,
 	GameSettings: GameSettings,
 	GamepadService: GamepadService,
@@ -683,6 +663,7 @@ export type Editable = Creatable & {
 	MetaBreakpointContext: MetaBreakpointContext,
 	MetaBreakpointManager: MetaBreakpointManager,
 	MicroProfilerService: MicroProfilerService,
+	ModelInfoService: ModelInfoService,
 	ModerationService: ModerationService,
 	MomentsService: MomentsService,
 	Mouse: Mouse,
@@ -724,8 +705,10 @@ export type Editable = Creatable & {
 	PermissionsService: PermissionsService,
 	PhysicsService: PhysicsService,
 	PhysicsSettings: PhysicsSettings,
+	PickedFile: PickedFile,
 	PinShortcutService: PinShortcutService,
 	PlaceAssetIdsService: PlaceAssetIdsService,
+	PlaceSettings: PlaceSettings,
 	PlaceStatsService: PlaceStatsService,
 	PlacesService: PlacesService,
 	Platform: Platform,
@@ -733,8 +716,6 @@ export type Editable = Creatable & {
 	PlatformFriendsService: PlatformFriendsService,
 	PlatformLibraries: PlatformLibraries,
 	PlayerData: PlayerData,
-	PlayerDataRecord: PlayerDataRecord,
-	PlayerDataRecordConfig: PlayerDataRecordConfig,
 	PlayerDataService: PlayerDataService,
 	PlayerEmulatorService: PlayerEmulatorService,
 	PlayerGui: PlayerGui,
@@ -803,6 +784,7 @@ export type Editable = Creatable & {
 	RuntimeScriptService: RuntimeScriptService,
 	SafetyService: SafetyService,
 	SceneAnalysisService: SceneAnalysisService,
+	SceneSnapshot: SceneSnapshot,
 	ScreenshotCapture: ScreenshotCapture,
 	ScreenshotHud: ScreenshotHud,
 	ScriptBuilder: ScriptBuilder,
@@ -833,6 +815,7 @@ export type Editable = Creatable & {
 	ServiceVisibilityService: ServiceVisibilityService,
 	SessionCheckService: SessionCheckService,
 	SessionService: SessionService,
+	SessionStorage: SessionStorage,
 	SharedTableRegistry: SharedTableRegistry,
 	SlidingBallConstraint: SlidingBallConstraint,
 	SlimAnimationDataEntity: SlimAnimationDataEntity,
@@ -976,7 +959,6 @@ export type Editable = Creatable & {
 	Workspace: Workspace,
 	WorldRoot: WorldRoot,
 	WrapContentProvider: WrapContentProvider,
-	WrapDeformMeshProvider: WrapDeformMeshProvider,
 }
 
 return nil

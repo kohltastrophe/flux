@@ -69,6 +69,16 @@ local function menuOpen(env: { GuiService: any }?): boolean
 	return env ~= nil and env.GuiService.MenuIsOpen == true
 end
 
+local function guiInset(env: { GuiService: any }?): (number, number)
+	if env ~= nil then
+		local ok, inset = pcall(env.GuiService.GetGuiInset, env.GuiService)
+		if ok and inset ~= nil then
+			return inset.X, inset.Y
+		end
+	end
+	return 0, 0
+end
+
 --[[
 Whether the point `(x, y)` lies within `object`'s absolute bounds (inclusive, ignoring rotation).
 Coordinates are inset-relative, matching `InputObject.Position` and `AbsolutePosition`.
@@ -85,12 +95,44 @@ local memoRoot: Instance? = nil
 local memoX, memoY = 0, 0
 local memoList: { GuiObject } = {}
 
-local function guisAt(root: BasePlayerGui, x: number, y: number): { GuiObject }?
+local function guisAt(root: any, x: number, y: number): { GuiObject }?
 	local ok, list = pcall(root.GetGuiObjectsAtPosition, root, x, y)
 	return if ok then list else nil
 end
 
-local function hits(root: BasePlayerGui, x: number, y: number, token: any?): { GuiObject }?
+local function isClass(root: any, className: string): boolean
+	local ok, res = pcall(root.IsA, root, className)
+	return ok and res == true
+end
+
+local function is3DCollector(root: any): boolean
+	return isClass(root, "BillboardGui") or isClass(root, "SurfaceGuiBase")
+end
+
+local function isPluginGui(root: any): boolean
+	return isClass(root, "PluginGui")
+end
+
+local function hitRoot(object: GuiObject): Instance?
+	local collector = object:FindFirstAncestorWhichIsA("LayerCollector")
+	if collector ~= nil and is3DCollector(collector) then
+		return nil
+	end
+	return object:FindFirstAncestorWhichIsA("BasePlayerGui") or collector
+end
+
+local function rootCursor(tracker: Tracker, root: any): (number?, number?)
+	if isPluginGui(root) then
+		local ok, at = pcall(root.GetRelativeMousePosition, root)
+		if ok and at ~= nil then
+			return at.X, at.Y
+		end
+		return nil, nil
+	end
+	return tracker.x, tracker.y
+end
+
+local function hits(root: Instance, x: number, y: number, token: any?): { GuiObject }?
 	if token ~= nil and token == memoToken and root == memoRoot and x == memoX and y == memoY then
 		return memoList
 	end
@@ -125,7 +167,7 @@ local function claimedAt(
 	token: any?,
 	within: boolean
 ): boolean
-	local root = object:FindFirstAncestorWhichIsA("BasePlayerGui")
+	local root = hitRoot(object)
 	if root == nil then
 		return false
 	elseif menuOpen(env) then
@@ -206,6 +248,7 @@ type Tracker = Listener & {
 	env: HoverServices,
 	inside: { [Entry]: true },
 	touched: { [Entry]: true },
+	pluginFocus: { [any]: { count: number, conn: RBXScriptConnection } }?,
 	x: number?,
 	y: number?,
 }
@@ -265,13 +308,89 @@ local function settleTouch(tracker: Tracker, entry: Entry)
 	memoToken, memoRoot, memoList = nil, nil, {}
 end
 
-local function leave(tracker: Tracker, entry: Entry)
-	if entry.root ~= nil then
-		if entry.root == memoRoot then
+local leave: (tracker: Tracker, entry: Entry) -> ()
+
+local function releaseRoot(tracker: Tracker, root: any)
+	local map = tracker.pluginFocus
+	if map == nil then
+		return
+	end
+	local record = map[root]
+	if record == nil then
+		return
+	end
+	record.count -= 1
+	if record.count == 0 then
+		map[root] = nil
+		record.conn:Disconnect()
+	end
+end
+
+local function retainRoot(tracker: Tracker, root: any)
+	if not isPluginGui(root) then
+		return
+	end
+	local existing = tracker.pluginFocus
+	local map: { [any]: { count: number, conn: RBXScriptConnection } }
+	if existing ~= nil then
+		map = existing
+	else
+		map = {}
+		tracker.pluginFocus = map
+	end
+	local record = map[root]
+	if record ~= nil then
+		record.count += 1
+		return
+	end
+	local ok, conn = pcall(function(): any
+		local sig = root.WindowFocusReleased
+		if sig == nil then
+			return nil
+		end
+		return sig:Connect(function()
+			for entry in table.clone(tracker.inside) do
+				if entry.root == root then
+					leave(tracker, entry)
+				end
+			end
+			if memoRoot == root then
+				memoToken, memoRoot, memoList = nil, nil, {}
+			end
+		end)
+	end)
+	if ok and conn ~= nil then
+		map[root] = { count = 1, conn = conn :: RBXScriptConnection }
+	end
+end
+
+local function attachRoot(tracker: Tracker, entry: Entry, root: Instance)
+	local prevRoot = entry.root
+	if prevRoot == root then
+		return
+	end
+	entry.root = root
+	retainRoot(tracker, root)
+	if prevRoot == nil then
+		tracker.inside[entry] = true
+		retain(tracker)
+	else
+		releaseRoot(tracker, prevRoot)
+		if prevRoot == memoRoot then
+			memoToken, memoRoot, memoList = nil, nil, {}
+		end
+	end
+end
+
+leave = function(tracker: Tracker, entry: Entry)
+	local prevRoot = entry.root
+	if prevRoot ~= nil then
+		if prevRoot == memoRoot then
 			memoToken, memoRoot, memoList = nil, nil, {}
 		end
 		entry.root = nil
 		tracker.inside[entry] = nil
+		releaseRoot(tracker, prevRoot)
 		release(tracker)
 	end
 	if entry.touch == nil then
@@ -289,19 +408,28 @@ local function stepTracker(tracker: Tracker)
 		end
 		return
 	end
-	local x, y = tracker.x, tracker.y
-	if x == nil or y == nil then
-		return
-	end
-	local lastRoot: any, lastList: { GuiObject } = nil, {}
+	local lastRoot: any, lastList: { GuiObject }? = nil, nil
 	for entry in tracker.inside do
-		local root: any = entry.root
+		local prevRoot: any = entry.root
+		if prevRoot == nil then
+			continue
+		end
+		local root: any = hitRoot(entry.object)
+		if root == nil then
+			leave(tracker, entry)
+			continue
+		end
+		attachRoot(tracker, entry, root)
 		if root ~= lastRoot then
-			local list = guisAt(root, x, y)
-			if list == nil then
-				continue
+			lastRoot = root
+			local rx, ry = rootCursor(tracker, root)
+			lastList = if rx ~= nil then guisAt(root, rx, ry :: number) else nil
+		end
+		if lastList == nil then
+			if entry.touch == nil then
+				entry.state:set(false)
 			end
-			lastRoot, lastList = root, list
+			continue
 		end
 		local found, claimed = scan(lastList, entry.object, entry.within)
 		if not found then
@@ -415,24 +543,25 @@ local function expose(state: Graph.Node<boolean>, object: Instance, onRelease: (
 end
 
 local function enter(tracker: Tracker, entry: Entry, x: number?, y: number?)
-	if entry.root == nil then
-		local root = entry.object:FindFirstAncestorWhichIsA("BasePlayerGui")
-		if root == nil then
-			return
+	local root = hitRoot(entry.object)
+	if root == nil then
+		if entry.root ~= nil then
+			leave(tracker, entry)
 		end
-		entry.root = root
-		tracker.inside[entry] = true
-		retain(tracker)
+		return
+	end
+	attachRoot(tracker, entry, root)
+	if isPluginGui(root) then
+		return
 	end
 	if x ~= nil then
 		tracker.x, tracker.y = x, y
 	elseif tracker.x == nil then
 		local env = tracker.env
-		local ok, at = pcall(function(): Vector2
-			return env.UserInputService:GetMouseLocation() - env.GuiService:GetGuiInset()
-		end)
-		if ok then
-			tracker.x, tracker.y = at.X, at.Y
+		local ok, at = pcall(env.UserInputService.GetMouseLocation, env.UserInputService)
+		if ok and at ~= nil then
+			local ix, iy = guiInset(env)
+			tracker.x, tracker.y = at.X - ix, at.Y - iy
 		end
 	end
 end
@@ -495,9 +624,14 @@ local function _hoverWith(object: GuiObject, env: HoverServices?, options: Hover
 	local mouseLeave: any = events.MouseLeave
 	if tracker ~= nil and mouseEnter ~= nil then
 		local tracking: Tracker = tracker
-		local onEnter: RBXScriptConnection = mouseEnter:Connect(function()
+		local onEnter: RBXScriptConnection = mouseEnter:Connect(function(mx: number?, my: number?)
 			if not leavesMouse(tracking.env.UserInputService:GetLastInputType()) then
-				enter(tracking, entry)
+				if mx ~= nil and my ~= nil then
+					local ix, iy = guiInset(tracking.env)
+					enter(tracking, entry, mx - ix, my - iy)
+				else
+					enter(tracking, entry)
+				end
 			end
 		end)
 		local onLeave: RBXScriptConnection = mouseLeave:Connect(function()

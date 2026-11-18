@@ -3,11 +3,15 @@ local Compat = require("./Compat")
 local Graph = require("./Graph")
 local Type = require("./Type")
 
+local compatTask = Compat.task
 local compatTypeof = Compat.typeof
 local warn = Compat.warn
 
+local cleanup = Graph.cleanup
+local dispose = Graph.dispose
 local effect = Graph.effect
 local get = Graph.Node.get
+local getOwner = Graph.getOwner
 local kindOf = Graph.kindOf
 local new = Graph.new
 local signal = Graph.signal
@@ -16,20 +20,35 @@ local read = Graph.read
 local untrack = Graph.untrack
 local isNode = Graph.isNode
 local isReactive = Graph.isReactive
-local withOwner = Graph.withOwner
+local withOwner: any = Graph.withOwner
 
 local MODEL_SYMBOL: any = table.freeze({ type = "Model" })
+local PORTAL_SYMBOL: any = table.freeze({ type = "Portal" })
 local NO_VALUE: any = nil
 local NOOP = function() end
 
 --- @ignore
+type MountedPortal = {
+	spec: any,
+	stop: () -> (),
+}
+
+--- @ignore
 type BindData = {
+	fn: { [(value: any) -> ()]: boolean },
 	rbx: { [Instance]: { { [string]: any }? } },
 	eff: Graph.Node<any>,
 	flushed: boolean,
+	destroyCleanup: (() -> ())?,
+	pin: number?,
+	scratchChildren: { Instance }?,
+	scratchPortals: { any }?,
+	scratchIncoming: { [Instance]: true }?,
 	children: {
 		cleanupConnection: RBXScriptConnection?,
 		list: { Instance },
+		portals: { MountedPortal }?,
+		nextPortals: { MountedPortal }?,
 		parent: Instance?,
 		order: number?,
 		token: number?,
@@ -38,6 +57,9 @@ type BindData = {
 
 local bindData: { [Graph.Node<any>]: BindData } = setmetatable({}, { __mode = "k" })
 local bindGeneration = 0
+
+--- @ignore
+export type Portal = Type.Portal
 
 -- The source that currently drives each instance property or attribute (attributes keyed with a `$` prefix). An edit
 -- that sets the key again, bound or static, releases the previous claim first, so the newest value wins and stays
@@ -73,10 +95,16 @@ local function release(instance: Instance, property: string, isAttribute: boolea
 	end
 end
 local pinnedOrder: { [Instance]: boolean } = setmetatable({}, { __mode = "k" })
+local autoOrder: { [Instance]: boolean } = setmetatable({}, { __mode = "k" })
 
 local function applyLayoutOrder(child: Instance, order: number): number
-	if child:IsA("GuiObject") and (child :: GuiObject).LayoutOrder == 0 and not pinnedOrder[child] then
+	if
+		child:IsA("GuiObject")
+		and not pinnedOrder[child]
+		and ((child :: GuiObject).LayoutOrder == 0 or autoOrder[child] == true)
+	then
 		(child :: GuiObject).LayoutOrder = order
+		autoOrder[child] = true
 		return order + 1
 	end
 	return order
@@ -86,17 +114,101 @@ local function isInstance(value: any): boolean
 	return kindOf(value) == "Instance"
 end
 
-local function collectChildren(value: any, into: { Instance }): { Instance }
+local function isPortal(value: unknown): boolean
+	local rawValue: any = value
+	return type(value) == "table" and rawget(rawValue, 1) == PORTAL_SYMBOL
+end
+
+local mountPortal: (portal: any) -> () -> ()
+
+local function stopPortals(portals: { () -> () }?)
+	if portals == nil then
+		return
+	end
+	for _, stop in portals do
+		stop()
+	end
+	table.clear(portals)
+end
+
+local function stopMountedPortals(portals: { MountedPortal }?)
+	if portals == nil then
+		return
+	end
+	for _, entry in portals do
+		entry.stop()
+	end
+	table.clear(portals)
+end
+
+local function collectChildren(value: any, into: { Instance }, portals: { any }): { Instance }
 	if isInstance(value) then
 		table.insert(into, value)
 	elseif isNode(value) then
-		collectChildren(get(value), into)
+		collectChildren(get(value), into, portals)
+	elseif isPortal(value) then
+		table.insert(portals, value)
 	elseif type(value) == "table" then
 		for _, child in value do
-			collectChildren(child, into)
+			collectChildren(child, into, portals)
 		end
 	end
 	return into
+end
+
+local function syncPortals(data: any, portals: { any }, count: number)
+	local oldPortals = data.portals
+	if count == 0 then
+		stopMountedPortals(oldPortals)
+		return
+	end
+	local mounted = data.nextPortals
+	if mounted == nil then
+		mounted = {}
+	else
+		data.nextPortals = nil
+		table.clear(mounted)
+	end
+	if oldPortals ~= nil and oldPortals[1] ~= nil then
+		local nOld = #oldPortals
+		for i = 1, count do
+			local spec = portals[i]
+			local matched: MountedPortal? = nil
+			for j = 1, nOld do
+				local oldEntry = oldPortals[j]
+				if oldEntry and oldEntry.spec == spec then
+					matched = oldEntry
+					oldPortals[j] = false :: any
+					break
+				end
+			end
+			mounted[i] = matched or { spec = spec, stop = NOOP }
+		end
+		for j = 1, nOld do
+			local oldEntry = oldPortals[j]
+			if oldEntry then
+				oldEntry.stop()
+			end
+		end
+		table.clear(oldPortals)
+	else
+		for i = 1, count do
+			mounted[i] = { spec = portals[i], stop = NOOP }
+		end
+	end
+	data.portals = mounted
+	if oldPortals ~= nil then
+		data.nextPortals = oldPortals
+	end
+	for i = 1, count do
+		local entry = mounted[i]
+		if entry.stop == NOOP then
+			local spec = entry.spec
+			entry.stop = withOwner(NO_VALUE, function()
+				return mountPortal(spec)
+			end)
+		end
+	end
 end
 
 local function applyChildren(bind: BindData, value: any)
@@ -112,8 +224,25 @@ local function applyChildren(bind: BindData, value: any)
 		value = get(value)
 	end
 
-	if type(value) == "table" and not isInstance(value) then
-		local children = collectChildren(value, {})
+	if isPortal(value) then
+		for _, child in list do
+			if child.Parent == parent then
+				child.Parent = nil
+			end
+		end
+		table.clear(list)
+		local portals: { any } = bind.scratchPortals or {}
+		bind.scratchPortals = nil
+		portals[1] = value
+		syncPortals(data, portals, 1)
+		table.clear(portals)
+		bind.scratchPortals = portals
+	elseif type(value) == "table" and not isInstance(value) then
+		local children: { Instance } = bind.scratchChildren or {}
+		bind.scratchChildren = nil
+		local portals: { any } = bind.scratchPortals or {}
+		bind.scratchPortals = nil
+		collectChildren(value, children, portals)
 		if list[1] ~= nil then
 			if children[2] == nil then
 				local first = children[1]
@@ -123,7 +252,8 @@ local function applyChildren(bind: BindData, value: any)
 					end
 				end
 			else
-				local incoming: { [Instance]: true } = {}
+				local incoming: { [Instance]: true } = bind.scratchIncoming or {}
+				bind.scratchIncoming = nil
 				for _, child in children do
 					incoming[child] = true
 				end
@@ -132,14 +262,23 @@ local function applyChildren(bind: BindData, value: any)
 						child.Parent = nil
 					end
 				end
+				table.clear(incoming)
+				bind.scratchIncoming = incoming
 			end
 			table.clear(list)
 		end
 		for count, child in children do
 			layoutOrder = applyLayoutOrder(child, layoutOrder)
 			list[count] = child
-			child.Parent = parent
+			if child.Parent ~= parent then
+				child.Parent = parent
+			end
 		end
+		syncPortals(data, portals, #portals)
+		table.clear(children)
+		table.clear(portals)
+		bind.scratchChildren = children
+		bind.scratchPortals = portals
 	else
 		for _, child in list do
 			if child.Parent == parent and child ~= value then
@@ -147,11 +286,14 @@ local function applyChildren(bind: BindData, value: any)
 			end
 		end
 		table.clear(list)
+		syncPortals(data, list, 0)
 		if value ~= nil and isInstance(value) then
 			local child = value :: Instance
 			applyLayoutOrder(child, layoutOrder)
 			list[1] = child
-			child.Parent = parent
+			if child.Parent ~= parent then
+				child.Parent = parent
+			end
 		end
 	end
 end
@@ -220,11 +362,15 @@ local function onTagChanged(instance: Instance, tag: string, fn: (hasTag: boolea
 	local ancestry = instance.AncestryChanged:Connect(function()
 		check(instance)
 	end)
-	return function()
+	local destroying: RBXScriptConnection
+	local function disconnect()
 		added:Disconnect()
 		removed:Disconnect()
 		ancestry:Disconnect()
+		destroying:Disconnect()
 	end
+	destroying = instance.Destroying:Connect(disconnect)
+	return disconnect
 end
 
 local function onChanged(
@@ -286,6 +432,22 @@ local function writeBinds(bind: BindData, value: any)
 	end
 end
 
+local bindDestroy: (node: Graph.Node<any>, disconnect: () -> ()) -> () -> ()
+
+local function releaseBindDataIfIdle<T>(node: Graph.Node<T>)
+	local data = bindData[node]
+	if data == nil or data.pin ~= nil or next(data.fn) ~= nil or next(data.rbx) ~= nil or data.children ~= nil then
+		return
+	end
+	bindData[node] = nil
+	local stopDestroy = data.destroyCleanup
+	data.destroyCleanup = nil
+	if stopDestroy ~= nil then
+		stopDestroy()
+	end
+	data.eff:Destroy()
+end
+
 local function cleanupChildrenBind<T>(node: Graph.Node<T>, parent: Instance?)
 	local data = bindData[node]
 	local children = data and data.children
@@ -295,6 +457,7 @@ local function cleanupChildrenBind<T>(node: Graph.Node<T>, parent: Instance?)
 	if children.cleanupConnection then
 		children.cleanupConnection:Disconnect()
 	end
+	stopMountedPortals(children.portals)
 	for _, child in children.list do
 		local current = child and child.Parent
 		if current ~= nil and (parent == nil or current == parent) then
@@ -304,6 +467,7 @@ local function cleanupChildrenBind<T>(node: Graph.Node<T>, parent: Instance?)
 	table.clear(children.list)
 	table.clear(children)
 	data.children = nil
+	releaseBindDataIfIdle(node)
 end
 
 local function startBindEffect(node: Graph.Node<any>, data: any): Graph.Node<any>
@@ -313,9 +477,31 @@ local function startBindEffect(node: Graph.Node<any>, data: any): Graph.Node<any
 	-- what they read nor hand it the instances they create (which it would destroy on its next run). Children
 	-- stay tracked: nested child nodes are read while mounting them.
 	local pending: any = nil
+	local notifyListeners = false
 	local function write()
 		local value = pending
+		local shouldNotify = notifyListeners
 		pending = nil
+		notifyListeners = false
+		if shouldNotify then
+			local fns = data.fn
+			local first = next(fns)
+			if first ~= nil then
+				if next(fns, first) == nil then
+					compatTask.spawn(first, value)
+				else
+					local list = table.create(4)
+					for fn in fns do
+						table.insert(list, fn)
+					end
+					for _, fn in list do
+						if fns[fn] then
+							compatTask.spawn(fn, value)
+						end
+					end
+				end
+			end
+		end
 		writeBinds(data, value)
 	end
 	local function isolated()
@@ -323,10 +509,13 @@ local function startBindEffect(node: Graph.Node<any>, data: any): Graph.Node<any
 	end
 	local eff = withOwner(NO_VALUE, function()
 		return effect(function()
+			local notify = data.flushed
 			data.flushed = true
 			local value = get(node)
-			if next(data.rbx) ~= nil then
+			local hasFn = notify and next(data.fn) ~= nil
+			if hasFn or next(data.rbx) ~= nil then
 				pending = value
+				notifyListeners = hasFn
 				withOwner(NO_VALUE, isolated)
 			end
 			applyChildren(data, value)
@@ -335,48 +524,63 @@ local function startBindEffect(node: Graph.Node<any>, data: any): Graph.Node<any
 	return eff
 end
 
-local function getBindData<T>(node: Graph.Node<T>)
+function bindDestroy(node: Graph.Node<any>, disconnect: () -> ()): () -> ()
+	local rawNode: any = node
+	local done = false
+	local destroyingNode = false
+	local disconnectOnce: () -> ()
+	local function onNodeDestroy()
+		destroyingNode = true
+		disconnectOnce()
+	end
+	function disconnectOnce()
+		if done then
+			return
+		end
+		done = true
+		if not destroyingNode then
+			local inner = rawget(rawNode, 1)
+			local destroys = inner and inner.destroys
+			if destroys then
+				local idx = table.find(destroys, onNodeDestroy)
+				if idx then
+					table.remove(destroys, idx)
+				end
+			end
+		end
+		disconnect()
+	end
+	node:onDestroy(onNodeDestroy)
+	return disconnectOnce
+end
+
+local function ensureBindData<T>(node: Graph.Node<T>)
 	local data: any = bindData[node]
 	if data == nil then
-		data = { rbx = {}, children = nil, eff = nil, flushed = false }
+		data = { fn = {}, rbx = {}, children = nil, eff = nil, flushed = false }
 		bindData[node] = data
 		data.eff = startBindEffect(node, data)
-		node:onDestroy(function()
+		data.destroyCleanup = bindDestroy(node, function()
+			if bindData[node] ~= data then
+				return
+			end
 			data.eff:Destroy()
+			table.clear(data.fn)
 			table.clear(data.rbx)
-			cleanupChildrenBind(node)
+			if data.children ~= nil then
+				cleanupChildrenBind(node)
+			end
 			bindData[node] = nil
 		end)
 	end
 	return data
 end
 
-local function bindDestroy(node: Graph.Node<any>, disconnect: () -> ()): () -> ()
-	local rawNode: any = node
-	local done = false
-	local function disconnectOnce()
-		if done then
-			return
-		end
-		done = true
-		local inner = rawNode[1]
-		local destroys = inner and inner.destroys
-		if destroys then
-			local idx = table.find(destroys, disconnectOnce)
-			if idx then
-				table.remove(destroys, idx)
-			end
-		end
-		disconnect()
-	end
-	node:onDestroy(disconnectOnce)
-	return disconnectOnce
-end
-
 local Bind = {
 	--- @ignore
 	pinOrder = function(instance: Instance)
 		pinnedOrder[instance] = true
+		autoOrder[instance] = nil
 	end,
 	--- @ignore
 	applyLayoutOrder = applyLayoutOrder,
@@ -398,7 +602,7 @@ Updates the instance from `node` and writes changes back to `node` when the inst
 
 [Open Documentation](https://flux.kohl.gg/guide/roblox/creation#flux-model-two-way-binding-in-one-key)
 ]]
-function Bind.model<N>(node: N): Graph.Unwrap<N>
+function Bind.model<T>(node: { read get: (any) -> T, read peek: (any) -> T, read set: (any, ...any) -> any }): T
 	if not isNode(node) then
 		error("Flux.model expects a reactive node", 2)
 	end
@@ -413,7 +617,7 @@ Returns `true` when `value` is a [`Flux.model`](https://flux.kohl.gg/guide/roblo
 ]]
 function Bind.isModel(value: unknown): boolean
 	local rawValue: any = value
-	return type(value) == "table" and rawValue[1] == MODEL_SYMBOL
+	return type(value) == "table" and rawget(rawValue, 1) == MODEL_SYMBOL
 end
 
 --[[
@@ -444,7 +648,7 @@ end
 
 --- @ignore
 function Bind.children<T>(node: Graph.Node<T>, parent: Instance, layoutOrder: number?): () -> ()
-	local data = getBindData(node)
+	local data = ensureBindData(node)
 	bindGeneration += 1
 	local token = bindGeneration
 	local function disconnectBind()
@@ -477,7 +681,8 @@ function Bind.children<T>(node: Graph.Node<T>, parent: Instance, layoutOrder: nu
 	children.parent = parent
 	children.token = token
 
-	if data.flushed then
+	local restart = data.flushed
+	if restart then
 		data.eff:Destroy()
 		data.eff = startBindEffect(node, data)
 	end
@@ -487,7 +692,34 @@ function Bind.children<T>(node: Graph.Node<T>, parent: Instance, layoutOrder: nu
 	else
 		applyChildren(data, raw(node))
 	end
+	if restart and next(data.fn) ~= nil then
+		data.eff:peek()
+	end
 	return disconnectBind
+end
+
+--[[
+Subscribes `fn` to updates of `node` with [`RBXScriptSignal:Connect`](https://create.roblox.com/docs/reference/engine/datatypes/RBXScriptSignal#Connect) semantics and returns an unsubscribe function.
+Fires on each flush after `node` changes, spawning `fn(value)` on its own thread via [`task.spawn`](https://create.roblox.com/docs/reference/engine/libraries/task#spawn) so callbacks may yield freely.
+
+[Open Documentation](https://flux.kohl.gg/guide/concepts/effects#bridging-to-external-systems)
+]]
+function Bind.listen<T>(node: Graph.Node<T>, fn: (value: T) -> ()): () -> ()
+	if not isNode(node) then
+		error(`Flux.listen expects a reactive node, got {compatTypeof(node)}`, 2)
+	elseif type(fn) ~= "function" then
+		error(`Flux.listen expects a function, got {compatTypeof(fn)}`, 2)
+	end
+	local data = ensureBindData(node)
+	if not data.flushed then
+		data.eff:peek()
+	end
+	local fnData = data.fn
+	fnData[fn] = true
+	return function()
+		fnData[fn] = nil
+		releaseBindDataIfIdle(node)
+	end
 end
 
 --- @ignore
@@ -510,17 +742,88 @@ function Bind.from<T>(node: Graph.Node<T>, instance: Instance, property: string,
 			connection:Disconnect()
 		end
 	end
-	return node, bindDestroy(node, disconnect)
+	local destroyConn: RBXScriptConnection? = nil
+	local stop = bindDestroy(node, function()
+		local conn = destroyConn
+		destroyConn = nil
+		if conn ~= nil then
+			conn:Disconnect()
+		end
+		disconnect()
+	end)
+	destroyConn = instance.Destroying:Once(stop)
+	if getOwner() ~= nil then
+		cleanup(stop)
+	end
+	return node, stop
 end
 
 local function follow(instance: Instance, property: string): Graph.Node<any>
 	return (Bind.from(signal(NO_VALUE), instance, property))
 end
 
+local function getSignalConnector(obj: any): ((any, (any) -> ()) -> any)?
+	if isNode(obj) or isInstance(obj) then
+		return nil
+	end
+	if kindOf(obj) == "RBXScriptSignal" then
+		return (obj :: any).Connect
+	end
+	if type(obj) ~= "table" then
+		return nil
+	end
+	local mt = getmetatable(obj :: any)
+	if mt == nil then
+		local connect = rawget(obj :: any, "Connect")
+		if type(connect) == "function" then
+			return connect
+		end
+		local lower = rawget(obj :: any, "connect")
+		return if type(lower) == "function" then lower else nil
+	end
+	local ok, connect = pcall(function()
+		return (obj :: any).Connect
+	end)
+	if ok and type(connect) == "function" then
+		return connect
+	end
+	local okLower, lower = pcall(function()
+		return (obj :: any).connect
+	end)
+	return if okLower and type(lower) == "function" then lower else nil
+end
+
+local function fromSignal(sig: any, initial: any): Graph.Node<any>
+	local connect = getSignalConnector(sig)
+	if connect == nil then
+		error(`Flux.fromSignal expects an RBXScriptSignal or signal with :Connect(), got {compatTypeof(sig)}`, 2)
+	end
+	local node = signal(initial)
+	local conn = connect(sig, function(value: any)
+		node:set(value)
+	end)
+	local stop = bindDestroy(node, function()
+		dispose(conn)
+	end)
+	if getOwner() ~= nil then
+		cleanup(stop)
+	end
+	return node
+end
+
+--[[
+Creates a [node](https://flux.kohl.gg/guide/concepts/signals#bridging-signals) updated from an
+[`RBXScriptSignal`](https://create.roblox.com/docs/reference/engine/datatypes/RBXScriptSignal) or signal table with
+`:Connect()` / `:connect()`, seeding from `initial`. Disconnects automatically when the node or its owning scope is
+destroyed.
+]]
+Bind.fromSignal =
+	fromSignal :: (<S>(signal: S) -> Graph.Node<Type.SignalPayload<S>?>) & (<S, I>(signal: S, initial: I) -> Graph.Node<Type.SignalPayload<S> | I>)
+
 -- The `"Name"` singleton in `property`'s type keeps a literal argument from widening to `string`, so `K` stays the key.
 --[[
 Creates a [node](https://flux.kohl.gg/guide/concepts/signals) mirroring an [`Instance`](https://create.roblox.com/docs/reference/engine/classes/Instance) property, an attribute (`$Name` or `_attr_Name`), or a [`CollectionService`](https://create.roblox.com/docs/reference/engine/classes/CollectionService) tag (`#Tag` or `_tag_Tag`).
-Disconnects automatically when the node or its owning scope is destroyed.
+Disconnects automatically when `instance`, the node, or its owning scope is destroyed.
 
 ```luau
 local text = Flux.property(textBox, "Text")
@@ -539,10 +842,11 @@ function Bind.property<I, K>(instance: I & Instance, property: K | "Name"): Grap
 	return follow(instance, property)
 end
 
--- The core constructor behind `Flux(...)`: a value becomes a signal, a function a computed, and an Instance with a
--- property, `"$Attribute"` / `"_attr_Attribute"`, or `"#Tag"` / `"_tag_Tag"` name a `Bind.property` node.
+-- The core constructor behind `Flux(...)`: a value becomes a signal, a function a computed, an Instance with a
+-- property, `"$Attribute"` / `"_attr_Attribute"`, or `"#Tag"` / `"_tag_Tag"` name a `Bind.property` node, and a signal
+-- object with `:Connect()` / `:connect()` a `Bind.fromSignal` node.
 --- @ignore
-function Bind.node(obj: any, second: string?): Graph.Node<any>
+function Bind.node(obj: any, second: any?): Graph.Node<any>
 	if isInstance(obj) then
 		if type(second) ~= "string" then
 			error(
@@ -551,8 +855,13 @@ function Bind.node(obj: any, second: string?): Graph.Node<any>
 			)
 		end
 		return follow(obj, second)
+	elseif getSignalConnector(obj) ~= nil then
+		return (Bind.fromSignal :: any)(obj, second)
 	elseif second ~= nil then
-		error(`Flux(value) takes a single argument; only an Instance takes a property name`, 3)
+		error(
+			`Flux(value) takes a single argument; only an Instance takes a property name (or a signal an initial value)`,
+			3
+		)
 	end
 	return new(obj)
 end
@@ -564,19 +873,21 @@ Pass `defer = true` to skip the initial run and fire only when `deps` change.
 [Open Documentation](https://flux.kohl.gg/guide/concepts/tracking#flux-on)
 ]]
 function Bind.on<D, R>(
-	deps: any,
-	fn: (input: any, prevInput: any?, prevResult: R?) -> R,
+	deps: D,
+	fn: (input: Type.OnInput<D>, prevInput: Type.OnInput<D>?, prevResult: R?) -> R,
 	defer: boolean?
 ): (prevResult: R?) -> R?
-	local isArray = type(deps) == "table" and not isNode(deps)
-	local count = if isArray then #(deps :: { any }) else 0
+	local rawDeps: any = deps
+	local rawFn: (any, any, any) -> any = fn
+	local isArray = type(rawDeps) == "table" and not isNode(rawDeps)
+	local count = if isArray then #(rawDeps :: { any }) else 0
 	local prevInput: any = nil
 	local curInput: any = nil
 	local curPrevResult: any = nil
 	local function runOnFn(): R
 		local input, prevRes = curInput, curPrevResult
 		curInput, curPrevResult = nil, nil
-		return fn(input, prevInput, prevRes)
+		return rawFn(input, prevInput, prevRes)
 	end
 
 	return function(prevResult: R?): R?
@@ -584,10 +895,10 @@ function Bind.on<D, R>(
 		if isArray then
 			input = table.create(count)
 			for i = 1, count do
-				input[i] = read(deps[i])
+				input[i] = read(rawDeps[i])
 			end
 		else
-			input = read(deps)
+			input = read(rawDeps)
 		end
 
 		if defer then
@@ -605,25 +916,37 @@ end
 
 --- @ignore
 function Bind.to<T>(node: Graph.Node<T>, instance: Instance, property: string, isAttribute: boolean?)
-	local data = getBindData(node)
+	local data = ensureBindData(node)
+	data.pin = (data.pin or 0) + 1
 	local attribute = isAttribute == true
 	local index = if attribute then 1 else 2
-	release(instance, property, attribute)
+	local ok, err: any = pcall(function()
+		release(instance, property, attribute)
 
-	local value = raw(node)
-	local function applyInitial()
-		if attribute then
-			setAttribute(instance, property, value)
-		else
-			setProperty(instance, property, value)
+		local value = raw(node)
+		local function applyInitial()
+			if attribute then
+				setAttribute(instance, property, value)
+			else
+				setProperty(instance, property, value)
+			end
 		end
+		if isReactive() or Graph.getOwner() ~= nil then
+			withOwner(NO_VALUE, function()
+				untrack(applyInitial)
+			end)
+		else
+			applyInitial()
+		end
+	end)
+	local pin = (data.pin or 1) - 1
+	data.pin = if pin > 0 then pin else nil
+	if not ok then
+		releaseBindDataIfIdle(node)
+		error(err, 0)
 	end
-	if isReactive() or Graph.getOwner() ~= nil then
-		withOwner(NO_VALUE, function()
-			untrack(applyInitial)
-		end)
-	else
-		applyInitial()
+	if bindData[node] ~= data then
+		return NOOP
 	end
 
 	local binds = data.rbx[instance]
@@ -649,6 +972,7 @@ function Bind.to<T>(node: Graph.Node<T>, instance: Instance, property: string, i
 		if (binds[1] == nil or next(binds[1]) == nil) and (binds[2] == nil or next(binds[2]) == nil) then
 			data.rbx[instance] = nil
 		end
+		releaseBindDataIfIdle(node)
 	end
 
 	local key = claimKey(property, attribute)
@@ -685,5 +1009,133 @@ function Bind.attach(instance: Instance, property: string, isAttribute: boolean?
 		table.insert(claim, releaser)
 	end
 end
+
+--- @ignore
+function Bind.isPortal(value: unknown): boolean
+	return isPortal(value)
+end
+
+--[[
+Creates a portal mounting `children` into `target` (static [`Instance`](https://create.roblox.com/docs/reference/engine/classes/Instance)
+or reactive target node) without transferring ownership of `target`.
+Mounted children are unparented when the owning scope tears down, the target changes, or the portal host is destroyed.
+
+[Open Documentation](https://flux.kohl.gg/guide/roblox/creation#portals-flux-portal)
+]]
+function Bind.portal(target: Graph.Reactive<Instance?>, children: any): Portal
+	if target ~= nil and not isInstance(target) and not Graph.isDynamic(target) then
+		error(`Flux.portal expects an Instance, reactive target, or nil, got {compatTypeof(target)}`, 2)
+	end
+	local wrapped: any = table.freeze({ PORTAL_SYMBOL, target, children })
+	return wrapped
+end
+
+--- @ignore
+function mountPortal(portal: any): () -> ()
+	local targetSpec = portal[2]
+	local content = portal[3]
+	local mountedInstances: { Instance } = {}
+	local subCleanups: { () -> () } = {}
+	local targetConn: RBXScriptConnection? = nil
+	local currentTarget: Instance? = nil
+	local eff: any = nil
+	local stopped = false
+
+	local function clearMounted()
+		if targetConn ~= nil then
+			targetConn:Disconnect()
+			targetConn = nil
+		end
+		stopPortals(subCleanups)
+		local target = currentTarget
+		currentTarget = nil
+		if target ~= nil then
+			for _, inst in mountedInstances do
+				if inst.Parent == target then
+					inst.Parent = nil
+				end
+			end
+		end
+		table.clear(mountedInstances)
+	end
+
+	local function mountItem(target: Instance, item: any, order: number): number
+		if isInstance(item) then
+			order = applyLayoutOrder(item, order)
+			table.insert(mountedInstances, item)
+			item.Parent = target
+			return order
+		elseif isNode(item) then
+			table.insert(subCleanups, Bind.children(item, target, order))
+			return order + 1
+		elseif isPortal(item) then
+			table.insert(subCleanups, mountPortal(item))
+			return order
+		elseif type(item) == "table" then
+			for _, sub in item do
+				order = mountItem(target, sub, order)
+			end
+		end
+		return order
+	end
+
+	local function mountTo(target: any)
+		clearMounted()
+		if stopped or target == nil then
+			return
+		end
+		if not isInstance(target) then
+			error(`Flux.portal target must resolve to an Instance or nil, got {compatTypeof(target)}`, 2)
+		end
+		currentTarget = target
+		targetConn = target.Destroying:Once(clearMounted)
+		local ok, err: any = pcall(mountItem, target, content, 1)
+		if not ok then
+			clearMounted()
+			error(err, 0)
+		end
+	end
+
+	local function stop()
+		if stopped then
+			return
+		end
+		stopped = true
+		if eff ~= nil then
+			eff:Destroy()
+			eff = nil
+		end
+		clearMounted()
+	end
+
+	if Graph.isDynamic(targetSpec) then
+		local pendingTarget: any = nil
+		local function applyTarget()
+			local nextTarget = pendingTarget
+			pendingTarget = nil
+			mountTo(nextTarget)
+		end
+		local function mountUntracked()
+			untrack(applyTarget)
+		end
+		eff = withOwner(NO_VALUE, function()
+			return effect(function()
+				pendingTarget = read(targetSpec)
+				withOwner(NO_VALUE, mountUntracked)
+			end)
+		end)
+	else
+		mountTo(targetSpec)
+	end
+
+	if getOwner() ~= nil then
+		cleanup(stop)
+	end
+
+	return stop
+end
+
+--- @ignore
+Bind.mountPortal = mountPortal
 
 return table.freeze(Bind)

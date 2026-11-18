@@ -1,41 +1,12 @@
 --!strict
--- Type-level machinery for property tables: the `Properties`, `EditProperties` and `PropertyType` type functions,
--- `Merge`, and the child types.
+-- Type-level machinery for property tables and component props: `Properties`, `EditProperties`, `PropertyType`,
+-- `Merge`, `Partial`, `Pick`, `Omit`, `NonNil`, and the child types.
 
+local Graph = require("./Graph")
 local Instances = require("@self/Instances")
 
 type Consumer = (...any) -> ()
-
-type Hooks = {
-	read onObserved: (self: any, fn: () -> ()) -> (),
-	read onUnobserved: (self: any, fn: () -> ()) -> (),
-}
-
-type Operators<T> = {
-	read __call: (self: any, value: any, force: boolean?) -> T,
-	read __concat: (a: any, b: any) -> string,
-	read __tostring: (self: any) -> string,
-	read __unm: (self: any) -> number,
-	read __add: (a: any, b: any) -> number,
-	read __sub: (a: any, b: any) -> number,
-	read __mul: (a: any, b: any) -> number,
-	read __div: (a: any, b: any) -> number,
-	read __idiv: (a: any, b: any) -> number,
-	read __mod: (a: any, b: any) -> number,
-	read __pow: (a: any, b: any) -> number,
-	read __lt: (a: any, b: any) -> boolean,
-	read __le: (a: any, b: any) -> boolean,
-	read __index: Hooks,
-}
-
-type GraphNode = setmetatable<{
-	read peek: (self: any) -> any,
-	read get: (self: any) -> any,
-	read set: (self: any, value: any, force: boolean?) -> any,
-	read update: <N>(self: N) -> N,
-	read Destroy: (self: any) -> (),
-	read onDestroy: (self: any, fn: (oldValue: any) -> ()) -> (),
-}, Operators<any>>
+type GraphNode = Graph.Node<any>
 
 --- @within Flux
 --- @private
@@ -47,16 +18,20 @@ type _EVENT = "__EVENT"
 type _REF = "__REF"
 type _TAG = "__TAG"
 
--- Anything a property table accepts at a numeric index: a child Instance, a node yielding children, an init action
--- run with the instance, or a nested property table flattened into its parent.
-export type Child = Instance | GraphNode | ((instance: Instance) -> ()) | { [any]: any }
+-- A handle returned by `Flux.portal(target, children)` that mounts UI into `target` on parent cleanup or portal removal.
+export type Portal = { read __fluxPortal: true }
+-- A component schema marker returned by `Flux.prop(default)` that makes `default` optional in `Flux.Props` and non-nil in `Flux.split`.
+export type DefaultProp<T> = { read __fluxDefault: T }
+
+-- Anything a property table accepts at a numeric index: a child Instance, a node yielding children, a portal, an init
+-- action run with the instance, or a nested property table flattened into its parent.
+export type Child = Instance | GraphNode | Portal | ((instance: Instance) -> ()) | { [any]: any }
 export type Children = { Child }
 
 --- @within Flux
 --- @private
 export type function Properties(instance: type?)
-	local indexType = types.unionof(types.number, types.string)
-	local result = types.newtable(nil, { index = indexType, readresult = types.any, writeresult = types.any })
+	local result = types.newtable(nil, { index = types.number, readresult = types.any, writeresult = types.any })
 	-- `__EVENT`: a change listener per property, called with the new value. Signals connect at the top level.
 	local events = types.newtable(nil, { index = types.number, readresult = types.never, writeresult = types.never })
 	local connectKey = types.singleton("Connect")
@@ -139,6 +114,30 @@ end
 --- @private
 export type function Merge(base: type, extra: type)
 	local result = types.newtable()
+	local defaultKey = types.singleton("__fluxDefault")
+	local function unwrapDefault(t: type): type?
+		if t:is("table") then
+			return t:readproperty(defaultKey)
+		elseif t:is("union") then
+			local parts = {}
+			local found = false
+			for _, part in t:components() do
+				if not part:is("nil") then
+					local inner = if part:is("table") then part:readproperty(defaultKey) else nil
+					if inner then
+						found = true
+						table.insert(parts, inner)
+					else
+						table.insert(parts, part)
+					end
+				end
+			end
+			if found and #parts > 0 then
+				return if #parts == 1 then parts[1] else types.unionof(table.unpack(parts))
+			end
+		end
+		return nil
+	end
 	local function add(source: type)
 		if source:is("intersection") then
 			for _, part in source:components() do
@@ -151,7 +150,8 @@ export type function Merge(base: type, extra: type)
 		for key, prop in source:properties() do
 			local value = prop.read or prop.write
 			if value then
-				result:setproperty(key, value)
+				local def = unwrapDefault(value)
+				result:setproperty(key, if def then types.optional(def) else value)
 			end
 		end
 		local indexer = source:indexer()
@@ -224,5 +224,719 @@ export type Editable = Instances.Editable
 --- @within Flux
 --- @private
 export type Resolve<Name> = index<Creatable & { [string]: Instance }, Name>
+
+--- @within Flux
+--- @private
+export type function NonNil(t: type): type
+	if t:is("nil") then
+		return types.never
+	elseif not t:is("union") then
+		return t
+	end
+	local parts = {}
+	for _, part in t:components() do
+		if not part:is("nil") then
+			table.insert(parts, part)
+		end
+	end
+	return if #parts == 0 then types.never elseif #parts == 1 then parts[1] else types.unionof(table.unpack(parts))
+end
+
+--- @within Flux
+--- @private
+export type function Truthy(t: type): type
+	if t:is("nil") or (t:is("singleton") and t:value() == false) then
+		return types.never
+	elseif not t:is("union") then
+		return t
+	end
+	local parts = {}
+	for _, part in t:components() do
+		if not part:is("nil") and not (part:is("singleton") and part:value() == false) then
+			table.insert(parts, part)
+		end
+	end
+	return if #parts == 0 then types.never elseif #parts == 1 then parts[1] else types.unionof(table.unpack(parts))
+end
+
+-- Merges component schema tables into a single read-only schema table, preserving literal unions.
+--- @within Flux
+--- @private
+export type function MergeOwn(a: type, b: type, c: type, d: type): type
+	local result = types.newtable()
+	local function add(source: type)
+		if source:is("nil") then
+			return
+		elseif source:is("union") then
+			for _, part in source:components() do
+				if not part:is("nil") then
+					add(part)
+				end
+			end
+			return
+		elseif source:is("intersection") then
+			for _, part in source:components() do
+				add(part)
+			end
+			return
+		elseif not source:is("table") then
+			return
+		end
+		for key, prop in source:properties() do
+			local value = prop.read or prop.write
+			if value then
+				result:setreadproperty(key, value)
+			end
+		end
+		local indexer = source:indexer()
+		if indexer then
+			result:setindexer(indexer.index, indexer.readresult)
+		end
+	end
+	add(a)
+	add(b)
+	add(c)
+	add(d)
+	return result
+end
+
+-- `T` with every property optional.
+--- @within Flux
+--- @private
+export type function Partial(t: type): type
+	if t:is("nil") then
+		return t
+	elseif t:is("union") then
+		local parts = {}
+		for _, part in t:components() do
+			if not part:is("nil") then
+				table.insert(parts, Partial(part))
+			end
+		end
+		return if #parts == 0
+			then types.newtable()
+			elseif #parts == 1 then parts[1]
+			else types.unionof(table.unpack(parts))
+	elseif t:is("intersection") then
+		local merged = types.newtable()
+		local hasTable = false
+		local function collect(source: type)
+			if source:is("intersection") then
+				for _, part in source:components() do
+					collect(part)
+				end
+				return
+			elseif not source:is("table") then
+				return
+			end
+			hasTable = true
+			for key, prop in source:properties() do
+				local valueType = prop.read or prop.write
+				if valueType then
+					merged:setproperty(key, types.optional(valueType))
+				end
+			end
+			local indexer = source:indexer()
+			if indexer then
+				merged:setindexer(indexer.index, indexer.readresult)
+			end
+		end
+		collect(t)
+		return if hasTable then merged else t
+	elseif not t:is("table") then
+		return t
+	end
+	local result = types.newtable()
+	for key, prop in t:properties() do
+		local valueType = prop.read or prop.write
+		if valueType then
+			result:setproperty(key, types.optional(valueType))
+		end
+	end
+	local indexer = t:indexer()
+	if indexer then
+		result:setindexer(indexer.index, indexer.readresult)
+	end
+	return result
+end
+
+--- @ignore
+type function groupKeys(group: type): type
+	local keys = types.newtable()
+	if group:is("nil") then
+		return keys
+	elseif group:is("union") or group:is("intersection") then
+		for _, part in group:components() do
+			local partKeys = groupKeys(part)
+			if partKeys:is("string") then
+				return partKeys
+			end
+			for key, prop in partKeys:properties() do
+				keys:setproperty(key, prop.read or prop.write or key)
+			end
+		end
+		return keys
+	elseif not group:is("table") then
+		return types.string
+	end
+	local indexer = group:indexer()
+	if indexer then
+		local result = indexer.readresult
+		for _, part in if result:is("union") then result:components() else { result } do
+			local name = if part:is("singleton") then part:value() else nil
+			if name ~= nil and name ~= true and name ~= false then
+				keys:setproperty(part, part)
+			elseif name ~= true then
+				return types.string
+			end
+		end
+	end
+	for key, prop in group:properties() do
+		keys:setproperty(key, prop.read or prop.write or key)
+	end
+	return keys
+end
+
+--- @ignore
+type function pickWhere(t: type, group: type, prior: type, inGroup: type): type
+	local wantAll = inGroup:is("singleton") and inGroup:value() == false
+	local function isSchema(src: type): boolean
+		if src:is("intersection") then
+			for _, part in src:components() do
+				if not isSchema(part) then
+					return false
+				end
+			end
+			return true
+		elseif src:is("union") then
+			for _, part in src:components() do
+				if not part:is("nil") and not isSchema(part) then
+					return false
+				end
+			end
+			return true
+		end
+		return src:is("table") and src:indexer() == nil
+	end
+	local schemaGroup = isSchema(group)
+	local defaultKey = types.singleton("__fluxDefault")
+
+	local function unwrapDefault(src: type): type?
+		if src:is("table") then
+			return src:readproperty(defaultKey)
+		elseif src:is("union") then
+			local parts = {}
+			local found = false
+			for _, part in src:components() do
+				if not part:is("nil") then
+					local inner = if part:is("table") then part:readproperty(defaultKey) else nil
+					if inner then
+						found = true
+						table.insert(parts, inner)
+					else
+						table.insert(parts, part)
+					end
+				end
+			end
+			if found and #parts > 0 then
+				return if #parts == 1 then parts[1] else types.unionof(table.unpack(parts))
+			end
+		end
+		return nil
+	end
+
+	local function stripNil(src: type): type
+		if src:is("nil") then
+			return types.never
+		elseif not src:is("union") then
+			return src
+		end
+		local parts = {}
+		for _, part in src:components() do
+			if not part:is("nil") then
+				table.insert(parts, part)
+			end
+		end
+		return if #parts == 0 then types.never elseif #parts == 1 then parts[1] else types.unionof(table.unpack(parts))
+	end
+
+	local function resolveSchemaGroup(src: type, makeOptional: boolean): type
+		local keys = groupKeys(src)
+		if keys:is("string") then
+			return src
+		end
+		local out = types.newtable()
+		for key, prop in keys:properties() do
+			local propType = prop.read or prop.write
+			if propType then
+				local def = unwrapDefault(propType)
+				if def then
+					out:setproperty(key, def)
+				else
+					out:setproperty(key, if makeOptional then types.optional(propType) else propType)
+				end
+			end
+		end
+		return out
+	end
+
+	local function flatten(source: type): (type?, boolean)
+		if source:is("nil") then
+			return nil, true
+		elseif source:is("union") then
+			local nonNil = {}
+			local hasNil = false
+			for _, part in source:components() do
+				if part:is("nil") then
+					hasNil = true
+				else
+					table.insert(nonNil, part)
+				end
+			end
+			if #nonNil == 1 then
+				local inner, innerNil = flatten(nonNil[1])
+				return inner, hasNil or innerNil
+			end
+			return nil, hasNil
+		elseif source:is("intersection") then
+			local merged = types.newtable()
+			local hasTable = false
+			local function collect(partSource: type)
+				if partSource:is("intersection") then
+					for _, part in partSource:components() do
+						collect(part)
+					end
+					return
+				elseif partSource:is("union") then
+					local inner = flatten(partSource)
+					if inner then
+						collect(inner)
+					end
+					return
+				elseif not partSource:is("table") then
+					return
+				end
+				hasTable = true
+				for key, prop in partSource:properties() do
+					local valueType = prop.read or prop.write
+					if valueType then
+						merged:setproperty(key, valueType)
+					end
+				end
+				local indexer = partSource:indexer()
+				if indexer then
+					merged:setindexer(indexer.index, indexer.readresult)
+				end
+			end
+			collect(source)
+			return if hasTable then merged else nil, false
+		elseif source:is("table") then
+			return source, false
+		end
+		return nil, false
+	end
+
+	local flat, wasOptional = flatten(t)
+	if flat == nil then
+		if t:is("union") and not t:is("nil") then
+			local parts = {}
+			for _, part in t:components() do
+				if not part:is("nil") then
+					local sub = pickWhere(part, group, prior, inGroup)
+					local entry = if wasOptional then Partial(sub) else sub
+					if wasOptional and not wantAll and schemaGroup and entry:is("table") then
+						local schemaKeys = groupKeys(group)
+						if not schemaKeys:is("string") then
+							for sKey, sProp in schemaKeys:properties() do
+								local sType = sProp.read or sProp.write
+								local def = if sType then unwrapDefault(sType) else nil
+								if def then
+									local curProp = entry:readproperty(sKey)
+									local nonNil = if curProp then stripNil(curProp) else types.never
+									entry:setproperty(sKey, if nonNil:is("never") then def else nonNil)
+								end
+							end
+						end
+					end
+					table.insert(parts, entry)
+				end
+			end
+			if #parts > 0 then
+				return if #parts == 1 then parts[1] else types.unionof(table.unpack(parts))
+			end
+		end
+		if not t:is("any") and not wantAll and schemaGroup then
+			return resolveSchemaGroup(group, wasOptional)
+		end
+		return t
+	end
+	if not wantAll and group:is("nil") then
+		return Partial(flat)
+	end
+	local wanted, excluded = groupKeys(group), groupKeys(prior)
+	if wanted:is("string") or excluded:is("string") then
+		return Partial(flat)
+	end
+	local function has(names: type, key: type): boolean
+		return names:readproperty(key) ~= nil
+	end
+	local result = types.newtable()
+	for key, prop in flat:properties() do
+		local valueType = prop.read or prop.write
+		local inWanted = has(wanted, key)
+		local outType = if wasOptional and valueType then types.optional(valueType) else valueType
+		if not wantAll and schemaGroup and inWanted and valueType then
+			local schemaProp = wanted:readproperty(key)
+			local def = if schemaProp then unwrapDefault(schemaProp) else nil
+			if def then
+				local nonNil = stripNil(valueType)
+				outType = if nonNil:is("never") then def else nonNil
+			end
+		end
+		if outType and not has(excluded, key) and inWanted ~= wantAll then
+			result:setproperty(key, outType)
+		end
+	end
+	if not wantAll and schemaGroup then
+		for key, prop in wanted:properties() do
+			if result:readproperty(key) == nil and not has(excluded, key) then
+				local fallbackType = prop.read or prop.write
+				if fallbackType then
+					local def = unwrapDefault(fallbackType)
+					result:setproperty(key, if def then def else types.optional(fallbackType))
+				end
+			end
+		end
+	end
+	local indexer = flat:indexer()
+	if indexer and wantAll then
+		result:setindexer(indexer.index, indexer.readresult)
+	end
+	return result
+end
+
+-- Merges 1-4 table types left-to-right into one read-only type, narrowing optional overrides over earlier non-nil values.
+--- @within Flux
+--- @private
+export type function MergeTables(a: type, b: type, c: type, d: type): type
+	local result = types.newtable()
+
+	local function canBeNil(src: type): boolean
+		if src:is("nil") then
+			return true
+		elseif src:is("union") then
+			for _, part in src:components() do
+				if part:is("nil") then
+					return true
+				end
+			end
+		end
+		return false
+	end
+
+	local function stripNil(src: type): type
+		if src:is("nil") then
+			return types.never
+		elseif not src:is("union") then
+			return src
+		end
+		local parts = {}
+		for _, part in src:components() do
+			if not part:is("nil") then
+				table.insert(parts, part)
+			end
+		end
+		return if #parts == 0 then types.never elseif #parts == 1 then parts[1] else types.unionof(table.unpack(parts))
+	end
+
+	local function combine(aType: type, bType: type): type
+		local parts: { type } = {}
+		local function add(t: type)
+			if t:is("never") then
+				return
+			elseif t:is("union") then
+				for _, part in t:components() do
+					add(part)
+				end
+			elseif not table.find(parts, t) then
+				table.insert(parts, t)
+			end
+		end
+		add(aType)
+		add(bType)
+		return if #parts == 0 then types.never elseif #parts == 1 then parts[1] else types.unionof(table.unpack(parts))
+	end
+
+	local function mergeProp(prev: type?, nextVal: type, srcOptional: boolean): type
+		if prev == nil then
+			return if srcOptional then types.optional(nextVal) else nextVal
+		elseif not srcOptional and not canBeNil(nextVal) then
+			return nextVal
+		end
+		return combine(prev, stripNil(nextVal))
+	end
+
+	local function mergeInto(target: type, source: type, srcOptional: boolean)
+		if source:is("nil") then
+			return
+		elseif source:is("union") then
+			local nonNil = {}
+			local hasNil = false
+			for _, part in source:components() do
+				if part:is("nil") then
+					hasNil = true
+				else
+					table.insert(nonNil, part)
+				end
+			end
+			local branchOptional = srcOptional or hasNil
+			if #nonNil == 0 then
+				return
+			elseif #nonNil == 1 then
+				mergeInto(target, nonNil[1], branchOptional)
+				return
+			end
+			local branchTables: { type } = {}
+			local keyByName: { [any]: type } = {}
+			for _, part in nonNil do
+				local branch = types.newtable()
+				mergeInto(branch, part, false)
+				table.insert(branchTables, branch)
+				for key in branch:properties() do
+					local name = key:value()
+					if name ~= nil and keyByName[name] == nil then
+						keyByName[name] = key
+					end
+				end
+			end
+			for _, key in keyByName do
+				local combined: type? = nil
+				local allPresentAndNonNil = true
+				for _, branch in branchTables do
+					local val = branch:readproperty(key)
+					if val == nil then
+						allPresentAndNonNil = false
+					else
+						if canBeNil(val) then
+							allPresentAndNonNil = false
+						end
+						local stripped = stripNil(val)
+						combined = if combined == nil then stripped else combine(combined, stripped)
+					end
+				end
+				if combined ~= nil then
+					local propOptional = branchOptional or not allPresentAndNonNil
+					target:setreadproperty(key, mergeProp(target:readproperty(key), combined, propOptional))
+				end
+			end
+			local idxKey: type? = nil
+			local idxVal: type? = nil
+			local allHaveIndexer = true
+			for _, branch in branchTables do
+				local idx = branch:indexer()
+				if idx == nil then
+					allHaveIndexer = false
+				else
+					idxKey = if idxKey == nil then idx.index else combine(idxKey, idx.index)
+					idxVal = if idxVal == nil then idx.readresult else combine(idxVal, idx.readresult)
+				end
+			end
+			if idxKey ~= nil and idxVal ~= nil then
+				local finalVal = if branchOptional or not allHaveIndexer then types.optional(idxVal) else idxVal
+				target:setindexer(idxKey, finalVal)
+			end
+			return
+		elseif source:is("intersection") then
+			for _, part in source:components() do
+				mergeInto(target, part, srcOptional)
+			end
+			return
+		elseif not source:is("table") then
+			return
+		end
+		for key, prop in source:properties() do
+			local val = prop.read or prop.write
+			if val then
+				target:setreadproperty(key, mergeProp(target:readproperty(key), val, srcOptional))
+			end
+		end
+		local indexer = source:indexer()
+		if indexer then
+			target:setindexer(indexer.index, indexer.readresult)
+		end
+	end
+
+	mergeInto(result, a, false)
+	mergeInto(result, b, false)
+	mergeInto(result, c, false)
+	mergeInto(result, d, false)
+	return result
+end
+
+--- @within Flux
+--- @private
+export type Pick<T, G> = pickWhere<T, G, nil, true>
+
+--- @within Flux
+--- @private
+export type Omit<T, G> = pickWhere<T, nil, G, false>
+
+-- Extracts the first payload type accepted by a signal's `Connect` / `connect` listener, defaulting to `any`.
+--- @within Flux
+--- @private
+export type function SignalPayload(sig: type): type
+	local connectKey = types.singleton("Connect")
+	local lowerConnectKey = types.singleton("connect")
+
+	local function fromObject(t: type): type?
+		local current: type? = t
+		while current and (current:is("extern") or current:is("table")) do
+			local connector = current:readproperty(connectKey) or current:readproperty(lowerConnectKey)
+			if connector and connector:is("function") then
+				local params = connector:parameters().head
+				local listener = if params
+						and params[2]
+						and params[2]:is("function")
+					then params[2]
+					elseif params and params[1] and params[1]:is("function") then params[1]
+					else nil
+				if listener then
+					local cb = listener:parameters()
+					if cb.head and cb.head[1] ~= nil then
+						return cb.head[1]
+					elseif cb.tail == nil then
+						return types.singleton(nil)
+					end
+					return types.any
+				end
+			end
+			current = if current:is("extern") then current:readparent() else nil
+		end
+		return nil
+	end
+
+	local function resolve(t: type): type?
+		if t:is("any") or t:is("unknown") then
+			return types.any
+		elseif t:is("nil") then
+			return nil
+		elseif t:is("union") then
+			local parts: { type } = {}
+			for _, part in t:components() do
+				local found = resolve(part)
+				if found ~= nil and not table.find(parts, found) then
+					table.insert(parts, found)
+				end
+			end
+			if #parts == 0 then
+				return nil
+			end
+			return if #parts == 1 then parts[1] else types.unionof(table.unpack(parts))
+		elseif t:is("intersection") then
+			for _, part in t:components() do
+				local found = resolve(part)
+				if found ~= nil then
+					return found
+				end
+			end
+			return nil
+		end
+		return fromObject(t)
+	end
+
+	return resolve(sig) or types.any
+end
+
+-- Unwraps the dependency shape passed to `Flux.on`: a node, getter, plain value, or array of them.
+--- @within Flux
+--- @private
+export type function OnInput(deps: type): type
+	local function returned(fn: type): type
+		local head = fn:returns().head
+		return if head and head[1] then head[1] else types.singleton(nil)
+	end
+
+	local function nodeValue(t: type): type?
+		if not t:is("table") then
+			return nil
+		end
+		local get = t:readproperty(types.singleton("get"))
+		if get and get:is("function") and t:readproperty(types.singleton("peek")) then
+			return returned(get)
+		end
+		return nil
+	end
+
+	local function unwrapValue(t: type): type
+		if t:is("any") or t:is("unknown") then
+			return types.any
+		elseif t:is("union") then
+			local parts: { type } = {}
+			local function add(part: type)
+				if part:is("union") then
+					for _, member in part:components() do
+						add(member)
+					end
+				elseif not table.find(parts, part) then
+					table.insert(parts, part)
+				end
+			end
+			for _, part in t:components() do
+				add(unwrapValue(part))
+			end
+			return if #parts == 1 then parts[1] else types.unionof(table.unpack(parts))
+		elseif t:is("intersection") then
+			for _, part in t:components() do
+				local found = nodeValue(part)
+				if found then
+					return found
+				end
+			end
+			return t
+		elseif t:is("function") then
+			return returned(t)
+		end
+		return nodeValue(t) or t
+	end
+
+	local function resolve(t: type): type
+		if t:is("any") or t:is("unknown") then
+			return types.any
+		elseif t:is("union") then
+			local parts: { type } = {}
+			for _, part in t:components() do
+				local resolved = resolve(part)
+				if not table.find(parts, resolved) then
+					table.insert(parts, resolved)
+				end
+			end
+			return if #parts == 1 then parts[1] else types.unionof(table.unpack(parts))
+		elseif t:is("intersection") then
+			for _, part in t:components() do
+				local found = nodeValue(part)
+				if found then
+					return found
+				end
+			end
+			return t
+		elseif t:is("function") then
+			return returned(t)
+		elseif t:is("table") then
+			local found = nodeValue(t)
+			if found then
+				return found
+			end
+			local indexer = t:indexer()
+			if indexer and indexer.readresult then
+				local elem = unwrapValue(indexer.readresult)
+				return types.newtable(nil, { index = types.number, readresult = elem, writeresult = elem })
+			end
+			return t
+		end
+		return t
+	end
+
+	return resolve(deps)
+end
 
 return nil

@@ -44,7 +44,7 @@ end
 Validates a client write on the server (`fn(player, value)`).
 Return `true` to accept (`true, replacement` to store `replacement`), or `false`/`nil` to reject without yielding.
 ]]
-export type Validator<T> = (player: Player, value: T) -> (boolean?, ...T)
+export type Validator<T> = (player: Player, value: T) -> (boolean?, ...T?)
 
 --[[
 A signal synchronized between the server and clients.
@@ -69,19 +69,19 @@ export type SyncSignal<T = any> = Graph.State<T> & {
 	unreliable: (self: any, enabled: boolean?) -> SyncSignal<T>,
 }
 
--- A table & function intersection rather than a `__call` metatable type: the solver only instantiates `T` through a
--- plain function type.
-export type Namespace = {
+export type SyncNamespace = setmetatable<{
 	--[[
 	Sends all pending synced changes immediately instead of waiting for the end of the frame.
 	]]
-	flush: () -> (),
+	read flush: () -> (),
 	--[[
 	Read-only node that is `true` on the server and turns `true` on the client once the initial sync arrives.
 	]]
-	ready: Graph.Node<boolean>,
-	[string]: SyncSignal<any>,
-} & (<T>(key: string, initial: T, validate: Validator<T>?) -> SyncSignal<T>)
+	read ready: Graph.Node<boolean>,
+	read [string]: SyncSignal<any>,
+}, {
+	read __call: <T>(self: unknown, key: string, initial: T, validate: Validator<T>?) -> SyncSignal<T>,
+}>
 
 -- Each synced signal stores its graph node at `[1]` alongside Sync's `_` bookkeeping fields.
 type Synced = {
@@ -225,8 +225,21 @@ local function call(self: any, value: any?, force: boolean?): any
 	return self:set(value, force)
 end
 
--- Forces a write of the current value so in-place table mutations replicate.
-local function update(self: any): any
+-- Forces a write of the current value so in-place table mutations replicate, or updates from the current value untracked when `fn` is given.
+local function update(self: any, fn: ((current: any) -> any)?): any
+	if fn ~= nil then
+		if type(fn) ~= "function" then
+			error(`Flux.Sync:update expected a function or nil, got {typeof(fn)}`, 2)
+		end
+		local current = self:peek()
+		local nextValue = if Graph.isReactive()
+			then Graph.untrack(function()
+				return fn(current)
+			end)
+			else fn(current)
+		self:set(nextValue)
+		return self
+	end
 	self:set(nodeValue(self), true)
 	return self
 end
@@ -244,9 +257,13 @@ PlayerMT.update = update
 function SyncMT.set(self: Synced, value: any, force: boolean?): any
 	local old = nodeValue(self)
 	rawSet(self, value, force)
+	local sync = self._sync
+	if sync.isServer and sync.validating == self then
+		sync.wrote = true
+	end
 	if old ~= value or force then
 		self._touched = true
-		written(self._sync, self, nil)
+		written(sync, self, nil)
 	end
 	return value
 end
@@ -255,8 +272,14 @@ function PlayerMT.set(self: PlayerSignal, value: any, force: boolean?): any
 	local old = nodeValue(self)
 	rawSet(self, value, force)
 	local owner = self._owner
-	if owner and (old ~= value or force) then
-		written(owner._sync, owner, self._player)
+	if owner then
+		local sync = owner._sync
+		if sync.isServer and sync.validating == owner then
+			sync.wrote = true
+		end
+		if old ~= value or force then
+			written(sync, owner, self._player)
+		end
 	end
 	return value
 end
@@ -288,8 +311,12 @@ function SyncMT.of(self: Synced, player: any): any
 end
 
 function SyncMT.clear(self: Synced, player: any)
+	local sync = self._sync
+	if sync.isServer and sync.validating == self then
+		sync.wrote = true
+	end
 	if drop(self, player) then
-		written(self._sync, self, player)
+		written(sync, self, player)
 	end
 end
 
@@ -376,6 +403,10 @@ local function link(sync: Sync, links: any, handshake: boolean)
 	end
 end
 
+local function unpackResume(ok: boolean, ...: any): (boolean, number, any, any)
+	return ok, select("#", ...), ...
+end
+
 -- Runs `entry`'s validator on a coroutine so a yield is caught (and rejected) instead of leaking `validating` into
 -- other remote threads. Returns whether to store a value and which one.
 local function runValidator(
@@ -387,7 +418,7 @@ local function runValidator(
 ): (boolean, any)
 	local thread = coroutine.create(validator)
 	sync.validating, sync.wrote = entry, false
-	local ok, accepted, replacement = coroutine.resume(thread, player, value)
+	local ok, count, accepted, replacement = unpackResume(coroutine.resume(thread, player, value))
 	sync.validating = nil
 	if coroutine.status(thread) ~= "dead" then
 		coroutine.close(thread)
@@ -405,7 +436,7 @@ local function runValidator(
 	if not accepted or sync.wrote then
 		return false, nil
 	end
-	return true, if replacement ~= nil then replacement else value
+	return true, if count >= 2 then replacement else value
 end
 
 local function applyServer(sync: Sync, entry: Synced, player: any, value: any)
@@ -494,9 +525,16 @@ local function receive(sync: Sync, ...: any)
 	end
 end
 
+local ensureServerRemotes: (sync: Sync) -> (any, any)
+
 local function flushServer(sync: Sync)
-	local reliable = sync.reliable
-	local unreliable = sync.unreliable or reliable
+	local reliable, unreliable
+	if sync == default then
+		reliable, unreliable = ensureServerRemotes(sync)
+	else
+		reliable = sync.reliable
+		unreliable = sync.unreliable or reliable
+	end
 	local received, globalDirty, playerDirty, ackDirty =
 		sync.received, sync.globalDirty, sync.playerDirty, sync.ackDirty
 
@@ -705,11 +743,32 @@ local function findOrCreate(container: Instance, name: string, class: "RemoteEve
 	return remote
 end
 
+function ensureServerRemotes(sync: Sync): (any, any)
+	local reliable = sync.reliable
+	if reliable == nil or reliable.Parent ~= script then
+		if sync.connections[1] then
+			sync.connections[1]:Disconnect()
+		end
+		reliable = findOrCreate(script, "SyncEvent", "RemoteEvent")
+		sync.reliable = reliable
+		sync.connections[1] = reliable.OnServerEvent:Connect(onEvent)
+	end
+	local unreliable = sync.unreliable
+	if unreliable == nil or unreliable.Parent ~= script then
+		unreliable = findOrCreate(script, "SyncUnreliable", "UnreliableRemoteEvent")
+		sync.unreliable = unreliable
+	end
+	return reliable, unreliable or reliable
+end
+
 -- Wires the default instance to remotes under this module: the server creates them, a client waits for them in the
 -- background so creating signals never yields. Clients only send on the reliable remote, so the server only listens
 -- there.
 local function getDefault(): Sync
 	if default then
+		if default.isServer then
+			ensureServerRemotes(default)
+		end
 		return default
 	end
 	local runService, players = RunService, Players
@@ -721,8 +780,8 @@ local function getDefault(): Sync
 		local unreliableEvent: UnreliableRemoteEvent = findOrCreate(script, "SyncUnreliable", "UnreliableRemoteEvent")
 		local sync = newSync(true, event, unreliableEvent)
 		default = sync
-		table.insert(sync.connections, event.OnServerEvent:Connect(onEvent))
-		table.insert(sync.connections, players.PlayerRemoving:Connect(onPlayerRemoving))
+		sync.connections[1] = event.OnServerEvent:Connect(onEvent)
+		sync.connections[2] = players.PlayerRemoving:Connect(onPlayerRemoving)
 		return sync
 	end
 	local sync = newSync(false, nil, nil)
@@ -761,7 +820,7 @@ local function stepAll()
 end
 
 -- Tests: a namespace over remote-shaped tables (`FireClient`/`FireAllClients` or `FireServer`), plus its instance.
-local function createInternal(isServer: boolean, reliable: any, unreliable: any?): (Namespace, any)
+local function createInternal(isServer: boolean, reliable: any, unreliable: any?): (SyncNamespace, any)
 	local sync = newSync(isServer, reliable, unreliable)
 	local function flushThis()
 		flush(sync)
@@ -780,4 +839,4 @@ Sync._internal = table.freeze({
 	create = createInternal,
 })
 
-return Sync :: Namespace & { _internal: any }
+return Sync :: SyncNamespace & { _internal: any }

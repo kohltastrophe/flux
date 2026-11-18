@@ -11,13 +11,15 @@ local Clock = require("./Clock")
 local Compat = require("./Compat")
 local Graph = require("./Graph")
 
-local IS_ROBLOX = Compat.isRoblox
+local CFrame = Compat.CFrame
 local Color3 = Compat.Color3
 local ColorSequence = Compat.ColorSequence
 local ColorSequenceKeypoint = Compat.ColorSequenceKeypoint
 local Enum = Compat.Enum
+local NumberRange = Compat.NumberRange
 local NumberSequence = Compat.NumberSequence
 local NumberSequenceKeypoint = Compat.NumberSequenceKeypoint
+local Rect = Compat.Rect
 local TweenInfo = Compat.TweenInfo
 local UDim = Compat.UDim
 local UDim2 = Compat.UDim2
@@ -29,8 +31,10 @@ local warn = Compat.warn
 local clock = Clock.now
 local effect = Graph.effect
 local isDynamic = Graph.isDynamic
+local isReactive = Graph.isReactive
 local raw = Graph.raw
 local read = Graph.read
+local untrack = Graph.untrack
 local sampleSignal: any = Graph.signal(nil)
 local SignalMT: any = getmetatable(sampleSignal)
 local getSignal = SignalMT.get
@@ -41,16 +45,39 @@ type Reactive<T> = Graph.Reactive<T>
 --- @ignore
 type Unwrap<T> = Graph.Unwrap<T>
 
-export type Spring<T> = Graph.Node<T> & {
-	-- Adds `delta` to the spring's current velocity without changing its target.
-	impulse: (self: any, delta: T) -> (),
-	-- Replaces the spring's velocity outright without changing its target.
-	setVelocity: (self: any, velocity: T) -> (),
-	-- Sets the spring's current animated value immediately without altering its target or velocity.
-	setCurrent: (self: any, value: T) -> (),
-	-- Jumps both the target and current value to `value` and zeroes the velocity.
-	snap: (self: any, value: T) -> (),
-}
+export type Spring<T> = setmetatable<
+	{
+		read peek: (self: any) -> T,
+		read get: (self: any) -> T,
+		read set: (self: any, value: T | Graph.Node<T>, force: boolean?) -> T,
+		read update: <N>(self: N, fn: ((current: T) -> T | Graph.Node<T>)?) -> N,
+		read Destroy: (self: any) -> (),
+		read onDestroy: (self: any, fn: (oldValue: T) -> ()) -> (),
+		-- Adds `delta` to the spring's current velocity without changing its target.
+		read impulse: (self: any, delta: T | Graph.Node<T>) -> (),
+		-- Replaces the spring's velocity outright without changing its target.
+		read setVelocity: (self: any, velocity: T | Graph.Node<T>) -> (),
+		-- Sets the spring's current animated value immediately without altering its target or velocity.
+		read setCurrent: (self: any, value: T | Graph.Node<T>) -> (),
+		-- Jumps both the target and current value to `value` (or the current target when omitted) and zeroes velocity.
+		read snap: <N>(self: N, value: (T | Graph.Node<T>)?) -> N,
+	},
+	Graph.Operators<T>
+>
+
+export type Tween<T> = setmetatable<
+	{
+		read peek: (self: any) -> T,
+		read get: (self: any) -> T,
+		read set: (self: any, value: T | Graph.Node<T>, force: boolean?) -> T,
+		read update: <N>(self: N, fn: ((current: T) -> T | Graph.Node<T>)?) -> N,
+		read Destroy: (self: any) -> (),
+		read onDestroy: (self: any, fn: (oldValue: T) -> ()) -> (),
+		-- Jumps both the target and current value to `value` (or the current target when omitted) and stops the tween.
+		read snap: <N>(self: N, value: (T | Graph.Node<T>)?) -> N,
+	},
+	Graph.Operators<T>
+>
 
 -- Color & Oklab -------------------------------------------------------------------------------------------------------
 
@@ -302,11 +329,15 @@ export type Animatable =
 
 local round = math.round
 local math_max = math.max
+local CFrame_new = CFrame.new
+local CFrame_fromAxisAngle = CFrame.fromAxisAngle
 local Color3_new = Color3.new
 local ColorSequence_new = ColorSequence.new
 local ColorSequenceKeypoint_new = ColorSequenceKeypoint.new
+local NumberRange_new = NumberRange.new
 local NumberSequence_new = NumberSequence.new
 local NumberSequenceKeypoint_new = NumberSequenceKeypoint.new
+local Rect_new = Rect.new
 local UDim_new = UDim.new
 local UDim2_new = UDim2.new
 local Vector2_new = Vector2.new
@@ -345,6 +376,16 @@ local packers: { [string]: ({ number }, any) -> () } = {
 	NumberSequenceKeypoint = function(t, v: NumberSequenceKeypoint)
 		t[1], t[2], t[3] = v.Time, v.Value, v.Envelope
 	end,
+	CFrame = function(t, v: CFrame)
+		local p, a = v:ToAxisAngle()
+		t[1], t[2], t[3], t[4], t[5], t[6] = v.X, v.Y, v.Z, p.X * a, p.Y * a, p.Z * a
+	end,
+	NumberRange = function(t, v: NumberRange)
+		t[1], t[2] = v.Min, v.Max
+	end,
+	Rect = function(t, v: Rect)
+		t[1], t[2], t[3], t[4] = v.Min.X, v.Min.Y, v.Max.X, v.Max.Y
+	end,
 	UDim = function(t, v: UDim)
 		t[1], t[2] = v.Scale, v.Offset
 	end,
@@ -366,6 +407,12 @@ local unpackers: { [string]: ({ number }) -> any } = {
 	vector = function(v): vector
 		return vector.create(v[1], v[2], v[3])
 	end,
+	CFrame = function(t): CFrame
+		local p = CFrame_new(t[1], t[2], t[3])
+		local rx, ry, rz = t[4], t[5], t[6]
+		local a = math.sqrt(rx * rx + ry * ry + rz * rz)
+		return if a < 1e-6 then p else p * CFrame_fromAxisAngle(Vector3_new(rx / a, ry / a, rz / a), a)
+	end,
 	Color3 = function(t): Color3
 		return Oklab_toRGB(t[1], t[2], t[3], false)
 	end,
@@ -384,6 +431,10 @@ local unpackers: { [string]: ({ number }) -> any } = {
 	ColorSequenceKeypoint = function(t): ColorSequenceKeypoint
 		return ColorSequenceKeypoint_new(math.clamp(t[1], 0, 1), Oklab_toRGB(t[2], t[3], t[4], false))
 	end,
+	NumberRange = function(t): NumberRange
+		local min, max = t[1], t[2]
+		return NumberRange_new(min, math_max(min, max))
+	end,
 	NumberSequence = function(t): NumberSequence
 		local n = #t // 3
 		local k = table.create(n) :: { NumberSequenceKeypoint }
@@ -399,6 +450,10 @@ local unpackers: { [string]: ({ number }) -> any } = {
 	NumberSequenceKeypoint = function(t): NumberSequenceKeypoint
 		return NumberSequenceKeypoint_new(math.clamp(t[1], 0, 1), t[2], math_max(t[3], 0))
 	end,
+	Rect = function(t): Rect
+		local minX, minY, maxX, maxY = t[1], t[2], t[3], t[4]
+		return Rect_new(minX, minY, maxX, maxY)
+	end,
 	UDim = function(t): UDim
 		return UDim_new(t[1], round(t[2]))
 	end,
@@ -412,39 +467,6 @@ local unpackers: { [string]: ({ number }) -> any } = {
 		return Vector3_new(t[1], t[2], t[3])
 	end,
 }
-
-if IS_ROBLOX then
-	local CFrame_new = CFrame.new
-	local CFrame_fromAxisAngle = CFrame.fromAxisAngle
-	local NumberRange_new = NumberRange.new
-	local Rect_new = Rect.new
-
-	packers.CFrame = function(t, v: CFrame)
-		local p, a = v:ToAxisAngle()
-		t[1], t[2], t[3], t[4], t[5], t[6] = v.X, v.Y, v.Z, p.X * a, p.Y * a, p.Z * a
-	end
-	packers.NumberRange = function(t, v: NumberRange)
-		t[1], t[2] = v.Min, v.Max
-	end
-	packers.Rect = function(t, v: Rect)
-		t[1], t[2], t[3], t[4] = v.Min.X, v.Min.Y, v.Max.X, v.Max.Y
-	end
-
-	unpackers.CFrame = function(t): CFrame
-		local p = CFrame_new(t[1], t[2], t[3])
-		local rx, ry, rz = t[4], t[5], t[6]
-		local a = math.sqrt(rx * rx + ry * ry + rz * rz)
-		return if a < 1e-6 then p else p * CFrame_fromAxisAngle(Vector3_new(rx / a, ry / a, rz / a), a)
-	end
-	unpackers.NumberRange = function(t): NumberRange
-		local min, max = t[1], t[2]
-		return NumberRange_new(min, math_max(min, max))
-	end
-	unpackers.Rect = function(t): Rect
-		local minX, minY, maxX, maxY = t[1], t[2], t[3], t[4]
-		return Rect_new(minX, minY, maxX, maxY)
-	end
-end
 
 local function pack(arr: { number }, value: Animatable, t: string)
 	table.clear(arr)
@@ -643,6 +665,7 @@ local lastClock = clock()
 local TYPE_TWEEN = 1
 local TYPE_SPRING = 2
 local EPSILON = 1e-4
+local TIME_EPSILON = 1e-9
 
 --- @ignore
 export type Motion = {
@@ -663,7 +686,7 @@ export type EngineSpring = Motion & {
 }
 
 --- @ignore
-export type Tween = Motion & {
+export type EngineTween = Motion & {
 	info: TweenInfo,
 	ease: Curve,
 	startTime: number,
@@ -678,7 +701,7 @@ local activeTweens: { [Motion]: any } = {}
 local Engine = {
 	now = 0,
 	DEFAULT_TWEEN_INFO = TweenInfo.new(0.3, Enum.EasingStyle.Cubic, Enum.EasingDirection.InOut),
-	isActive = function(motion: EngineSpring | Tween): boolean
+	isActive = function(motion: EngineSpring | EngineTween): boolean
 		return activeSprings[motion] ~= nil or activeTweens[motion] ~= nil
 	end,
 }
@@ -704,7 +727,7 @@ function Engine.newSpring(
 	}
 end
 
-function Engine.newTween(count: number, typeString: string, node: any, tweenInfo: TweenInfo?): Tween
+function Engine.newTween(count: number, typeString: string, node: any, tweenInfo: TweenInfo?): EngineTween
 	local info = tweenInfo or Engine.DEFAULT_TWEEN_INFO
 	return {
 		type = TYPE_TWEEN,
@@ -723,7 +746,7 @@ function Engine.newTween(count: number, typeString: string, node: any, tweenInfo
 	}
 end
 
-function Engine.destroy(motion: EngineSpring | Tween)
+function Engine.destroy(motion: EngineSpring | EngineTween)
 	activeSprings[motion] = nil
 	activeTweens[motion] = nil
 	table.clear(motion)
@@ -735,7 +758,7 @@ function Engine.setupSpring(spring: EngineSpring, frequency: number?, damping: n
 	activeSprings[spring] = spring.node
 end
 
-function Engine.setupTween(tween: Tween, tweenInfo: TweenInfo?)
+function Engine.setupTween(tween: EngineTween, tweenInfo: TweenInfo?)
 	local info = tweenInfo or Engine.DEFAULT_TWEEN_INFO
 	tween.info = info
 	tween.ease = Easing.curve(info.EasingStyle, info.EasingDirection)
@@ -747,7 +770,7 @@ function Engine.setupTween(tween: Tween, tweenInfo: TweenInfo?)
 	activeTweens[tween] = tween.node
 end
 
-function Engine.snap(motion: EngineSpring | Tween, arr: { number })
+function Engine.snap(motion: EngineSpring | EngineTween, arr: { number })
 	local n = #arr
 	local target, value = motion.target, motion.value
 	table.clear(target)
@@ -755,9 +778,12 @@ function Engine.snap(motion: EngineSpring | Tween, arr: { number })
 	table.move(arr, 1, n, 1, target)
 	table.move(arr, 1, n, 1, value)
 	if motion.type == TYPE_TWEEN then
-		local start = (motion :: Tween).start
+		local tween = motion :: EngineTween
+		local start = tween.start
 		table.clear(start)
 		table.move(arr, 1, n, 1, start)
+		tween.reversing = false
+		tween.repeatsLeft = 0
 	else
 		local vel = (motion :: EngineSpring).vel
 		table.clear(vel)
@@ -770,7 +796,7 @@ function Engine.snap(motion: EngineSpring | Tween, arr: { number })
 	activeTweens[motion] = nil
 end
 
-function Engine.setTarget(motion: EngineSpring | Tween, arr: { number })
+function Engine.setTarget(motion: EngineSpring | EngineTween, arr: { number })
 	local activeMap = if motion.type == TYPE_TWEEN then activeTweens else activeSprings
 	local n = #arr
 	if n ~= motion.count then
@@ -792,7 +818,7 @@ function Engine.setTarget(motion: EngineSpring | Tween, arr: { number })
 	end
 
 	if motion.type == TYPE_TWEEN then
-		motion = motion :: Tween
+		motion = motion :: EngineTween
 		table.move(motion.value, 1, n, 1, motion.start)
 		motion.startTime = Engine.now
 		motion.repeatsLeft = motion.info.RepeatCount
@@ -880,16 +906,16 @@ local function stepSpring(motion: EngineSpring, dt: number)
 	end
 end
 
-local function stepTween(tween: Tween, now: number)
+local function stepTween(tween: EngineTween, now: number)
 	local elapsed = now - tween.startTime
-	if elapsed < 0 then
+	if elapsed < -TIME_EPSILON then
 		return
 	end
 	local tInfo = tween.info
 	local duration = tInfo.Time
 	local alpha = if duration > 0 then elapsed / duration else 1
 
-	while alpha >= 1 do
+	while alpha >= 1 - TIME_EPSILON do
 		if tInfo.Reverses and not tween.reversing then
 			tween.reversing = true
 		elseif tween.repeatsLeft ~= 0 then
@@ -959,7 +985,7 @@ end
 -- Motion Nodes (spring & tween) ---------------------------------------------------------------------------------------
 
 local tempArray = { 0, 0, 0, 0, 0, 0, 0 }
-local NodeToMotion: { [Graph.Node<any>]: EngineSpring | Tween } = setmetatable({}, { __mode = "k" })
+local NodeToMotion: { [Graph.Node<any>]: EngineSpring | EngineTween } = setmetatable({}, { __mode = "k" })
 
 local function packSpring(self: Graph.Node<any>, method: string, value: any): EngineSpring?
 	local spring = NodeToMotion[self]
@@ -975,10 +1001,7 @@ local function packSpring(self: Graph.Node<any>, method: string, value: any): En
 			elseif
 				method == "setVelocity"
 			then `Cannot set velocity of a {spring.typeString} spring to a {typeString} value`
-			elseif
-				method == "setCurrent"
-			then `Cannot set a {spring.typeString} spring's current value to a {typeString} value`
-			else `Cannot snap a {spring.typeString} spring to a {typeString} value`
+			else `Cannot set a {spring.typeString} spring's current value to a {typeString} value`
 		error(msg, 3)
 	end
 	pack(tempArray, val, typeString)
@@ -987,10 +1010,9 @@ end
 
 --- @class Spring
 local MotionStateMetatable: { [string]: any } = {
-	__call = function<T>(self: any, value: any?): any?
-		if value ~= nil then
-			self:set(value)
-			return
+	__call = function<T>(self: any, value: any?, force: boolean?): any?
+		if value ~= nil or force then
+			return self:set(value, force)
 		end
 		return getSignal(self)
 	end,
@@ -1008,11 +1030,11 @@ it's read once.
 
 [Open Documentation](https://flux.kohl.gg/guide/motion/spring#reactive-targets)
 ]]
-function MotionStateMetatable.set<T>(self: Graph.Node<T>, value: T)
+function MotionStateMetatable.set(self: any, value: any, _force: boolean?): any
 	local motion = NodeToMotion[self]
 	if motion == nil then
 		warn("[Flux] :set() called on a destroyed motion node; ignoring")
-		return
+		return raw(value)
 	end
 	local goal = raw(value)
 	local typeString = typeof(goal)
@@ -1020,6 +1042,35 @@ function MotionStateMetatable.set<T>(self: Graph.Node<T>, value: T)
 		error(`Cannot retarget a {motion.typeString} motion with a {typeString} value`, 2)
 	end
 	Engine.setTarget(motion, pack(tempArray, goal, typeString))
+	return goal
+end
+
+--[[
+Retargets the animation relative to its current target (not its current mid-flight value), calling `fn(target)` untracked.
+
+[Open Documentation](https://flux.kohl.gg/guide/concepts/signals#forcing-an-update)
+]]
+function MotionStateMetatable.update<N>(self: N, fn: ((current: any) -> any)?): N
+	if fn ~= nil then
+		if type(fn) ~= "function" then
+			error(`node:update expected a function or nil, got {typeof(fn)}`, 2)
+		end
+		local motion = NodeToMotion[self]
+		if motion == nil then
+			warn("[Flux] :update() called on a destroyed motion node; ignoring")
+			return self
+		end
+		local current = motion.unpack(motion.target)
+		local nextValue = if isReactive()
+			then untrack(function()
+				return fn(current)
+			end)
+			else fn(current);
+		(self :: any):set(nextValue)
+		return self
+	end
+	SignalMT.update(self)
+	return self
 end
 
 --[[
@@ -1063,16 +1114,31 @@ function MotionStateMetatable.setCurrent<T>(self: Graph.Node<T>, value: T)
 end
 
 --[[
-*(Spring only)* Jumps both the target and current value of the spring to `value` and zeroes its velocity.
+Jumps both the target and current value to `value` (or the current target when `value` is omitted), stopping active motion and resetting velocity/repeat state.
 
 [Open Documentation](https://flux.kohl.gg/guide/motion/spring#snap)
 ]]
-function MotionStateMetatable.snap<T>(self: Graph.Node<T>, value: T)
-	local spring = packSpring(self, "snap", value)
-	if spring ~= nil then
-		Engine.snap(spring, tempArray)
-		setNode(spring.node, spring.unpack(spring.value))
+function MotionStateMetatable.snap<T>(self: any, value: T?): any
+	local motion = NodeToMotion[self]
+	if motion == nil then
+		warn("[Flux] :snap() called on a destroyed motion node; ignoring")
+		return self
 	end
+	if value == nil then
+		table.clear(tempArray)
+		table.move(motion.target, 1, motion.count, 1, tempArray)
+	else
+		local goal = raw(value)
+		local typeString = typeof(goal)
+		if typeString ~= motion.typeString then
+			local kind = if motion.type == TYPE_TWEEN then "tween" else "spring"
+			error(`Cannot snap a {motion.typeString} {kind} to a {typeString} value`, 2)
+		end
+		pack(tempArray, goal, typeString)
+	end
+	Engine.snap(motion, tempArray)
+	setNode(motion.node, motion.unpack(motion.value))
+	return self
 end
 
 local function attachEffect(stateNode: Graph.Node<any>, fn: () -> ())
@@ -1082,7 +1148,7 @@ local function attachEffect(stateNode: Graph.Node<any>, fn: () -> ())
 	end)
 end
 
-local function register(stateNode: Graph.Node<any>, motion: EngineSpring | Tween)
+local function register(stateNode: Graph.Node<any>, motion: EngineSpring | EngineTween)
 	NodeToMotion[stateNode] = motion
 	local function unregister()
 		NodeToMotion[stateNode] = nil
@@ -1102,7 +1168,12 @@ local function packOrFallback(target: any, initialVal: any, typeStr: string): an
 	if typeStr == "nil" then
 		warn("[Flux] Animating a nil value; following the goal without animation")
 		local stateNode: any = Graph.signal(initialVal)
-		stateNode.snap = setNode
+		stateNode.snap = function(node: any, value: any?)
+			if value ~= nil then
+				node:set(value)
+			end
+			return node
+		end
 		stateNode.setCurrent = setNode
 		stateNode.impulse = MotionStateMetatable.impulse
 		stateNode.setVelocity = MotionStateMetatable.setVelocity
@@ -1200,7 +1271,7 @@ changes, the tween restarts from its current value without waiting for `DelayTim
 
 [Open Documentation](https://flux.kohl.gg/guide/motion/tween#basic-usage)
 ]]
-function MotionModule.tween<A>(target: A, tweenInfo: Reactive<TweenInfo>?): Graph.Node<Unwrap<A>>
+function MotionModule.tween<A>(target: A, tweenInfo: Reactive<TweenInfo>?): Tween<Unwrap<A>>
 	local initialVal = raw(target)
 	local typeStr = typeof(initialVal)
 	local fallback = packOrFallback(target, initialVal, typeStr)
