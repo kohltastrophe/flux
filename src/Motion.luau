@@ -665,6 +665,7 @@ local lastClock = clock()
 local TYPE_TWEEN = 1
 local TYPE_SPRING = 2
 local EPSILON = 1e-4
+local TIME_EPSILON = 1e-9
 
 --- @ignore
 export type Motion = {
@@ -907,14 +908,14 @@ end
 
 local function stepTween(tween: EngineTween, now: number)
 	local elapsed = now - tween.startTime
-	if elapsed < 0 then
+	if elapsed < -TIME_EPSILON then
 		return
 	end
 	local tInfo = tween.info
 	local duration = tInfo.Time
 	local alpha = if duration > 0 then elapsed / duration else 1
 
-	while alpha >= 1 do
+	while alpha >= 1 - TIME_EPSILON do
 		if tInfo.Reverses and not tween.reversing then
 			tween.reversing = true
 		elseif tween.repeatsLeft ~= 0 then

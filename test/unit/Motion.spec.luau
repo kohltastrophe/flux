@@ -413,6 +413,7 @@ end)
 test(
 	"motion · unchanged getter target does not reset an in-flight tween, and resting config updates stay asleep",
 	function()
+		advance(1 / 60)
 		local count = Flux.signal(1)
 		local freq = Flux.signal(4)
 		local damp = Flux.signal(1)
