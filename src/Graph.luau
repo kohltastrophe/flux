@@ -375,11 +375,70 @@ local function raise(node: any, h: number)
 	end
 end
 
-local function fireHook(n: any, which: number)
+local hookQueue: { any } = {}
+local hookHead = 1
+local hookTail = 0
+local hookDepth = 0
+
+local function isNodeObserved(n: any): boolean
+	local h = n[HEIGHT]
+	if h == nil then
+		local obs = n[OBSERVERS]
+		return obs ~= nil and obs > 0
+	elseif h == INF or h == SCOPE then
+		return false
+	end
+	local obs = n[OBSERVERS]
+	return obs ~= nil and obs ~= false
+end
+
+local function flushHooks()
+	local pNode, pEval, pRunning, pOwner, pSet, pCtx, pExtra, pSusp, pSuspRun, pChildren =
+		curNode, evalNode, runningEffect, curOwner, ownerSet, curCtx, ownExtra, susp, suspRun, curChildren
+	curNode, evalNode, runningEffect, curOwner, ownerSet, curCtx, ownExtra, susp, curChildren =
+		nil, nil, nil, nil, false, nil, false, nil, nil
+	while hookHead <= hookTail do
+		local n = hookQueue[hookHead]
+		hookQueue[hookHead] = nil
+		hookHead += 1
+		local h = n.hooks
+		if h then
+			h[4] = false
+			local now = isNodeObserved(n)
+			if now ~= h[3] then
+				h[3] = now
+				local f = h[if now then 1 else 2]
+				if f then
+					protect(if now then "onObserved" else "onUnobserved", f)
+				end
+			end
+		end
+	end
+	hookHead, hookTail = 1, 0
+	curNode, evalNode, runningEffect, curOwner, ownerSet, curCtx, ownExtra, susp, suspRun, curChildren =
+		pNode, pEval, pRunning, pOwner, pSet, pCtx, pExtra, pSusp, pSuspRun, pChildren
+end
+
+local function endHooks()
+	if hookDepth == 1 and hookTail >= hookHead then
+		flushHooks()
+	end
+	hookDepth -= 1
+end
+
+local function fireHook(n: any, _which: number)
 	local h = n.hooks
-	local f = h and h[which]
-	if f then
-		protect(if which == 1 then "onObserved" else "onUnobserved", f)
+	if not h or (not h[1] and not h[2]) then
+		return
+	end
+	if not h[4] then
+		h[4] = true
+		hookTail += 1
+		hookQueue[hookTail] = n
+	end
+	if hookDepth == 0 then
+		hookDepth = 1
+		endHooks()
 	end
 end
 
@@ -488,7 +547,9 @@ local function unsubscribe(s: any, o: any, j: number)
 end
 
 function goLive(node: any, o: any)
-	if anyHooks then
+	local hooked = anyHooks
+	if hooked then
+		hookDepth += 1
 		node[OBSERVERS] = o
 	end
 	local last = node[NSRC] - 2
@@ -536,9 +597,16 @@ function goLive(node: any, o: any)
 	if anyHooks then
 		fireHook(node, 1)
 	end
+	if hooked then
+		endHooks()
+	end
 end
 
 function goDead(node: any)
+	local hooked = anyHooks
+	if hooked then
+		hookDepth += 1
+	end
 	for i = node[NSRC] - 2, SRC1, -2 do
 		local s, j = node[i], node[i + 1]
 		local obs = s[OBSERVERS]
@@ -566,9 +634,16 @@ function goDead(node: any)
 	if anyHooks then
 		fireHook(node, 2)
 	end
+	if hooked then
+		endHooks()
+	end
 end
 
 local function reconcile(node: any, nslot: number, last: number, idx: number, newList: any, live: boolean)
+	local hooked = anyHooks and live
+	if hooked then
+		hookDepth += 1
+	end
 	if not newList then
 		if idx > last then
 			if live then
@@ -589,6 +664,9 @@ local function reconcile(node: any, nslot: number, last: number, idx: number, ne
 			end
 		end
 		node[nslot] = idx
+		if hooked then
+			endHooks()
+		end
 		return
 	end
 	local nNew = newList[2]
@@ -612,6 +690,9 @@ local function reconcile(node: any, nslot: number, last: number, idx: number, ne
 		unsubscribe(oldS, node, oldBack)
 		if oldS[CHILDREN] == false then
 			oldS[CHILDREN] = nil
+		end
+		if hooked then
+			endHooks()
 		end
 		return
 	end
@@ -658,6 +739,9 @@ local function reconcile(node: any, nslot: number, last: number, idx: number, ne
 		end
 	end
 	tailBusy = wasBusy
+	if hooked then
+		endHooks()
+	end
 end
 
 local TOMB = {}
@@ -822,13 +906,21 @@ function disposeOne(node: any)
 		end
 		node[E_FN] = nil
 		node[STAMP] = INF
+		local nsrc = node[E_NSRC]
+		node[E_NSRC] = DISPOSED_NSRC
+		local hooked = anyHooks
+		if hooked then
+			hookDepth += 1
+		end
 		if node[E_CHILDREN] then
 			disposeChildren(node, E_CHILDREN, nil, true)
 		end
-		for i = node[E_NSRC] - 2, E_SRC1, -2 do
+		for i = nsrc - 2, E_SRC1, -2 do
 			unsubscribe(node[i], node, node[i + 1])
 		end
-		node[E_NSRC] = DISPOSED_NSRC
+		if hooked then
+			endHooks()
+		end
 	elseif h == SCOPE then
 		if node[FN] == false then
 			return
@@ -848,10 +940,16 @@ function disposeOne(node: any)
 		node[FN] = nil
 		node[STAMP] = LIVE_MAX_IDLE
 		value = node[VALUE]
+		local hooked = anyHooks
+		if hooked then
+			hookDepth += 1
+		end
 		if node[CHILDREN] then
 			disposeChildren(node, CHILDREN, value, true)
 		end
 		local obs = node[OBSERVERS]
+		local nsrc = node[NSRC]
+		node[NSRC] = DISPOSED_NSRC
 		if obs then
 			if obs[HEIGHT] then
 				removeSource(obs, node)
@@ -861,16 +959,18 @@ function disposeOne(node: any)
 				end
 			end
 			node[OBSERVERS] = false
-			for i = node[NSRC] - 2, SRC1, -2 do
+			for i = nsrc - 2, SRC1, -2 do
 				unsubscribe(node[i], node, node[i + 1])
 			end
 			if anyHooks then
 				fireHook(node, 2)
 			end
 		end
-		node[NSRC] = DISPOSED_NSRC
 		node[VALUE] = nil
 		node[OBSERVERS] = nil
+		if hooked then
+			endHooks()
+		end
 	end
 	if anyDestroys then
 		local destroys = node.destroys
@@ -1433,62 +1533,71 @@ local function stabilize()
 								end
 								local live = node[OBSERVERS] ~= false
 								reconcile(node, NSRC, last, idx, newList, live)
+								if not node[FN] then
+									break
+								end
 								if node[STAMP] ~= 0 then
-									node[STAMP] = if live then node[HEIGHT] + LIVE_BASE else epoch
+									node[STAMP] = if node[OBSERVERS] ~= false then node[HEIGHT] + LIVE_BASE else epoch
 								end
 							end
+							if not node[FN] then
+								break
+							end
+							obs = node[OBSERVERS]
 							if new ~= old then
 								node[VALUE] = new
 								node[CHANGED] = epoch
-								local oh = obs[HEIGHT]
-								if oh then
-									local o = obs
-									if o[STAMP] ~= 0 then
-										if oh == INF then
-											o[STAMP] = 0
-											local qt = queueTail + 1
-											queueTail = qt
-											q[qt] = o
-										elseif oh <= heapMin and o[CHILDREN] ~= nil then
-											h = oh
-											if not hp[oh] then
-												heapMin = oh + 1
-											end
-											lMax = oh + LIVE_BASE
-											liveMax = lMax
-											node = o
-											continue
-										else
-											o[STAMP] = 0
-											if not o[NEXT] then
-												o[NEXT] = hp[oh] or true
-												hp[oh] = o
-												if oh > heapMax then
-													heapMax = oh
-												end
-											end
-										end
-									end
-								else
-									local qt, hMax = queueTail, heapMax
-									for i = OBS1, obs[1] do
-										local o = obs[i]
+								if obs then
+									local oh = obs[HEIGHT]
+									if oh then
+										local o = obs
 										if o[STAMP] ~= 0 then
-											o[STAMP] = 0
-											local oHeight = o[HEIGHT]
-											if oHeight == INF then
-												qt += 1
+											if oh == INF then
+												o[STAMP] = 0
+												local qt = queueTail + 1
+												queueTail = qt
 												q[qt] = o
-											elseif not o[NEXT] then
-												o[NEXT] = hp[oHeight] or true
-												hp[oHeight] = o
-												if oHeight > hMax then
-													hMax = oHeight
+											elseif oh <= heapMin and o[CHILDREN] ~= nil then
+												h = oh
+												if not hp[oh] then
+													heapMin = oh + 1
+												end
+												lMax = oh + LIVE_BASE
+												liveMax = lMax
+												node = o
+												continue
+											else
+												o[STAMP] = 0
+												if not o[NEXT] then
+													o[NEXT] = hp[oh] or true
+													hp[oh] = o
+													if oh > heapMax then
+														heapMax = oh
+													end
 												end
 											end
 										end
+									else
+										local qt, hMax = queueTail, heapMax
+										for i = OBS1, obs[1] do
+											local o = obs[i]
+											if o[STAMP] ~= 0 then
+												o[STAMP] = 0
+												local oHeight = o[HEIGHT]
+												if oHeight == INF then
+													qt += 1
+													q[qt] = o
+												elseif not o[NEXT] then
+													o[NEXT] = hp[oHeight] or true
+													hp[oHeight] = o
+													if oHeight > hMax then
+														hMax = oHeight
+													end
+												end
+											end
+										end
+										queueTail, heapMax = qt, hMax
 									end
-									queueTail, heapMax = qt, hMax
 								end
 							elseif nFailed > 0 and unfail(node) then
 								healed(node)
@@ -1568,36 +1677,52 @@ do
 						end
 						local last = e[E_NSRC]
 						if idx ~= last then
-							if anyHooks then
-								runningEffect = nil
-							end
-							if idx > last then
+							curNode, runningEffect = nil, nil
+							if not e[E_FN] then
+								curNew = nil
+								evalNode = nil
+								reap(e)
+							elseif idx > last then
+								local hooked = anyHooks
+								if hooked then
+									hookDepth += 1
+								end
 								for j = last, idx - 2, 2 do
 									local s = e[j]
 									if not s[HEIGHT] then
-										local n = s[OBSERVERS] + 1
-										s[OBSERVERS] = n
-										s[n + SIG_OBS0] = e
-										e[j + 1] = n
-										if anyHooks and n == 1 then
-											fireHook(s, 1)
+										local n0 = s[OBSERVERS]
+										if n0 ~= nil then
+											local n = n0 + 1
+											s[OBSERVERS] = n
+											s[n + SIG_OBS0] = e
+											e[j + 1] = n
+											if anyHooks and n == 1 then
+												fireHook(s, 1)
+											end
+										else
+											e[j + 1] = 0
 										end
 									else
 										e[j + 1] = subscribe(s, e)
 									end
 								end
 								e[E_NSRC] = idx
-							elseif e[E_FN] then
+								if hooked then
+									endHooks()
+								end
+								if not e[E_FN] then
+									reap(e)
+								end
+							else
 								local newList = curNew
 								if newList then
 									idx = newList[1]
 									curNew = nil
 								end
 								reconcile(e, E_NSRC, last, idx, newList, true)
-							else
-								curNew = nil
-								curNode, evalNode, runningEffect = nil, nil, nil
-								reap(e)
+								if not e[E_FN] then
+									reap(e)
+								end
 							end
 						end
 					end
@@ -2099,7 +2224,7 @@ end
 local function onHook(node: node, which: number, fn: () -> ())
 	local h = node.hooks
 	if not h then
-		h = {}
+		h = { [3] = isNodeObserved(node) }
 		node.hooks = h
 	end
 	local prev: (() -> ())? = h[which]

@@ -2531,6 +2531,111 @@ test(
 	end
 )
 
+test(
+	"onObserved · deferred ownerless untracked hooks handle self writes, observer Destroy, and late onUnobserved",
+	function()
+		-- 1. onObserved writing s:set(v) updates downstream observers cleanly
+		local s = Flux.signal(1)
+		local observedSeen = {}
+		s:onObserved(function()
+			s:set(99)
+		end)
+		local effWrite = Flux.effect(function()
+			table.insert(observedSeen, s:get())
+		end)
+		flush()
+		expect(observedSeen[#observedSeen] == 99, "onObserved s:set(v) propagates to active observer")
+		effWrite:Destroy()
+
+		-- 2. onObserved destroying an observer triggers onUnobserved deferred without corrupting graph
+		local target = Flux.signal("ok")
+		local targetObs, targetUnobs = 0, 0
+		local effKill: any = nil
+		target:onObserved(function()
+			targetObs += 1
+			if effKill then
+				effKill:Destroy()
+			end
+		end)
+		target:onUnobserved(function()
+			targetUnobs += 1
+		end)
+		effKill = Flux.effect(function()
+			target:get()
+		end)
+		flush()
+		expect(
+			targetObs == 1 and targetUnobs == 1 and not Graph.isObserved(target),
+			"destroying observer in onObserved fires onUnobserved"
+		)
+		target:Destroy()
+
+		-- 3. Attaching onUnobserved on an already-observed node fires when its last observer leaves
+		local already = Flux.signal(5)
+		local lateEff = Flux.effect(function()
+			already:get()
+		end)
+		flush()
+		expect(Graph.isObserved(already), "baseline observed")
+		local lateUnobs = 0
+		already:onUnobserved(function()
+			lateUnobs += 1
+		end)
+		expect(lateUnobs == 0, "attaching onUnobserved while observed does not fire eagerly")
+		lateEff:Destroy()
+		expect(lateUnobs == 1, "onUnobserved attached on already-observed node fires on last observer teardown")
+		already:Destroy()
+
+		-- 4. Hooks run untracked and ownerless (reading other signals does not subscribe trigger effect, cleanup/effect not owned by scope)
+		local src = Flux.signal(0)
+		local side = Flux.signal("a")
+		local hookOwnerDuringOn = "unset" :: any
+		local hookOwnerDuringOff = "unset" :: any
+		local innerRuns = 0
+		local innerEffect: any = nil
+		src:onObserved(function()
+			hookOwnerDuringOn = Flux.getOwner()
+			local _ = side:get()
+			innerEffect = Flux.effect(function()
+				innerRuns += 1
+				side:get()
+			end)
+		end)
+		src:onUnobserved(function()
+			hookOwnerDuringOff = Flux.getOwner()
+			local _ = side:get()
+		end)
+
+		local outerRuns = 0
+		local sc = Flux.scope(function()
+			Flux.effect(function()
+				outerRuns += 1
+				src:get()
+			end)
+		end)
+		flush()
+		expect(hookOwnerDuringOn == nil and outerRuns == 1 and innerRuns == 1, "onObserved ran ownerless")
+
+		side:set("b")
+		flush()
+		expect(
+			outerRuns == 1 and innerRuns == 2,
+			"reads inside onObserved do not subscribe outer effect; inner effect stays alive"
+		)
+
+		sc:Destroy()
+		expect(hookOwnerDuringOff == nil, "onUnobserved ran ownerless")
+		side:set("c")
+		flush()
+		expect(innerRuns == 3, "effect created inside onObserved was not owned or destroyed by outer scope")
+		if innerEffect then
+			innerEffect:Destroy()
+		end
+		src:Destroy()
+		side:Destroy()
+	end
+)
+
 test("dispose · child disposal inside Flux.untrack prunes source observers when no destroys or hooks exist", function()
 	local src = Flux.signal(1)
 	local runs = 0
