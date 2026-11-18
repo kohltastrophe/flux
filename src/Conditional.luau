@@ -368,7 +368,11 @@ local function createMapper(list: any, mapFn: any, keyedByValue: boolean, keyOf:
 			local key: any, held: any = index, value
 			if keyedByValue then
 				if getKey ~= nil then
-					local rawKey = getKey(value)
+					local okKey, rawKey = pcall(getKey, value)
+					if not okKey then
+						retrack()
+						error(rawKey, 0)
+					end
 					if rawKey ~= rawKey then
 						warn("[Flux] Flux.forKey: NaN key fell back to item identity; keys must not be NaN")
 						key = value
@@ -402,16 +406,28 @@ local function createMapper(list: any, mapFn: any, keyedByValue: boolean, keyOf:
 				out[index] = cache[key]
 			else
 				node = newValue(held)
+				local itemNode: Node<any>? = nil
 				if itemsMap ~= nil then
-					local itemNode = newValue(value)
+					itemNode = newValue(value)
 					rowA, rowB = node, itemNode
-					itemsMap[key] = itemNode
 				elseif keyedByValue then
 					rowA, rowB = node, value
 				else
 					rowA, rowB = index, node
 				end
-				local mapped = withOwner(node, build)
+				local ok, mapped = pcall(withOwner, node, build)
+				if not ok then
+					rowA, rowB = nil, nil
+					destroyNode(node)
+					if itemNode ~= nil then
+						destroyNode(itemNode)
+					end
+					retrack()
+					error(mapped, 0)
+				end
+				if itemNode ~= nil then
+					(itemsMap :: { [any]: Node<any> })[key] = itemNode
+				end
 				cache[key] = mapped
 				nodes[key] = node
 				added += 1

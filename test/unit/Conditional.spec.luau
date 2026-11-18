@@ -2410,3 +2410,123 @@ test("forValue / forKey / selector · handles NaN safely without table index err
 	defaultSel:Destroy()
 	nanSel:Destroy()
 end)
+
+test(
+	"forIndex, forValue, forKey · throwing mapFn or keyOf cleans up row state and preserves outer tracking",
+	function()
+		local function verifyThrowingMapper(
+			label: string,
+			makeMapped: (src: any, onRow: (failNow: boolean) -> ()) -> any
+		)
+			local src = Flux.signal({ { id = 1 }, { id = 2 } })
+			local ping = Flux.signal(0)
+			local outerDep = Flux.signal("a")
+			local cleanups = 0
+			local leakedRuns = 0
+			local outerRuns = 0
+
+			local mapped = makeMapped(src, function(failNow: boolean)
+				if failNow then
+					Flux.cleanup(function()
+						cleanups += 1
+					end)
+					Flux.effect(function()
+						ping()
+						leakedRuns += 1
+					end)
+					error(`{label} boom`, 0)
+				end
+			end)
+
+			local outer = Flux.computed(function()
+				outerRuns += 1
+				local ok = pcall(mapped)
+				return { ok = ok, dep = outerDep() }
+			end)
+
+			local res1 = outer()
+			expect(not res1.ok and res1.dep == "a" and outerRuns == 1, `{label}: throwing mapper error caught cleanly`)
+			expect(cleanups == 1, `{label}: row cleanup runs when mapper throws (got {cleanups})`)
+
+			local baselineLeaked = leakedRuns
+			ping:set(1)
+			flush()
+			expect(leakedRuns == baselineLeaked, `{label}: leaked row effects do not survive throw`)
+
+			outerDep:set("b")
+			local res2 = outer()
+			expect(
+				not res2.ok and res2.dep == "b" and outerRuns == 2,
+				`{label}: outer computed retains downstream tracking after throw`
+			)
+
+			outer:Destroy()
+			mapped:Destroy()
+			src:Destroy()
+			ping:Destroy()
+			outerDep:Destroy()
+		end
+
+		verifyThrowingMapper("forIndex", function(src, onRow)
+			return Flux.forIndex(src, function(idx)
+				onRow(idx == 2)
+				return idx
+			end)
+		end)
+
+		verifyThrowingMapper("forValue", function(src, onRow)
+			return Flux.forValue(src, function(_idx, val)
+				onRow(val.id == 2)
+				return val.id
+			end)
+		end)
+
+		verifyThrowingMapper("forKey mapFn", function(src, onRow)
+			return Flux.forKey(src, function(item)
+				return item.id
+			end, function(idx)
+				onRow(idx:peek() == 2)
+				return idx:peek()
+			end)
+		end)
+
+		-- Throwing keyOf in forKey cleans up built rows on recovery sweep and restores outer tracking
+		local src = Flux.signal({ { id = 1 }, { id = 2 } })
+		local outerDep = Flux.signal(1)
+		local keyOuterRuns = 0
+		local rowCleanups = 0
+		local throwKey = true
+		local mappedKey = Flux.forKey(src, function(item)
+			if throwKey and item.id == 2 then
+				error("keyOf boom", 0)
+			end
+			return item.id
+		end, function(_idx, item)
+			Flux.cleanup(function()
+				rowCleanups += 1
+			end)
+			return item:peek().id
+		end)
+		local outer = Flux.computed(function()
+			keyOuterRuns += 1
+			local ok = pcall(mappedKey)
+			return { ok = ok, dep = outerDep() }
+		end)
+		local r1 = outer()
+		expect(not r1.ok and r1.dep == 1 and keyOuterRuns == 1, "forKey keyOf error propagates cleanly")
+		outerDep:set(2)
+		local r2 = outer()
+		expect(
+			not r2.ok and r2.dep == 2 and keyOuterRuns == 2,
+			"forKey keyOf throw preserves outer downstream tracking"
+		)
+		throwKey = false
+		src:set({ { id = 3 } })
+		local r3 = outer()
+		expect(r3.ok and rowCleanups == 1, "forKey sweep cleans up rows cached before aborted keyOf throw")
+		outer:Destroy()
+		mappedKey:Destroy()
+		src:Destroy()
+		outerDep:Destroy()
+	end
+)
