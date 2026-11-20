@@ -42,6 +42,7 @@ type Truthy<T> = Type.Truthy<T>
 local OTHERWISE: any = table.freeze({ type = "SwitchOtherwise" })
 local UNSET = table.freeze({})
 local NAN_KEY: any = table.freeze({ type = "NaNKey" })
+local NIL_KEY: any = table.freeze({ type = "NilKey" })
 local NO_VALUE: any = nil
 
 -- Conditional (show, showKeyed, switch, presence, pick, fallback) -----------------------------------------------------
@@ -75,6 +76,7 @@ local function mount(
 	local activeBranch: Node<any>? = nil
 	local lastValid: any = NO_VALUE
 	local output = newValue(NO_VALUE)
+	local destroyed = false
 
 	local function valueOf()
 		local current = read(source)
@@ -101,11 +103,22 @@ local function mount(
 		if previous ~= nil then
 			previous:Destroy()
 		end
+		if destroyed then
+			retrack()
+			return
+		end
 		activeKey = key
 		lastValid = value
 
 		if factory ~= nil then
 			local ok, branch, result = mountBranch(factory, valueOf)
+			if destroyed then
+				if ok and branch ~= nil then
+					branch:Destroy()
+				end
+				retrack()
+				return
+			end
 			if ok then
 				activeBranch = branch
 				set(output, result)
@@ -122,6 +135,7 @@ local function mount(
 	end)
 
 	output:onDestroy(function()
+		destroyed = true
 		driver:Destroy()
 		local branch = activeBranch
 		activeBranch = nil
@@ -191,13 +205,7 @@ local function presence<T>(condition: unknown, component: (exiting: Node<boolean
 	local exiting: Node<boolean>? = nil
 	local finished = newValue(0)
 	local handled = 0
-
-	local function done()
-		local leaving = exiting
-		if leaving ~= nil and leaving:peek() then
-			set(finished, finished:peek() + 1)
-		end
-	end
+	local destroyed = false
 
 	local driver = effect(function()
 		local present = read(condition)
@@ -209,7 +217,20 @@ local function presence<T>(condition: unknown, component: (exiting: Node<boolean
 			handled = finishes
 			if current == nil then
 				local exit = newValue(false)
+				local function done()
+					if exiting == exit and exit:peek() then
+						set(finished, finished:peek() + 1)
+					end
+				end
 				local ok, mounted, result = mountBranch(component, exit, done)
+				if destroyed then
+					destroyNode(exit)
+					if ok and mounted ~= nil then
+						mounted:Destroy()
+					end
+					retrack()
+					return
+				end
 				if not ok then
 					destroyNode(exit)
 					set(output, nil)
@@ -236,6 +257,7 @@ local function presence<T>(condition: unknown, component: (exiting: Node<boolean
 	end)
 
 	output:onDestroy(function()
+		destroyed = true
 		driver:Destroy()
 		local current, leaving = branch, exiting
 		branch, exiting = nil, nil
@@ -349,6 +371,7 @@ local function createMapper(
 	local fallbackOwner: Node<any>? = nil
 	local fallbackItem: any = nil
 	local fallbackOut: { any }? = nil
+	local destroyed = false
 
 	local function clearFallback()
 		local owner = fallbackOwner
@@ -393,6 +416,10 @@ local function createMapper(
 		local itemsMap = items
 		local seen, added = 0, 0
 		for index, value in current do
+			if destroyed then
+				retrack()
+				return {}
+			end
 			local key: any, held: any = index, value
 			if keyedByValue then
 				if getKey ~= nil then
@@ -408,6 +435,10 @@ local function createMapper(
 						key = if rawKey == nil then value else rawKey
 					end
 				else
+					if value == nil then
+						warn("[Flux] Flux.forValue: nil item skipped; use Flux.forIndex for sparse lists")
+						continue
+					end
 					key = value
 				end
 				if key ~= key then
@@ -444,6 +475,18 @@ local function createMapper(
 					rowA, rowB = index, node
 				end
 				local ok, mapped = pcall(withOwner, node, build)
+				if destroyed then
+					rowA, rowB = nil, nil
+					destroyNode(node)
+					if itemNode ~= nil then
+						destroyNode(itemNode)
+					end
+					if ok then
+						dispose(mapped)
+					end
+					retrack()
+					return {}
+				end
 				if not ok then
 					rowA, rowB = nil, nil
 					destroyNode(node)
@@ -474,6 +517,16 @@ local function createMapper(
 		if seen == 0 and emptyFn ~= nil then
 			if fallbackOwner == nil then
 				local ok, branch, mapped = mountBranch(emptyFn, nil, nil)
+				if destroyed then
+					if ok then
+						if branch ~= nil then
+							destroyNode(branch)
+						end
+						dispose(mapped)
+					end
+					retrack()
+					return {}
+				end
 				if not ok then
 					retrack()
 					error(branch, 0)
@@ -492,6 +545,7 @@ local function createMapper(
 	end)
 
 	self:onDestroy(function()
+		destroyed = true
 		clearFallback()
 		destroyMapperRows(nodes, items, cache, currentKeys)
 	end)
@@ -568,6 +622,14 @@ type SelectorData = {
 local SelectorMT = {}
 SelectorMT.__index = SelectorMT
 
+local function keyToSlot(key: any): any
+	return if key == nil then NIL_KEY elseif key ~= key then NAN_KEY else key
+end
+
+local function slotToKey(slot: any): any
+	return if slot == NIL_KEY then nil elseif slot == NAN_KEY then 0 / 0 else slot
+end
+
 local function sweep(self: SelectorData)
 	local nodes = self._nodes
 	local count = 0
@@ -589,18 +651,21 @@ Reactively reads whether `key` matches the selector's source.
 [Open Documentation](https://flux.kohl.gg/guide/concepts/selectors#reading-a-selection)
 ]]
 function SelectorMT.get(self: SelectorData, key: any): boolean
+	if self._watcher == nil then
+		error("Cannot read a destroyed selector", 2)
+	end
 	if isStale(self._watcher) then
 		raw(self._watcher)
 	end
 	local nodes = self._nodes
-	local slot = if key ~= key then NAN_KEY else key
+	local slot = keyToSlot(key)
 	local node = nodes[slot]
 	if node ~= nil then
 		return get(node :: Graph.Node<boolean>)
 	end
 
 	local equals = self._equals
-	local selected = if equals ~= nil then equals(self._active, key) else self._active == key
+	local selected = if equals ~= nil then equals(self._active, key) else self._active ~= UNSET and self._active == key
 	if not isReactive() then
 		return selected
 	end
@@ -659,17 +724,21 @@ local function selector<S, K>(source: S, equals: ((sourceValue: Graph.Unwrap<S>,
 
 		untrack()
 		if equals == nil then
-			local prevNode = if prev ~= nil and prev == prev then nodes[prev] else nil
-			if prevNode ~= nil then
-				set(prevNode, false)
+			if prev ~= UNSET and prev == prev then
+				local prevNode = nodes[keyToSlot(prev)]
+				if prevNode ~= nil then
+					set(prevNode, false)
+				end
 			end
-			local nextNode = if value ~= nil and value == value then nodes[value] else nil
-			if nextNode ~= nil then
-				set(nextNode, true)
+			if value == value then
+				local nextNode = nodes[keyToSlot(value)]
+				if nextNode ~= nil then
+					set(nextNode, true)
+				end
 			end
 		else
 			for key, node in nodes do
-				set(node, equals(value, if key == NAN_KEY then 0 / 0 else key))
+				set(node, equals(value, slotToKey(key)))
 			end
 		end
 		retrack()

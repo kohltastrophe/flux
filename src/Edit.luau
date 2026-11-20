@@ -7,21 +7,20 @@ local Type = require("./Type")
 local IS_ROBLOX = Compat.isRoblox
 local Color3 = Compat.Color3
 local Enum = Compat.Enum
+local Vector3 = Compat.Vector3
 local compatTypeof = Compat.typeof
 local task = Compat.task
 local warn = Compat.warn
 
 local dispose = Graph.dispose
 local get = Graph.Node.get
+local isolate = Graph.isolate
 local isNode = Graph.isNode
 local newNode: (init: any, equals: any?) -> Graph.Node<any> = Graph.new
 local effect = Graph.effect
 local getOwner = Graph.getOwner
 local cleanup = Graph.cleanup
 local bindContext = Graph.bindContext
-local untrack = Graph.untrack
-local withOwner = Graph.withOwner
-local NOOP = function() end
 
 local bindFrom = Bind.from
 local bindTo = Bind.to
@@ -41,72 +40,74 @@ local Flags = {
 	--[[
 	Controls whether [`Flux.new`](https://flux.kohl.gg/guide/roblox/creation#the-flux-new-function) applies the
 	per-class [`Flux.Defaults`](https://flux.kohl.gg/guide/roblox/defaults) table to new instances (`true` by default).
-	`AutoButtonColor = false` is still applied to `TextButton` and `ImageButton` even when `false`.
 
 	[Open Documentation](https://flux.kohl.gg/guide/roblox/defaults#disabling-defaults)
 	]]
 	defaults = true,
 }
 
-local WHITE = Color3.new(1, 1, 1)
-local BLACK = Color3.new(0, 0, 0)
+local Defaults: { [string]: { [string]: unknown } } = {}
+if Color3 ~= nil and Enum ~= nil and Vector3 ~= nil then
+	local WHITE = Color3.new(1, 1, 1)
+	local BLACK = Color3.new(0, 0, 0)
 
-local function guiBase(extra: { [string]: unknown }?): { [string]: unknown }
-	local t: { [string]: unknown } = {
-		BackgroundColor3 = WHITE,
-		BorderColor3 = BLACK,
-		BorderSizePixel = 0,
-	}
-	if extra then
-		for k, v in extra do
-			t[k] = v
+	local function guiBase(extra: { [string]: unknown }?): { [string]: unknown }
+		local t: { [string]: unknown } = {
+			BackgroundColor3 = WHITE,
+			BorderColor3 = BLACK,
+			BorderSizePixel = 0,
+		}
+		if extra then
+			for k, v in extra do
+				t[k] = v
+			end
 		end
+		return t
 	end
-	return t
-end
 
-local function textBase(extra: { [string]: unknown }?): { [string]: unknown }
-	local t = guiBase(extra)
-	t.Font = Enum.Font.SourceSans
-	t.Text = ""
-	t.TextColor3 = BLACK
-	return t
-end
+	local function textBase(extra: { [string]: unknown }?): { [string]: unknown }
+		local t = guiBase(extra)
+		t.Font = Enum.Font.SourceSans
+		t.Text = ""
+		t.TextColor3 = BLACK
+		return t
+	end
 
-local Defaults: { [string]: { [string]: unknown } } = {
-	Part = {
-		Material = Enum.Material.SmoothPlastic,
-		Size = vector.create(1, 1, 1),
-		Anchored = true,
-	},
-	BillboardGui = {
-		ResetOnSpawn = false,
-		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
-	},
-	ScreenGui = {
-		ResetOnSpawn = false,
-		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
-	},
-	SurfaceGui = {
-		ResetOnSpawn = false,
-		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
-		PixelsPerStud = 50,
-		SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud,
-	},
-	Frame = guiBase(),
-	ImageButton = guiBase(),
-	ImageLabel = guiBase(),
-	VideoFrame = guiBase(),
-	ViewportFrame = guiBase(),
-	ScrollingFrame = guiBase({ ScrollBarImageColor3 = BLACK }),
-	TextBox = textBase({ ClearTextOnFocus = false }),
-	TextButton = textBase(),
-	TextLabel = textBase(),
-	UIListLayout = { SortOrder = Enum.SortOrder.LayoutOrder },
-	UIGridLayout = { SortOrder = Enum.SortOrder.LayoutOrder },
-	UITableLayout = { SortOrder = Enum.SortOrder.LayoutOrder },
-	UIPageLayout = { SortOrder = Enum.SortOrder.LayoutOrder },
-}
+	Defaults = {
+		Part = {
+			Material = Enum.Material.SmoothPlastic,
+			Size = Vector3.new(1, 1, 1),
+			Anchored = true,
+		},
+		BillboardGui = {
+			ResetOnSpawn = false,
+			ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+		},
+		ScreenGui = {
+			ResetOnSpawn = false,
+			ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+		},
+		SurfaceGui = {
+			ResetOnSpawn = false,
+			ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+			PixelsPerStud = 50,
+			SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud,
+		},
+		Frame = guiBase(),
+		ImageButton = guiBase({ AutoButtonColor = false }),
+		ImageLabel = guiBase(),
+		VideoFrame = guiBase(),
+		ViewportFrame = guiBase(),
+		ScrollingFrame = guiBase({ ScrollBarImageColor3 = BLACK }),
+		TextBox = textBase({ ClearTextOnFocus = false }),
+		TextButton = textBase({ AutoButtonColor = false }),
+		TextLabel = textBase(),
+		UIListLayout = { SortOrder = Enum.SortOrder.LayoutOrder },
+		UIGridLayout = { SortOrder = Enum.SortOrder.LayoutOrder },
+		UITableLayout = { SortOrder = Enum.SortOrder.LayoutOrder },
+		UIPageLayout = { SortOrder = Enum.SortOrder.LayoutOrder },
+	}
+end
 
 -- Find ----------------------------------------------------------------------------------------------------------------
 
@@ -369,12 +370,43 @@ local function merge(...: any): any
 	return proxy
 end
 
-type MergeProps = <A, B, C, D>(a: A, b: B?, c: C?, d: D?) -> Type.MergeTables<A, B, C, D>
+type MergeProps = <A, B, C, D>(a: A & {}, b: (B & {})?, c: (C & {})?, d: (D & {})?) -> Type.MergeTables<A, B, C, D>
+
+local function clonePlainDefault(value: any, seen: { [any]: any }?): any
+	if type(value) ~= "table" or getmetatable(value) ~= nil or table.isfrozen(value) then
+		return value
+	end
+	if seen and seen[value] ~= nil then
+		return seen[value]
+	end
+	local copy = table.clone(value)
+	local nextSeen = seen
+	if nextSeen ~= nil then
+		nextSeen[value] = copy
+	end
+	for k, v in copy do
+		if type(v) == "table" and getmetatable(v) == nil and not table.isfrozen(v) then
+			if nextSeen == nil then
+				nextSeen = { [value] = copy }
+			end
+			copy[k] = clonePlainDefault(v, nextSeen)
+		end
+	end
+	return copy
+end
+
+local function isKeyList(group: { [any]: any }): boolean
+	local first = group[1]
+	if first == nil then
+		return false
+	end
+	return first ~= true and (type(first) ~= "table" or rawget(first, 1) ~= PROP_DEFAULT)
+end
 
 local function applySchemaDefaults(own: { [any]: any }, schema: { [any]: any })
 	for key, spec in schema do
 		if own[key] == nil and type(spec) == "table" and rawget(spec, 1) == PROP_DEFAULT then
-			own[key] = rawget(spec, 2)
+			own[key] = clonePlainDefault(rawget(spec, 2))
 		end
 	end
 end
@@ -383,7 +415,7 @@ local function split(props: any, keys: any, ...: any): ...any
 	if keys == nil and select("#", ...) == 0 then
 		if type(props) ~= "table" then
 			return {}
-		elseif getmetatable(props) == MergeMT then
+		elseif getmetatable(props) ~= nil then
 			local out: { [any]: any } = {}
 			for key, value in props do
 				out[key] = value
@@ -392,32 +424,33 @@ local function split(props: any, keys: any, ...: any): ...any
 		end
 		return table.clone(props)
 	elseif select("#", ...) == 0 then
+		if type(keys) ~= "table" then
+			return {}, split(props, nil)
+		end
 		local own = {}
 		local rest = {}
-		if type(keys) == "table" then
-			if keys[1] ~= nil then
-				if type(props) == "table" then
-					for _, key in keys do
-						local val = props[key]
-						if val ~= nil then
-							own[key] = val
-						end
-					end
-					for key, value in props do
-						if own[key] == nil then
-							rest[key] = value
-						end
+		if isKeyList(keys) then
+			if type(props) == "table" then
+				for _, key in keys do
+					local val = props[key]
+					if val ~= nil then
+						own[key] = val
 					end
 				end
-			else
-				if type(props) == "table" then
-					for key, value in props do
-						local target = if keys[key] ~= nil then own else rest
-						target[key] = value
+				for key, value in props do
+					if own[key] == nil then
+						rest[key] = value
 					end
 				end
-				applySchemaDefaults(own, keys)
 			end
+		else
+			if type(props) == "table" then
+				for key, value in props do
+					local target = if keys[key] ~= nil then own else rest
+					target[key] = value
+				end
+			end
+			applySchemaDefaults(own, keys)
 		end
 		return own, rest
 	end
@@ -425,12 +458,19 @@ local function split(props: any, keys: any, ...: any): ...any
 	local groups = table.pack(keys, ...)
 	local count = groups.n
 	local owners: { [any]: number } = {}
+	local isSchemaGroup: { [number]: boolean } = {}
 	local results: any = {}
 
 	for index = 1, count do
 		results[index] = {}
 		local group = groups[index]
-		if group[1] ~= nil then
+		if type(group) ~= "table" then
+			isSchemaGroup[index] = false
+			continue
+		end
+		local keyList = isKeyList(group)
+		isSchemaGroup[index] = not keyList
+		if keyList then
 			for _, key in group do
 				if owners[key] == nil then
 					owners[key] = index
@@ -456,8 +496,8 @@ local function split(props: any, keys: any, ...: any): ...any
 	end
 
 	for index = 1, count do
-		local group = groups[index]
-		if group[1] == nil then
+		if isSchemaGroup[index] then
+			local group = groups[index]
 			local target = results[index]
 			for key, spec in group do
 				if
@@ -466,7 +506,7 @@ local function split(props: any, keys: any, ...: any): ...any
 					and type(spec) == "table"
 					and rawget(spec, 1) == PROP_DEFAULT
 				then
-					target[key] = rawget(spec, 2)
+					target[key] = clonePlainDefault(rawget(spec, 2))
 				end
 			end
 		end
@@ -476,7 +516,7 @@ local function split(props: any, keys: any, ...: any): ...any
 end
 
 type Split =
-	(<T>(props: T) -> Type.NonNil<T>)
+	(<T>(props: T) -> Type.CloneProps<T>)
 	& (<T, G>(props: T, keys: G) -> (Pick<T, G>, Omit<T, G>))
 	& (<T>(props: T, first: { [any]: any }, second: { [any]: any }, ...{ [any]: any }) -> ...Partial<T>)
 
@@ -495,7 +535,7 @@ local function prop(...: any): any
 	return table.freeze({ PROP_DEFAULT, default })
 end
 
-type Own = <A, B, C, D>(a: A, b: B?, c: C?, d: D?) -> Type.MergeOwn<A, B, C, D>
+type Own = <A, B, C, D>(a: (A & {})?, b: (B & {})?, c: (C & {})?, d: (D & {})?) -> Type.MergeOwn<A, B, C, D>
 
 local function own(...: { [string]: any }): any
 	local schema = {}
@@ -524,6 +564,14 @@ end
 
 local tagCounts: { [Instance]: { [string]: number } } = setmetatable({}, { __mode = "k" })
 
+local function rawAddTag(instance: Instance, tag: string)
+	instance:AddTag(tag)
+end
+
+local function rawRemoveTag(instance: Instance, tag: string)
+	instance:RemoveTag(tag)
+end
+
 local function addTagRef(instance: Instance, tag: string)
 	local counts = tagCounts[instance]
 	if not counts then
@@ -533,27 +581,49 @@ local function addTagRef(instance: Instance, tag: string)
 	local count = counts[tag]
 	counts[tag] = (count or 0) + 1
 	if not count then
-		instance:AddTag(tag)
+		isolate(rawAddTag, instance, tag)
 	end
 end
 
-local function removeTagRef(instance: Instance, tag: string)
+local function decrementTagRef(instance: Instance, tag: string): boolean
 	local counts = tagCounts[instance]
 	local count = if counts then counts[tag] else nil
 	if count and count > 1 then
 		counts[tag] = count - 1
-	else
-		if counts then
-			counts[tag] = nil
-		end
-		instance:RemoveTag(tag)
+		return false
 	end
+	if counts then
+		counts[tag] = nil
+		if next(counts) == nil then
+			tagCounts[instance] = nil
+		end
+	end
+	return true
+end
+
+local function removeTagRef(instance: Instance, tag: string)
+	if decrementTagRef(instance, tag) then
+		isolate(rawRemoveTag, instance, tag)
+	end
+end
+
+local function releaseTagRefOnly(instance: Instance, tag: string)
+	decrementTagRef(instance, tag)
 end
 
 local function bindTag(instance: Instance, tagValue: any, _CLEAN: { any })
 	if type(tagValue) == "string" then
 		addTagRef(instance, tagValue)
+		local released = false
+		table.insert(_CLEAN, function()
+			if not released then
+				released = true
+				releaseTagRefOnly(instance, tagValue)
+			end
+		end)
 		return
+	elseif isModel(tagValue) then
+		error("__TAG does not accept Flux.model; use _tag_Name = Flux.model(node) for a two-way tag", 0)
 	elseif type(tagValue) == "function" then
 		tagValue = newNode(tagValue)
 		table.insert(_CLEAN, tagValue)
@@ -562,8 +632,12 @@ local function bindTag(instance: Instance, tagValue: any, _CLEAN: { any })
 	if isNode(tagValue) then
 		local node = tagValue :: Graph.Node<any>
 		local currentSet: { [string]: boolean } = {}
+		local disposed = false
 
 		local function updateTags(newTag: string | { string })
+			if disposed then
+				return
+			end
 			local newSet: { [string]: boolean } = {}
 			if type(newTag) == "table" then
 				for _, tag in newTag do
@@ -592,6 +666,16 @@ local function bindTag(instance: Instance, tagValue: any, _CLEAN: { any })
 				updateTags(get(node))
 			end)
 		)
+		table.insert(_CLEAN, function()
+			if disposed then
+				return
+			end
+			disposed = true
+			for tag in currentSet do
+				releaseTagRefOnly(instance, tag)
+			end
+			table.clear(currentSet)
+		end)
 	elseif type(tagValue) == "table" then
 		for _, value in tagValue do
 			bindTag(instance, value, _CLEAN)
@@ -602,11 +686,11 @@ end
 local function stripUnmanagedTag(instance: Instance, tag: string)
 	local counts = tagCounts[instance]
 	if (not counts or not counts[tag]) and instance:HasTag(tag) then
-		instance:RemoveTag(tag)
+		isolate(rawRemoveTag, instance, tag)
 	end
 end
 
-local namedTagClaims: { [Instance]: { [string]: () -> () } } = setmetatable({}, { __mode = "k" })
+local namedTagClaims: { [Instance]: { [string]: (strip: boolean) -> () } } = setmetatable({}, { __mode = "k" })
 
 local function releaseNamedTag(instance: Instance, tag: string)
 	local claims = namedTagClaims[instance]
@@ -621,16 +705,30 @@ local function releaseNamedTag(instance: Instance, tag: string)
 	if next(claims) == nil then
 		namedTagClaims[instance] = nil
 	end
-	release()
+	release(true)
 end
 
-local function claimNamedTag(instance: Instance, tag: string, release: () -> ())
+local function cleanupNamedTag(instance: Instance, tag: string, release: (strip: boolean) -> ())
+	local claims = namedTagClaims[instance]
+	if claims and claims[tag] == release then
+		claims[tag] = nil
+		if next(claims) == nil then
+			namedTagClaims[instance] = nil
+		end
+		release(false)
+	end
+end
+
+local function claimNamedTag(instance: Instance, tag: string, release: (strip: boolean) -> (), _CLEAN: { any })
 	local claims = namedTagClaims[instance]
 	if not claims then
 		claims = {}
 		namedTagClaims[instance] = claims
 	end
 	claims[tag] = release
+	table.insert(_CLEAN, function()
+		cleanupNamedTag(instance, tag, release)
+	end)
 end
 
 local function bindNamedTag(instance: Instance, tag: string, tagValue: any, _CLEAN: { any })
@@ -648,10 +746,14 @@ local function bindNamedTag(instance: Instance, tag: string, tagValue: any, _CLE
 		local claims = namedTagClaims[instance]
 		local prevRelease = claims and claims[tag]
 		if prevRelease then
-			claims[tag] = function()
+			local wrappedRelease = function(strip: boolean)
 				disconnect()
-				prevRelease()
+				prevRelease(strip)
 			end
+			claims[tag] = wrappedRelease
+			table.insert(_CLEAN, function()
+				cleanupNamedTag(instance, tag, wrappedRelease)
+			end)
 		end
 		return
 	end
@@ -687,25 +789,33 @@ local function bindNamedTag(instance: Instance, tag: string, tagValue: any, _CLE
 			end
 		end)
 		table.insert(_CLEAN, eff)
-		claimNamedTag(instance, tag, function()
+		claimNamedTag(instance, tag, function(strip: boolean)
 			eff:Destroy()
 			if made then
 				made:Destroy()
 			end
 			if active then
 				active = false
-				removeTagRef(instance, tag)
+				if strip then
+					removeTagRef(instance, tag)
+				else
+					releaseTagRefOnly(instance, tag)
+				end
 			end
-		end)
+		end, _CLEAN)
 	elseif tagValue then
 		addTagRef(instance, tag)
 		local released = false
-		claimNamedTag(instance, tag, function()
+		claimNamedTag(instance, tag, function(strip: boolean)
 			if not released then
 				released = true
-				removeTagRef(instance, tag)
+				if strip then
+					removeTagRef(instance, tag)
+				else
+					releaseTagRefOnly(instance, tag)
+				end
 			end
-		end)
+		end, _CLEAN)
 	else
 		stripUnmanagedTag(instance, tag)
 	end
@@ -748,10 +858,10 @@ local function applyBindingOrValue(
 		end
 	elseif isAttribute then
 		releaseBinding(instance, name, true)
-		setAttribute(instance, name, value)
+		isolate(setAttribute, instance, name, value)
 	else
 		releaseBinding(instance, name, false)
-		setProperty(instance, name, value)
+		isolate(setProperty, instance, name, value)
 		if name == "LayoutOrder" then
 			Bind.pinOrder(instance)
 		end
@@ -898,17 +1008,18 @@ local function finalizeEdit(
 	seenAttrs: { [any]: boolean }?,
 	seenProps: { [any]: boolean }?,
 	_CLEAN: { any },
-	inheritedClean: { any }?,
-	order: number,
+	isRoot: boolean,
 	applyEdit: (
 		Instance,
 		Type.Map<any>,
 		{ [any]: boolean }?,
 		{ [any]: boolean }?,
 		{ any }?,
-		number?
-	) -> number
-): number
+		boolean?,
+		{ any }?
+	) -> any,
+	findEdit: (Instance, Type.Map<any>) -> Instance
+): any
 	if childKeys then
 		if #childKeys > 1 then
 			table.sort(childKeys)
@@ -916,17 +1027,24 @@ local function finalizeEdit(
 		for _, key in childKeys do
 			local child: any = properties[key]
 			if kindOf(child) == "Instance" then
-				order = Bind.applyLayoutOrder(child, order)
+				Bind.placeChildOrder(instance, child)
 				child.Parent = instance
+			elseif type(child) == "function" then
+				if actions == nil then
+					actions = {}
+				end
+				table.insert(actions :: { any }, child)
 			elseif isNode(child) then
-				table.insert(_CLEAN, Bind.children(child, instance, order))
-				order += 1
+				table.insert(_CLEAN, Bind.children(child, instance))
 			elseif Bind.isPortal(child) then
 				table.insert(_CLEAN, Bind.mountPortal(child))
 			elseif rawget(child, 1) == FIND_SYMBOL then
-				resolveFind(child, instance, applyEdit)
+				resolveFind(child, instance, findEdit)
 			else
-				order = applyEdit(instance, child, seenAttrs, seenProps, _CLEAN, order)
+				local nestedParent = applyEdit(instance, child, seenAttrs, seenProps, _CLEAN, false, actions)
+				if parent == nil and nestedParent ~= nil then
+					parent = nestedParent
+				end
 			end
 		end
 	end
@@ -944,17 +1062,15 @@ local function finalizeEdit(
 		end
 	end
 
-	if actions then
-		for _, action in actions do
-			task.defer(bindContext(action), instance)
-		end
-	end
-
 	if signals then
 		for index = 1, #signals, 2 do
 			local connected: any = signals[index]:Connect(bindContext(signals[index + 1]))
 			table.insert(_CLEAN, connected)
 		end
+	end
+
+	if not isRoot then
+		return parent
 	end
 
 	local madeParent = nil
@@ -964,9 +1080,12 @@ local function finalizeEdit(
 		table.insert(_CLEAN, parent)
 	end
 	local parentIsNode = isNode(parent)
+	local hasActions = actions ~= nil and #actions > 0
+	local cleaned = false
 
-	if not inheritedClean and (parentIsNode or next(_CLEAN) ~= nil) then
+	if parentIsNode or next(_CLEAN) ~= nil or hasActions then
 		local function cleanAll()
+			cleaned = true
 			dispose(_CLEAN)
 			table.clear(_CLEAN)
 		end
@@ -984,22 +1103,35 @@ local function finalizeEdit(
 			end
 		else
 			releaseBinding(instance, "Parent", false)
-			instance.Parent = parent
+			isolate(setProperty, instance, "Parent", parent)
 		end
 	end
 
-	return order
+	if hasActions and actions ~= nil and not cleaned then
+		for _, action in actions do
+			table.insert(_CLEAN, task.defer(bindContext(action), instance))
+		end
+	end
+
+	return nil
 end
 
-local function ensureFlattenSeen(properties: Type.Map<any>): ({ [any]: boolean }, { [any]: boolean })
-	local nextAttrs: { [any]: boolean } = {}
+local function ensureFlattenSeen(
+	properties: Type.Map<any>,
+	existingAttrs: { [any]: boolean }?,
+	existingProps: { [any]: boolean }?
+): ({ [any]: boolean }, { [any]: boolean })
+	if existingAttrs and existingProps then
+		return existingAttrs, existingProps
+	end
+	local nextAttrs: { [any]: boolean } = existingAttrs or {}
 	local _ATTR = properties.__ATTR
 	if _ATTR then
 		for attrName in _ATTR do
 			nextAttrs[attrName] = true
 		end
 	end
-	local nextProps: { [any]: boolean } = {}
+	local nextProps: { [any]: boolean } = existingProps or {}
 	for key in properties do
 		if type(key) ~= "number" then
 			nextProps[key] = true
@@ -1011,25 +1143,28 @@ local function ensureFlattenSeen(properties: Type.Map<any>): ({ [any]: boolean }
 	return nextAttrs, nextProps
 end
 
+local editInstance: (instance: Instance, properties: Type.Map<any>) -> Instance
+
 local function edit(
 	instance: Instance,
 	properties: Type.Map<any>,
 	seenAttrs: { [any]: boolean }?,
 	seenProps: { [any]: boolean }?,
-	inheritedClean: { any }?,
-	startOrder: number?
-): number
-	local actions: { any }? = nil
+	_CLEAN: { any },
+	isRoot: boolean,
+	actions: { any }?
+): any
 	local signals: { any }? = nil
 	local childKeys: { number }? = nil
 	local hasFlatten = false
-	local order = startOrder or 1
 	local rawInstance: any = instance
 	local applyEdit: any = edit
 	local _USER_CLEAN = properties.__CLEAN
-	local _CLEAN = inheritedClean or {}
 	if _USER_CLEAN ~= nil then
 		table.insert(_CLEAN, _USER_CLEAN)
+	end
+	if properties.__ATTR ~= nil and seenAttrs == nil then
+		seenAttrs = {}
 	end
 	local parent = properties.Parent
 	if parent and seenProps then
@@ -1057,12 +1192,9 @@ local function edit(
 				continue
 			end
 		elseif propType == "number" and property == math.floor(property) then
-			if kindOf(value) == "Instance" then
+			if kindOf(value) == "Instance" or type(value) == "function" then
 				childKeys = childKeys or {}
 				table.insert(childKeys :: { number }, property)
-			elseif type(value) == "function" then
-				actions = actions or {}
-				table.insert(actions :: { any }, value)
 			elseif type(value) == "table" then
 				if not isModel(value) then
 					if rawget(value, 1) ~= FIND_SYMBOL and not Bind.isPortal(value) and not isNode(value) then
@@ -1086,8 +1218,11 @@ local function edit(
 		applyBindingOrValue(instance, property, value, false, seenProps, _CLEAN)
 	end
 	applyDirectives(instance, properties, seenAttrs, _CLEAN)
-	if hasFlatten and not seenAttrs then
-		seenAttrs, seenProps = ensureFlattenSeen(properties)
+	if hasFlatten then
+		seenAttrs, seenProps = ensureFlattenSeen(properties, seenAttrs, seenProps)
+		if isRoot and actions == nil then
+			actions = {}
+		end
 	end
 	return finalizeEdit(
 		instance,
@@ -1099,21 +1234,25 @@ local function edit(
 		seenAttrs,
 		seenProps,
 		_CLEAN,
-		inheritedClean,
-		order,
-		applyEdit
+		isRoot,
+		applyEdit,
+		editInstance
 	)
 end
 
-local function editInstance(instance: Instance, properties: Type.Map<any>): Instance
-	edit(instance, properties)
+function editInstance(instance: Instance, properties: Type.Map<any>): Instance
+	Compat.requireRoblox("Flux.edit")
+	local clean = {}
+	local ok, err = (pcall :: (any) -> (boolean, any))(function()
+		edit(instance, properties, nil, nil, clean, true, nil)
+	end)
+	if not ok then
+		dispose(clean)
+		table.clear(clean)
+		error(err, 0)
+	end
 	return instance
 end
-
-local ALWAYS: { [string]: { [string]: unknown } } = {
-	TextButton = { AutoButtonColor = false },
-	ImageButton = { AutoButtonColor = false },
-}
 
 local function assign(instance: Instance, values: { [string]: unknown }?)
 	if values then
@@ -1125,19 +1264,21 @@ local function assign(instance: Instance, values: { [string]: unknown }?)
 end
 
 local function new(className: string, properties: any): Instance
+	Compat.requireRoblox("Flux.new")
 	local instance = Compat.Instance.new(className)
-	assign(instance, ALWAYS[className])
 	assign(instance, if Flags.defaults then Defaults[className] else nil)
+	local ok, res = pcall(editInstance, instance, properties)
+	if not ok then
+		instance:Destroy()
+		error(res, 0)
+	end
 	if getOwner() then
 		cleanup(instance)
 	end
-	return editInstance(instance, properties)
+	return res
 end
 
-type MountedPortal = {
-	spec: any,
-	stop: () -> (),
-}
+local EMPTY_PORTALS: { any } = table.freeze({} :: { any })
 
 local function collectMountedPortals(item: any, into: { any })
 	while isNode(item) do
@@ -1160,59 +1301,25 @@ local function mountTopPortals(item: any)
 	elseif Bind.isPortal(item) then
 		cleanup(Bind.mountPortal(item))
 	elseif isNode(item) then
-		local active: { MountedPortal } = {}
+		local portalData: { portals: any?, nextPortals: any? } = {}
 		local stopped = false
 		local function stopAll()
 			if stopped then
 				return
 			end
 			stopped = true
-			for _, entry in active do
-				entry.stop()
-			end
-			table.clear(active)
+			Bind.syncPortals(portalData, EMPTY_PORTALS, 0)
 		end
 		cleanup(stopAll)
-		effect(function()
+		local eff = effect(function()
 			if stopped then
 				return
 			end
 			local desired: { any } = {}
 			collectMountedPortals(item, desired)
-			local nextActive: { MountedPortal } = {}
-			for i = 1, #desired do
-				local spec = desired[i]
-				local matched: MountedPortal? = nil
-				for j = 1, #active do
-					local oldEntry = active[j]
-					if oldEntry and oldEntry.spec == spec then
-						matched = oldEntry
-						active[j] = false :: any
-						break
-					end
-				end
-				nextActive[i] = matched or { spec = spec, stop = NOOP }
-			end
-			for j = 1, #active do
-				local oldEntry = active[j]
-				if oldEntry then
-					oldEntry.stop()
-				end
-			end
-			table.clear(active)
-			active = nextActive
-			for i = 1, #active do
-				local entry = active[i]
-				if entry.stop == NOOP then
-					local spec = entry.spec
-					entry.stop = withOwner(nil, function()
-						return untrack(function()
-							return Bind.mountPortal(spec)
-						end)
-					end)
-				end
-			end
+			Bind.syncPortals(portalData, desired, #desired)
 		end)
+		eff:peek()
 	elseif type(item) == "table" and kindOf(item) ~= "Instance" then
 		for _, child in item do
 			mountTopPortals(child)
@@ -1302,7 +1409,8 @@ return table.freeze({
 	]]
 	own = own :: Own,
 	--[[
-	Returns a read-only live view merging 1-4 prop tables left-to-right where the rightmost non-`nil` value wins.
+	Returns a shallow read-only live view merging 1-4 prop tables left-to-right where the rightmost non-`nil` value wins
+	per key. Nest `{ base, rest }` arrays or chain `Flux.edit` to combine children and directives instead.
 
 	[Open Documentation](https://flux.kohl.gg/guide/concepts/components#merging-props-with-flux-merge)
 	]]
