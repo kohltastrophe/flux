@@ -2801,3 +2801,316 @@ test(
 		outerDep:Destroy()
 	end
 )
+
+test("presence · rapid hide/show race keeps remounted branch alive and ignores stale done", function()
+	local cond = Flux.signal(true)
+	local staleDone: (() -> ())? = nil
+	local activeExit: any = nil
+	local mounts = 0
+	local unmounts = 0
+
+	local p = Flux.presence(cond, function(exiting, done)
+		mounts += 1
+		local id = mounts
+		staleDone = done
+		activeExit = exiting
+		Flux.cleanup(function()
+			unmounts += 1
+		end)
+		return `branch-{id}`
+	end)
+	flush()
+	expect(p() == "branch-1" and mounts == 1 and unmounts == 0, "initially mounted")
+
+	-- Hide and finish exiting
+	cond:set(false)
+	flush()
+	expect(activeExit:get() == true, "entering exit state")
+	local done1 = staleDone :: () -> ()
+	done1()
+	flush()
+	expect(p() == nil and unmounts == 1, "done unmounts first branch")
+
+	-- Remount new branch; calling stale done1 from branch-1 must not close branch-2
+	cond:set(true)
+	flush()
+	expect(p() == "branch-2" and mounts == 2 and activeExit:get() == false, "remounted second branch")
+	local done2 = staleDone :: () -> ()
+	done1()
+	flush()
+	expect(p() == "branch-2" and unmounts == 1, "stale done ignored on active branch-2")
+
+	-- Rapid hide -> stale done1 must not finish branch-2's exit, then show cancels exit, then hide -> done2 closes it
+	cond:set(false)
+	flush()
+	done1()
+	flush()
+	expect(
+		p() == "branch-2" and activeExit:get() == true and unmounts == 1,
+		"stale done ignored during exit of branch-2"
+	)
+
+	cond:set(true)
+	flush()
+	expect(p() == "branch-2" and activeExit:get() == false, "re-showing before done cancels exit")
+	done2() -- done2 while not exiting is a no-op
+	flush()
+	expect(p() == "branch-2" and unmounts == 1, "done while not exiting is ignored")
+
+	cond:set(false)
+	flush()
+	done2()
+	flush()
+	expect(p() == nil and unmounts == 2, "matching done unmounts branch-2")
+	p:Destroy()
+	cond:Destroy()
+end)
+
+test("conditional & mapper · mid-build destruction and selector NaN/destroy edge cases", function()
+	-- 1. show: destroy output inside previous branch cleanup during switch (hits L107-108)
+	local s1 = Flux.signal(1)
+	local out1: any = nil
+	out1 = Flux.showKeyed(s1, function(v)
+		local cur = v()
+		if cur == 1 then
+			Flux.cleanup(function()
+				out1:Destroy()
+			end)
+		end
+		return `v-{cur}`
+	end)
+	flush()
+	s1:set(2)
+	flush()
+	expect(out1() == nil, "destroying show during previous branch cleanup cleanly aborts")
+	s1:Destroy()
+
+	-- 2. show & presence: destroy output synchronously inside factory (hits show L116-120 & presence L227-232)
+	local s2 = Flux.signal(true)
+	local out2: any = nil
+	out2 = Flux.show(s2, function()
+		Flux.cleanup(function() end)
+		out2:Destroy()
+		return "unreachable"
+	end)
+	flush()
+	expect(out2() == nil, "destroying show inside factory cleans up mounted branch")
+	s2:Destroy()
+
+	local pCond = Flux.signal(true)
+	local pOut: any = nil
+	pOut = Flux.presence(pCond, function()
+		Flux.cleanup(function() end)
+		pOut:Destroy()
+		return "unreachable"
+	end)
+	flush()
+	expect(pOut() == nil, "destroying presence inside component cleans up mounted branch")
+	pCond:Destroy()
+
+	-- 3. forValue / forKey: destroy mapper output mid-iteration and inside empty fallback (hits L420-421, L479-488, L521-528)
+	local listSig = Flux.signal({ "first", "second" })
+	local mapOut: any = nil
+	local rowCleanups = 0
+	mapOut = Flux.forKey(listSig, function(v)
+		return v
+	end, function(_idx, item)
+		local cur = item:peek()
+		Flux.cleanup(function()
+			rowCleanups += 1
+		end)
+		if cur == "first" then
+			mapOut:Destroy()
+		end
+		return cur
+	end)
+	mapOut()
+	expect(rowCleanups == 1, "row cleanup runs when forKey destroyed mid-loop")
+	listSig:Destroy()
+
+	local emptySig = Flux.signal({})
+	local emptyOut: any = nil
+	local emptyCleanups = 0
+	emptyOut = Flux.forIndex(emptySig, function(_idx, v)
+		return v
+	end, function()
+		Flux.cleanup(function()
+			emptyCleanups += 1
+		end)
+		emptyOut:Destroy()
+		return "empty"
+	end)
+	emptyOut()
+	expect(emptyCleanups == 1, "empty fallback cleanup runs when mapper destroyed in fallback")
+	emptySig:Destroy()
+
+	-- 4. forValue nil yielded by custom iterator warns and skips cleanly (hits L439-440)
+	local customIter = setmetatable({}, {
+		__iter = function()
+			local i = 0
+			return function()
+				i += 1
+				if i == 1 then
+					return 1, nil
+				elseif i == 2 then
+					return 2, "ok"
+				end
+				return nil
+			end
+		end,
+	})
+	local nilIterSig = Flux.signal(customIter)
+	local nilMapped: any = nil
+	local warned = env.warnings(function()
+		nilMapped = Flux.forValue(nilIterSig, function(_idx, val)
+			return val
+		end)
+		nilMapped()
+	end)
+	local resNil = nilMapped()
+	expect(#warned == 1 and resNil[1] == nil and resNil[2] == "ok", "forValue skips yielded nil items")
+	nilMapped:Destroy()
+	nilIterSig:Destroy()
+
+	-- 5. selector with NaN under default vs custom equals, plus destroyed selector error
+	local nanSig = Flux.signal(0 / 0)
+	local selDefault = Flux.selector(nanSig)
+	local selNanEq = Flux.selector(nanSig, function(a, b)
+		return (a ~= a and b ~= b) or a == b
+	end)
+	local defMatch = Flux.computed(function()
+		return selDefault:get(0 / 0)
+	end)
+	local eqMatch = Flux.computed(function()
+		return selNanEq:get(0 / 0)
+	end)
+	flush()
+	expect(defMatch() == false, "default selector does not match NaN")
+	expect(eqMatch() == true, "custom equals selector can match NaN")
+	nanSig:set(1)
+	flush()
+	expect(eqMatch() == false, "leaving NaN clears match")
+	nanSig:set(0 / 0)
+	flush()
+	expect(defMatch() == false and eqMatch() == true, "returning to NaN updates selectors cleanly")
+	selDefault:Destroy()
+	local okErr = pcall(function()
+		selDefault:get(1)
+	end)
+	expect(not okErr, "reading destroyed selector errors")
+	defMatch:Destroy()
+	eqMatch:Destroy()
+	selNanEq:Destroy()
+	nanSig:Destroy()
+end)
+
+test(
+	"conditional · presence/mapper error recovery, tracking restoration, and late destroyed presence done()",
+	function()
+		-- 1. Throwing presence branch cleans up exit node and restores outer effect tracking via retrack()
+		local visible = Flux.signal(true)
+		local trackedAfter = Flux.signal(1)
+		local afterCount = 0
+		local presNode = Flux.presence(visible, function()
+			error("presence mount failure")
+		end)
+		local warns = env.warnings(flush)
+		expect(#warns == 1, "throwing presence branch warns once")
+
+		-- Also test late done() after destroying presence while exiting
+		local vis2 = Flux.signal(true)
+		local savedDone: (() -> ())? = nil
+		local pres2 = Flux.presence(vis2, function(_exiting, done)
+			savedDone = done
+			return "alive"
+		end)
+		flush()
+		expect(pres2() == "alive")
+		vis2:set(false)
+		flush()
+		pres2:Destroy()
+		if savedDone ~= nil then
+			savedDone() -- late done() after destroy is a safe no-op
+		end
+		expect(presNode:peek() == nil, "destroyed/errored presence stays nil")
+		local probeEff = Flux.effect(function()
+			local _ = trackedAfter()
+			afterCount += 1
+		end)
+		flush()
+		trackedAfter:set(2)
+		flush()
+		expect(afterCount == 2, "tracking state restored cleanly after throwing presence")
+		probeEff:Destroy()
+		trackedAfter:Destroy()
+		presNode:Destroy()
+		visible:Destroy()
+		vis2:Destroy()
+
+		-- 2. Throwing mapper callback in forValue / forIndex / forKey cleans partial rows & recovers tracking
+		local items = Flux.signal({ "ok", "boom" })
+		local cleanups = 0
+		for idx, makeMapper in
+			{
+				function()
+					return Flux.forValue(items, function(_i, v)
+						Flux.cleanup(function()
+							cleanups += 1
+						end)
+						if v == "boom" then
+							error("forValue fail")
+						end
+						return v
+					end)
+				end,
+				function()
+					return Flux.forIndex(items, function(_i, v)
+						Flux.cleanup(function()
+							cleanups += 1
+						end)
+						if Flux.read(v) == "boom" then
+							error("forIndex fail")
+						end
+						return v
+					end)
+				end,
+				function()
+					return Flux.forKey(items, function(v)
+						return v
+					end, function(_i, v)
+						Flux.cleanup(function()
+							cleanups += 1
+						end)
+						if Flux.read(v) == "boom" then
+							error("forKey fail")
+						end
+						return v
+					end)
+				end,
+			}
+		do
+			local prevCleanups = cleanups
+			local out: any = makeMapper()
+			local okRun = pcall(function()
+				out()
+			end)
+			expect(
+				not okRun and cleanups > prevCleanups,
+				`mapper #{idx} failure propagates error and disposes partial rows`
+			)
+			out:Destroy()
+		end
+		local afterMap = Flux.signal(1)
+		local afterSeen = 0
+		local afterEff = Flux.effect(function()
+			afterSeen = afterMap()
+		end)
+		flush()
+		afterMap:set(9)
+		flush()
+		expect(afterSeen == 9, "tracking remains intact after throwing mappers")
+		afterEff:Destroy()
+		afterMap:Destroy()
+		items:Destroy()
+	end
+)
