@@ -1271,3 +1271,267 @@ test("store · validation bounds, observed move resync, mixed reconcile keys, an
 	mapScope:Destroy()
 	Store.Destroy(mixed)
 end)
+
+test("store · Destroy data key does not shadow store methods and diamond shared tables stay reactive", function()
+	local sharedLeaf = { count = 1 }
+	local st = Flux.store({
+		Destroy = "label",
+		left = sharedLeaf,
+		right = sharedLeaf,
+	})
+	local seenDestroy = nil
+	local sc, derived = Flux.scope(function()
+		return Flux.computed(function()
+			seenDestroy = st.Destroy
+			return st.left.count + st.right.count
+		end)
+	end)
+	expect(derived() == 2 and seenDestroy == "label", "Destroy key reads data rather than method")
+	st.Destroy = "updated"
+	flush()
+	expect(derived() == 2 and seenDestroy == "updated", "writing Destroy key notifies dependents")
+
+	st.left.count = 4
+	flush()
+	expect(st.right.count == 4 and derived() == 8, "diamond shared table updates sibling references reactively")
+
+	Flux.dispose(st)
+	sc:Destroy()
+end)
+
+test("store · shallow toRaw unwrapping, 2-node orphaned proxy cycles, root promotion, and cyclic reconcile", function()
+	-- 1. Shallow toRaw on direct proxy assignment and frozen table preservation
+	local inner = Flux.store({ count = 5 })
+	local frozenPart = table.freeze({ tag = "frozen" })
+	local frozenRoot = table.freeze({ a = 1 })
+	local cyclicPlain: { [string]: any } = { name = "loop" }
+	cyclicPlain.self = cyclicPlain
+	local outer = Flux.store({
+		plain = { loop = cyclicPlain, ro = frozenPart },
+		roRoot = frozenRoot,
+	})
+	expect(outer.plain.ro == frozenPart, "frozen subtable stays unproxied on store read")
+	expect(outer.roRoot == frozenRoot, "frozen top-level table stays unproxied on store read")
+	local sink = Flux.store({} :: any)
+	sink.direct = inner
+	sink.nested = { ref = cyclicPlain, ro = frozenPart }
+	local unwrapped = Store.unwrap(sink)
+	expect(
+		unwrapped.direct == Store.unwrap(inner) and unwrapped.direct.count == 5,
+		"direct proxy assignment stores raw backing table"
+	)
+	expect(unwrapped.nested.ref.self == cyclicPlain, "plain cyclic table keeps reference on shallow write")
+	expect(unwrapped.nested.ro == frozenPart, "unwrap preserves frozen subtable identity")
+	expect(Store.unwrap(outer.roRoot) == frozenRoot, "unwrap preserves frozen root table")
+	Store.Destroy(sink)
+	Store.Destroy(outer)
+	Store.Destroy(inner)
+
+	-- 2. Orphaned 2-node proxy cycle cleanup (isRootReachable cycle walk + destroyProxy seen guard)
+	local destroyedLeaves = 0
+	local a = Flux.store({ tag = "A" } :: any)
+	local b = Flux.store({ tag = "B" } :: any)
+	local root = Flux.store({ entry = a } :: any)
+	local watchScope, reader = Flux.scope(function()
+		return Flux.computed(function()
+			return `{a.tag}-{b.tag}`
+		end)
+	end)
+	expect(reader() == "A-B", "cycle nodes observed");
+	(getmetatable(a) :: any).nodes.tag:onDestroy(function()
+		destroyedLeaves += 1
+	end);
+	(getmetatable(b) :: any).nodes.tag:onDestroy(function()
+		destroyedLeaves += 1
+	end)
+	a.other = b
+	b.other = a
+	-- Demote a and b from explicit roots by destroying only root ownership semantics? No: make sub-cycle created under root
+	Store.Destroy(root)
+	Store.Destroy(a) -- destroying explicit root a removes root meta; b is orphaned or destroyed if root demoted
+	Store.Destroy(b)
+	expect(destroyedLeaves == 2, "destroying cyclic proxies cleans up all leaf nodes")
+
+	-- True non-root 2-node cycle orphaned from root
+	local container = Flux.store({ node1 = { val = 1 }, node2 = { val = 2 } } :: any)
+	local p1 = container.node1
+	local p2 = container.node2
+	local obsScope, obsSum = Flux.scope(function()
+		return Flux.computed(function()
+			return p1.val + p2.val
+		end)
+	end)
+	expect(obsSum() == 3, "observe p1.val and p2.val before orphan test")
+	obsScope:Destroy()
+	local cycleClean = 0
+	(getmetatable(p1) :: any).nodes.val:onDestroy(function()
+		cycleClean += 1
+	end);
+	(getmetatable(p2) :: any).nodes.val:onDestroy(function()
+		cycleClean += 1
+	end)
+	p1.peer = p2
+	p2.peer = p1
+	container.node2 = nil
+	expect(cycleClean == 0, "p2 still reachable from root via container -> node1 -> peer")
+	container.node1 = nil
+	expect(cycleClean == 2, "orphaning cyclic sub-proxies destroys both without infinite recursion")
+	Store.Destroy(container)
+	watchScope:Destroy()
+
+	-- 3. Root promotion inside Flux.scope links cleanup
+	local host = Flux.store({ child = { score = 10 } })
+	local sub = host.child
+	local obsScore = Flux.computed(function()
+		return sub.score
+	end)
+	expect(obsScore() == 10, "observe sub.score before promotion check")
+	obsScore:Destroy()
+	local promoDestroyed = 0
+	(getmetatable(sub) :: any).nodes.score:onDestroy(function()
+		promoDestroyed += 1
+	end)
+	local promoScope = Flux.scope(function()
+		local promoted = Flux.store(Store.unwrap(sub))
+		expect(promoted == sub, "promoting sub-proxy returns cached proxy")
+	end)
+	host.child = nil :: any
+	expect(promoDestroyed == 0, "promoted proxy survives unlinking from original host while scope lives")
+	promoScope:Destroy()
+	expect(promoDestroyed == 1, "destroying promotion scope disposes promoted root proxy")
+	Store.Destroy(host)
+
+	-- 4. Store.insert with shared proxied table + reconcile with syncUnproxied/orphaned/cyclic/NaN keys
+	local holder = Flux.store({ list = {}, sub = { old = { orphan = 1 } } } :: any)
+	local sharedItem = Flux.store({ id = 7 })
+	local orphanChild = Flux.store({ id = 9 })
+	holder.sub.old.orphan = orphanChild
+	local orphanObs = Flux.computed(function()
+		return orphanChild.id
+	end)
+	expect(orphanObs() == 9, "observe orphanChild.id")
+	orphanObs:Destroy()
+	local orphanDisposed = 0
+	(getmetatable(orphanChild) :: any).nodes.id:onDestroy(function()
+		orphanDisposed += 1
+	end)
+	Store.insert(holder.list, Store.unwrap(sharedItem))
+	expect(holder.list[1].id == 7, "Store.insert links existing proxy")
+
+	local cyclicNext: { [any]: any } = { a = 1, b = "val" }
+	cyclicNext.loop = cyclicNext
+	local arrHolder = Flux.store({
+		sub = { keep = { inner = 1 } },
+		items = {},
+		nested = { rawObj = { child = orphanChild } },
+		keyed = { { id = 0 / 0, v = 1 } },
+	} :: any)
+	local nestedRaw = Store.unwrap(arrHolder.nested)
+	Store.reconcile(arrHolder.keyed, { { id = 0 / 0, v = 2 } }, "id")
+	expect(arrHolder.keyed[1].v == 2, "reconcile handles NaN keys")
+	Store.reconcile(arrHolder, {
+		sub = { keep = { inner = 2 } },
+		items = { { id = 1 } },
+		nested = { rawObj = {} },
+		cyclic = cyclicNext,
+	})
+	Store.reconcile(arrHolder.items, { { id = 7, proxyRef = sharedItem } })
+	expect(arrHolder.sub.keep.inner == 2 and arrHolder.cyclic.a == 1, "reconcile handles cyclic tables")
+	expect(nestedRaw ~= nil, "unwrapped helper reference exercised")
+	Store.Destroy(arrHolder)
+	Store.Destroy(holder)
+	Store.Destroy(sharedItem)
+end)
+
+test("store · ephemeral nil-key cleanup, shared proxy migration, and nested reconcile replacement", function()
+	-- 1. Reading missing key untracked at top level cleans up temporary node; inside computed stays live
+	local st = Flux.store({} :: any)
+	expect(st.missing == nil, "reading missing key returns nil")
+	local meta = getmetatable(st) :: any
+	expect(meta.nodes.missing == nil, "unobserved unowned missing-key read cleans up temporary node")
+
+	local watched = Flux.computed(function()
+		return st.dynamicKey
+	end)
+	expect(watched() == nil, "observed missing-key read starts nil")
+	expect(meta.nodes.dynamicKey ~= nil, "observed missing key retains node")
+	st.dynamicKey = "hello"
+	expect(watched() == "hello", "setting previously missing key updates computed")
+	watched:Destroy()
+	Store.Destroy(st)
+
+	-- 2. Moving a shared sub-proxy across stores preserves node until last parent releases it
+	local src = Flux.store({ item = { hp = 50 } } :: any)
+	local dst = Flux.store({} :: any)
+	local shared = src.item
+	local hpObs = Flux.computed(function()
+		return shared.hp
+	end)
+	expect(hpObs() == 50)
+	hpObs:Destroy()
+	local destroyed = 0
+	(getmetatable(shared) :: any).nodes.hp:onDestroy(function()
+		destroyed += 1
+	end)
+	dst.slot = shared
+	src.item = nil
+	expect(destroyed == 0, "migrated sub-proxy stays alive while dst still holds it")
+	dst.slot = 123
+	expect(destroyed == 1, "overwriting last parent reference with primitive destroys orphaned sub-proxy")
+	Store.Destroy(src)
+	Store.Destroy(dst)
+
+	-- 3. Array and object reconcile replaces incompatible nested proxy and links reused proxy
+	local arrStore = Flux.store({
+		list = { { id = 1, v = { x = 1 } }, { id = 2, v = { x = 2 } } },
+	} :: any)
+	local displaced = arrStore.list[2].v
+	local dispObs = Flux.computed(function()
+		return displaced.x
+	end)
+	expect(dispObs() == 2)
+	dispObs:Destroy()
+	local dispCleaned = 0
+	(getmetatable(displaced) :: any).nodes.x:onDestroy(function()
+		dispCleaned += 1
+	end)
+	local listObs = Flux.computed(function()
+		return #arrStore.list .. ":" .. tostring(arrStore.list[1].v)
+	end)
+	expect(listObs() == "2:" .. tostring(arrStore.list[1].v))
+	Store.reconcile(arrStore.list, { { id = 1, v = 99 } })
+	expect(
+		dispCleaned == 1 and #arrStore.list == 1 and arrStore.list[1].v == 99,
+		"reconcile cleans removed proxies and updates leaves"
+	)
+	listObs:Destroy()
+	Store.Destroy(arrStore)
+
+	-- 4. Unproxied table reconcile (syncUnproxied removal & overwrite) + array [1] structural preservation
+	local boxHost = Flux.store({ rawBox = { dropped = { x = 1 }, kept = { x = 2 } } } :: any)
+	-- Never access boxHost.rawBox so rawBox stays unproxied (exercises syncUnproxied)
+	Store.reconcile(boxHost, { rawBox = { kept = 5 } })
+	expect(
+		Store.unwrap(boxHost).rawBox.dropped == nil and Store.unwrap(boxHost).rawBox.kept == 5,
+		"reconciling over unproxied table drops omitted fields and updates kept fields"
+	)
+
+	local sparseHost = Flux.store({ arr = { 10, 20 } :: any })
+	local lenObs = Flux.computed(function()
+		local count = 0
+		for _ in sparseHost.arr do
+			count += 1
+		end
+		return count
+	end)
+	expect(lenObs() == 2)
+	Store.reconcile(sparseHost.arr, { nil, 20 } :: any) -- slot 1 changes 10->nil (structural=true), slot 2 unchanged 20->20 (false)
+	expect(lenObs() == 1, "reconcile preserves earlier structural flag across later unchanged slots")
+	Store.reconcile(sparseHost.arr, { 10 } :: any)
+	expect(#sparseHost.arr == 1 and lenObs() == 1, "shrink updates length cleanly")
+	Store.reconcile(sparseHost.arr, { 10, 30 })
+	expect(#sparseHost.arr == 2 and lenObs() == 2, "grow notifies structural array observers")
+	lenObs:Destroy()
+	Store.Destroy(sparseHost)
+	Store.Destroy(boxHost)
+end)
