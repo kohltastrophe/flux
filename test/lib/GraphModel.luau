@@ -505,6 +505,7 @@ function Model.new(Flux: any, options: Options)
 	self.curOwner = nil
 	self.ctxVal = nil
 	self.stack = {}
+	self.pendingSafe = {}
 	self.flushing = false
 	self.dynamic = 0
 	self.tokens = {}
@@ -664,7 +665,26 @@ local function untrackedCause(rec: any): boolean
 	return false
 end
 
+function Model:flushSafe()
+	if #self.pendingSafe == 0 then
+		return
+	end
+	local pending = self.pendingSafe
+	self.pendingSafe = {}
+	for _, entry in pending do
+		local why = `{entry.rec.name}'s fallback`
+		for _, child in entry.children do
+			self:kill(child, why)
+		end
+		self:checkOrder(entry.rec, entry.children, entry.tokens, why)
+		for _, token in entry.tokens do
+			self:expectFired(token, false, entry.held, why)
+		end
+	end
+end
+
 function Model:kill(rec: any, why: string)
+	self:flushSafe()
 	if not rec.alive then
 		return
 	end
@@ -721,6 +741,7 @@ function Model:legitRun(rec: any): boolean
 end
 
 function Model:beginRun(rec: any)
+	self:flushSafe()
 	self.execs += 1
 	rec.burst += 1
 	rec.flushRuns = (rec.flushRuns or 0) + 1
@@ -764,6 +785,13 @@ end
 function Model:endRun(rec: any, ok: boolean, result: any)
 	local cur = rec.cur
 	if rec.kind == "safe" and not ok then
+		table.insert(self.pendingSafe, {
+			rec = rec,
+			children = rec.children,
+			tokens = rec.tokens,
+			held = rec.held,
+		})
+		rec.children, rec.tokens = {}, {}
 		ok, result = true, FALLBACK
 	end
 	if rec.kind == "effect" then
@@ -774,8 +802,9 @@ function Model:endRun(rec: any, ok: boolean, result: any)
 		local eq = if rec.eqMod then modEq else rawEq
 		if rec.lastOk ~= true or not eq(rec.held, result) then
 			self:changed(rec)
+			rec.held = result
 		end
-		rec.held, rec.lastOk = result, true
+		rec.lastOk = true
 	else
 		cur.err = result
 		self:changed(rec)
@@ -788,6 +817,7 @@ function Model:readIn(rec: any, target: any, mode: string): any
 	table.insert(stack, target)
 	local ok, value = pcall(READERS[mode], self.Flux, target.node)
 	table.remove(stack)
+	self:flushSafe()
 	local cur = rec.cur
 	if not ok then
 		cur.cause = { rec = target, tracked = TRACKED[mode] == true }
@@ -1083,6 +1113,7 @@ function Model:checkRead(rec: any, mode: string, memo: any)
 	table.insert(self.stack, rec)
 	local ok, value = pcall(READERS[mode], Flux, rec.node)
 	table.remove(self.stack)
+	self:flushSafe()
 	if memo and self.kills ~= kills then
 		table.clear(memo)
 	end
@@ -1110,6 +1141,7 @@ function Model:idle(where: string)
 	local message = env.idle(self.Flux, {
 		contexts = { { context = self.ctx, default = 0 } },
 	})
+	self:flushSafe()
 	if message then
 		self:fail(message)
 	end
@@ -1122,6 +1154,7 @@ function Model:quiescent(where: string)
 	self.flushing = true
 	local drained = env.drained(Flux)
 	self.flushing = false
+	self:flushSafe()
 	if drained then
 		self:fail(drained)
 	end
@@ -1281,6 +1314,7 @@ function Model:create(op: any, kind: string): any
 			end
 		elseif kind == "safe" then
 			rec.node = Flux.safe(fn, FALLBACK, eq)
+			self:flushSafe()
 		else
 			if op.solid and self.curOwner == nil then
 				rec.node = makeSolidMemoAdapter(Flux, fn, eq)
@@ -1412,6 +1446,7 @@ function Model:exec(op: any, depth: number)
 			Flux.flush()
 		end
 		self.flushing = wasFlushing
+		self:flushSafe()
 		local loop = self.loopRec
 		if loop and loop.alive and loop.flushRuns > 1 then
 			local limit = GraphModel.RERUN_LIMIT + 2
@@ -1459,6 +1494,7 @@ function Model:snapshot(): string
 				table.insert(self.stack, rec)
 				local ok, value = pcall(rec.node.peek, rec.node)
 				table.remove(self.stack)
+				self:flushSafe()
 				text ..= if ok then `={norm(value)}` else "=error"
 			elseif rec.kind == "effect" and rec.cur then
 				if rec.cur.ok then
@@ -1490,6 +1526,7 @@ function Model:teardown()
 	self.flushing = true
 	self.Flux.flush()
 	self.flushing = false
+	self:flushSafe()
 	for _, token in self.tokens do
 		if token.fired ~= 1 then
 			self:fail(`{token.name} ran {token.fired} times by the end, expected once`)
