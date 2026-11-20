@@ -931,3 +931,322 @@ test("layout · flex resolves unknown mode in static or reactive config with gro
 	modeSig:Destroy()
 	noGrowSig:Destroy()
 end)
+
+test("layout · reactive FlexConfig, nil reactive fallbacks, and sequence keypoint passthrough", function()
+	local ColorSequenceKeypoint = env.Compat.ColorSequenceKeypoint
+	local NumberSequenceKeypoint = env.Compat.NumberSequenceKeypoint
+
+	local modeSig = Flux.signal("custom" :: any)
+	local growSig = Flux.signal(3 :: any)
+	local shrinkSig = Flux.signal(1 :: any)
+	local cornerSig = Flux.signal(12 :: any)
+	local gapSig = Flux.signal(10 :: any)
+	local gridGapSig = Flux.signal(Vector2.new(8, 8) :: any)
+
+	local flexItem, cornerInst, listInst, gridInst, gradInst
+	local s = Flux.scope(function()
+		flexItem = Flux.flex({ mode = modeSig, grow = growSig, shrink = shrinkSig })
+		cornerInst = Flux.corner(cornerSig)
+		listInst = Flux.list({ gap = gapSig })
+		gridInst = Flux.grid({ gap = gridGapSig })
+		gradInst = Flux.gradient({
+			color = {
+				ColorSequenceKeypoint.new(0, Color3.new(1, 0, 0)),
+				ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)),
+			},
+			transparency = {
+				NumberSequenceKeypoint.new(0, 0),
+				NumberSequenceKeypoint.new(1, 0.5),
+			},
+		})
+	end)
+	flush()
+
+	expect(flexItem.FlexMode == Enum.UIFlexMode.Custom and flexItem.GrowRatio == 3, "reactive FlexConfig initializes")
+	modeSig:set("fill")
+	growSig:set(0)
+	shrinkSig:set(0)
+	flush()
+	expect(flexItem.FlexMode == Enum.UIFlexMode.Fill, "reactive FlexConfig mode updates")
+
+	cornerSig:set(nil)
+	gapSig:set(nil)
+	gridGapSig:set(nil)
+	flush()
+	expect(cornerInst.CornerRadius == UDim.new(0, 8), "reactive corner falls back to UDim(0, 8) on nil")
+	expect(listInst.Padding == UDim.new(), "reactive list gap falls back to zero UDim on nil")
+	expect(gridInst.CellPadding == UDim2.fromOffset(5, 5), "reactive grid gap falls back to (5,5) on nil")
+
+	expect(
+		#gradInst.Color.Keypoints == 2 and gradInst.Color.Keypoints[1].Value == Color3.new(1, 0, 0),
+		"gradient keeps ColorSequenceKeypoint array"
+	)
+	expect(
+		#gradInst.Transparency.Keypoints == 2 and gradInst.Transparency.Keypoints[2].Value == 0.5,
+		"gradient keeps NumberSequenceKeypoint array"
+	)
+
+	s:Destroy()
+	modeSig:Destroy()
+	growSig:Destroy()
+	shrinkSig:Destroy()
+	cornerSig:Destroy()
+	gapSig:Destroy()
+	gridGapSig:Destroy()
+end)
+
+test(
+	"layout · grid Q6 axis routing, corner fallbacks, stroke offset nil reset, and dynamic flex/gradient paths",
+	function()
+		-- 1. Q6: Layout.grid routes justify to fill axis and align to cross axis (static + reactive)
+		local gx = Flux.grid({
+			fill = "x",
+			justify = "end",
+			align = "start",
+		})
+		expect(
+			gx.HorizontalAlignment == Enum.HorizontalAlignment.Right
+				and gx.VerticalAlignment == Enum.VerticalAlignment.Top,
+			"grid fill='x' maps justify->HorizontalAlignment and align->VerticalAlignment"
+		)
+
+		local gy = Flux.grid({
+			fill = "y",
+			justify = "end",
+			align = "start",
+		})
+		expect(
+			gy.HorizontalAlignment == Enum.HorizontalAlignment.Left
+				and gy.VerticalAlignment == Enum.VerticalAlignment.Bottom,
+			"grid fill='y' maps justify->VerticalAlignment and align->HorizontalAlignment"
+		)
+
+		local fillSig = Flux.signal("x" :: any)
+		local alignSig = Flux.signal("start" :: any)
+		local justifySig = Flux.signal("end" :: any)
+		local maxSig = Flux.signal(3 :: any)
+		local wrapsSig = Flux.signal(true)
+		local offsetSig = Flux.signal(6 :: any)
+		local vCorner = Flux.signal(nil :: any)
+		local hCorner = Flux.signal(10 :: any)
+		local rCorner = Flux.signal(nil :: any)
+		local flexSrc = Flux.signal({
+			mode = "not-a-mode",
+			grow = 2,
+			shrink = 0.5,
+			lineAlign = "end",
+		} :: any)
+
+		local dynGrid, dynList, dynStroke, dynFlex, gradOneKp
+		local cornerParent: any = nil
+		local sc = Flux.scope(function()
+			dynGrid = Flux.grid({
+				fill = fillSig,
+				align = alignSig,
+				justify = justifySig,
+				maxCells = maxSig,
+			})
+			dynList = Flux.list({
+				wraps = wrapsSig,
+			})
+			dynStroke = Flux.stroke({
+				offset = offsetSig,
+			})
+			dynFlex = Flux.flex(flexSrc)
+			gradOneKp = Flux.gradient({
+				color = { env.Compat.ColorSequenceKeypoint.new(0, Color3.new(1, 0, 0)) },
+			})
+			cornerParent = Flux.new("Frame")({
+				Flux.corner({
+					vertical = vCorner,
+					horizontal = hCorner,
+					radius = rCorner,
+				}),
+			})
+		end)
+		flush()
+		expect(
+			dynGrid.HorizontalAlignment == Enum.HorizontalAlignment.Right
+				and dynGrid.VerticalAlignment == Enum.VerticalAlignment.Top
+				and dynGrid.FillDirectionMaxCells == 3,
+			"reactive grid initial fill='x' alignment and maxCells"
+		)
+		expect(dynList.Wraps == true, "reactive list wraps")
+		expect(dynStroke.BorderOffset == UDim.new(0, 6), "initial stroke offset")
+		expect(gradOneKp:IsA("UIGradient"), "single keypoint ColorSequence works")
+		expect(
+			dynFlex.FlexMode == Enum.UIFlexMode.Custom and dynFlex.GrowRatio == 2,
+			"reactive flex falls back to custom on unknown mode with grow"
+		)
+
+		-- Flip reactive fill -> "y", clear align/justify/maxCells/wraps/offset to nil, flip corner fallbacks & flex nil ratios
+		fillSig:set("y")
+		alignSig:set("end")
+		justifySig:set("start")
+		maxSig:set(nil)
+		wrapsSig:set(false)
+		offsetSig:set(nil)
+		vCorner:set(14)
+		hCorner:set(nil)
+		rCorner:set(5)
+		flexSrc:set({ mode = nil, grow = nil, shrink = nil, lineAlign = "start" })
+		flush()
+		expect(
+			dynGrid.HorizontalAlignment == Enum.HorizontalAlignment.Right
+				and dynGrid.VerticalAlignment == Enum.VerticalAlignment.Top
+				and dynGrid.FillDirectionMaxCells == 0,
+			"reactive grid fill='y' swaps align/justify axes and resets nil maxCells to 0"
+		)
+		expect(dynList.Wraps == false, "reactive list wraps updates to false")
+		expect(dynStroke.BorderOffset == UDim.new(0, 0), "reactive stroke nil offset resets to 0")
+		expect(
+			dynFlex.FlexMode == Enum.UIFlexMode.Fill and dynFlex.GrowRatio == 0,
+			"reactive flex resets nil grow/shrink to Fill/0"
+		)
+
+		fillSig:set(nil)
+		alignSig:set(nil)
+		justifySig:set(nil)
+		vCorner:set(nil)
+		rCorner:set(nil)
+		flush()
+		expect(
+			dynGrid.FillDirection == Enum.FillDirection.Horizontal
+				and dynGrid.HorizontalAlignment == Enum.HorizontalAlignment.Left
+				and dynGrid.VerticalAlignment == Enum.VerticalAlignment.Top,
+			"nil fill/align/justify reset to defaults"
+		)
+
+		sc:Destroy()
+		if cornerParent then
+			cornerParent:Destroy()
+		end
+		dynGrid:Destroy()
+		dynList:Destroy()
+		dynStroke:Destroy()
+		dynFlex:Destroy()
+		gradOneKp:Destroy()
+		fillSig:Destroy()
+		alignSig:Destroy()
+		justifySig:Destroy()
+		maxSig:Destroy()
+		wrapsSig:Destroy()
+		offsetSig:Destroy()
+		vCorner:Destroy()
+		hCorner:Destroy()
+		rCorner:Destroy()
+		flexSrc:Destroy()
+	end
+)
+
+test(
+	"layout · padding bottom, corner horizontal fallthrough, grid invalid/empty fill, and dynamic flex shapes",
+	function()
+		-- 1. Padding bottom + y shorthand
+		local pad = Flux.padding({ bottom = 12, y = 4 })
+		expect(
+			pad.PaddingBottom == UDim.new(0, 12) and pad.PaddingTop == UDim.new(0, 4),
+			"padding resolves explicit bottom and y axis fallback"
+		)
+		pad:Destroy()
+
+		-- 2. Reactive corner side fallthrough: topLeft -> top -> horizontal -> radius -> 8
+		local tl = Flux.signal(20 :: any)
+		local vert = Flux.signal(16 :: any)
+		local horiz = Flux.signal(12 :: any)
+		local rad = Flux.signal(4 :: any)
+		local corner = Flux.corner({ topLeft = tl, top = vert, left = horiz, radius = rad })
+		local radius = Flux.property(corner, "TopLeftRadius")
+		expect(radius:get() == UDim.new(0, 20), "corner uses specific corner first")
+		tl:set(nil)
+		vert:set(nil)
+		flush()
+		expect(radius:get() == UDim.new(0, 12), "corner falls through nil vertical to horizontal")
+		horiz:set(nil)
+		flush()
+		expect(radius:get() == UDim.new(0, 4), "corner falls through nil horizontal to radius")
+		rad:set(nil)
+		flush()
+		expect(radius:get() == UDim.new(0, 8), "corner falls back to default 8 when all nil")
+		radius:Destroy()
+		corner:Destroy()
+		tl:Destroy()
+		vert:Destroy()
+		horiz:Destroy()
+		rad:Destroy()
+
+		-- 3. Grid empty config, invalid fill fallback, and reactive fill cleanup with scope
+		local emptyGrid = Flux.grid({})
+		expect(emptyGrid.FillDirection == Enum.FillDirection.Horizontal, "empty grid uses defaults")
+		emptyGrid:Destroy()
+
+		local fillWarned = env.warnings(function()
+			local badGrid = Flux.grid({ fill = "diagonal" :: any, align = "center" })
+			expect(
+				badGrid.FillDirection == Enum.FillDirection.Horizontal
+					and badGrid.VerticalAlignment == Enum.VerticalAlignment.Center,
+				"invalid grid fill falls back to horizontal"
+			)
+			badGrid:Destroy()
+		end)
+		expect(#fillWarned == 1, "unknown grid fill warns once")
+
+		local scopedGrid: any = nil
+		local fillReads = 0
+		local sigFill = Flux.signal("y")
+		local gridScope = Flux.scope(function()
+			scopedGrid = Flux.grid({
+				fill = function()
+					fillReads += 1
+					return sigFill:get()
+				end,
+				justify = "end",
+			})
+		end)
+		flush()
+		expect(
+			fillReads >= 1 and scopedGrid.VerticalAlignment == Enum.VerticalAlignment.Bottom,
+			"reactive fill routes axis"
+		)
+		local beforeDestroy = fillReads
+		gridScope:Destroy()
+		sigFill:set("x")
+		flush()
+		expect(fillReads == beforeDestroy, "destroying grid cleans internal fill computed")
+		sigFill:Destroy()
+
+		-- 4. Dynamic flex switching across mode, shrink, lineAlign, EnumItem, and number
+		local flexCfg = Flux.signal({ mode = "grow", shrink = 3, lineAlign = "end" } :: any)
+		local flex = Flux.flex(flexCfg)
+		flush()
+		expect(
+			flex.FlexMode == Enum.UIFlexMode.Grow
+				and flex.ShrinkRatio == 3
+				and flex.ItemLineAlignment == Enum.ItemLineAlignment.End,
+			"reactive flex config sets mode, shrink, and lineAlign"
+		)
+		flexCfg:set({ shrink = 0.5, lineAlign = "stretch" })
+		flush()
+		expect(
+			flex.FlexMode == Enum.UIFlexMode.Custom
+				and flex.GrowRatio == 0
+				and flex.ShrinkRatio == 0.5
+				and flex.ItemLineAlignment == Enum.ItemLineAlignment.Stretch,
+			"reactive flex with shrink defaults to Custom mode"
+		)
+		flexCfg:set(Enum.UIFlexMode.Shrink)
+		flush()
+		expect(
+			flex.FlexMode == Enum.UIFlexMode.Shrink and flex.ShrinkRatio == 0,
+			"reactive flex accepts EnumItem and resets ShrinkRatio"
+		)
+		flexCfg:set(2.5)
+		flush()
+		expect(
+			flex.FlexMode == Enum.UIFlexMode.Custom and flex.GrowRatio == 2.5,
+			"reactive flex switches cleanly to numeric weight"
+		)
+		flex:Destroy()
+		flexCfg:Destroy()
+	end
+)
