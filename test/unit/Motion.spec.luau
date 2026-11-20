@@ -392,21 +392,23 @@ test("motion · tween DelayTime holds the start until the delay elapses", functi
 	Engine.destroy(tw)
 end)
 
-test("motion · a tween retarget drops DelayTime and reactive TweenInfo updates", function()
+test("motion · a tween honors DelayTime from rest and skips DelayTime on mid-flight retarget", function()
 	local goal = Flux.signal(0)
-	local infoSig = Flux.signal(info(1, "Linear", "Out", 0, false, 5))
+	local infoSig = Flux.signal(info(1, "Linear", "Out", 0, false, 0.5))
 	local scope, tw = Flux.scope(function()
 		return Flux.tween(goal, infoSig)
 	end)
 	goal:set(100)
 	flush()
-	advance(0.5)
-	sert.near(tw:get(), 50, 1e-4, `a retarget starts at once, got {tw:get()}`)
-	infoSig:set(info(0.2, "Quad", "In"))
+	advance(0.4)
+	sert.near(tw:get(), 0, 1e-4, `still waiting during DelayTime from rest, got {tw:get()}`)
+	advance(0.6)
+	sert.near(tw:get(), 50, 1e-4, `progresses after DelayTime, got {tw:get()}`)
+	infoSig:set(info(0.2, "Linear", "Out", 0, false, 5))
 	goal:set(200)
 	flush()
 	advance(0.2)
-	sert.near(tw:get(), 200, 1e-3, "completed with updated reactive TweenInfo")
+	sert.near(tw:get(), 200, 1e-3, "mid-flight retarget skips DelayTime and completes")
 	scope:Destroy()
 end)
 
@@ -1221,20 +1223,25 @@ sert.laws.differential(
 					while alpha >= 1 do
 						if cfg.reverses and not reversing then
 							reversing = true
+							startTime += duration
 						elseif repeatsLeft ~= 0 then
 							if repeatsLeft > 0 then
 								repeatsLeft -= 1
 							end
 							reversing = false
+							startTime += duration + cfg.delayTime
+							if now < startTime then
+								cur = if cfg.reverses then cfg.startVal else cfg.endVal
+								break
+							end
 						else
 							active = false
 							cur = if reversing then cfg.startVal else cfg.endVal
 							break
 						end
-						startTime += duration
 						alpha = (now - startTime) / duration
 					end
-					if active then
+					if active and now >= startTime then
 						local eased = ease(math.clamp(alpha, 0, 1))
 						if reversing then
 							eased = 1 - eased
@@ -1249,8 +1256,6 @@ sert.laws.differential(
 			local tweenInfo = info(cfg.duration, cfg.style, cfg.direction, cfg.repeatCount, cfg.reverses, cfg.delayTime)
 			local tw = Flux.tween(cfg.startVal, tweenInfo)
 			tw:set(cfg.endVal)
-			local motion = Motion.NodeToMotion[tw]
-			motion.startTime = Engine.now + cfg.delayTime
 			for _, dt in cfg.steps do
 				Flux.Motion.step(dt)
 			end
@@ -1661,3 +1666,432 @@ test("motion · :set and call return goal and mid-flight :update reads target un
 	spr:Destroy()
 	tw:Destroy()
 end)
+
+test(
+	"motion · TweenConfig tables, ColorSequenceKeypoint gamut clipping, HDR Color3, CFrame unwrap, and keypoint count change",
+	function()
+		local Color3 = Compat.Color3
+		local ColorSequence = Compat.ColorSequence
+		local ColorSequenceKeypoint = Compat.ColorSequenceKeypoint
+		local NumberSequence = Compat.NumberSequence
+		local NumberSequenceKeypoint = Compat.NumberSequenceKeypoint
+		local CFrame = Compat.CFrame
+
+		-- Plain TweenConfig table & reactive config switch (honors DelayTime from rest, skips DelayTime on mid-flight retarget)
+		local goal = Flux.signal(0)
+		local cfg = Flux.signal({ Time = 0.2, EasingStyle = "Linear", EasingDirection = "Out", DelayTime = 0.05 })
+		local tw = Flux.tween(goal, cfg)
+		goal:set(100)
+		flush()
+		advance(0.05)
+		sert.near(tw:peek(), 0, 1e-4, "plain TweenConfig waits through initial DelayTime from rest")
+		advance(0.1)
+		sert.near(tw:peek(), 50, 1e-2, "plain TweenConfig reaches midpoint at 50 after DelayTime")
+		cfg:set({ Time = 0.1, EasingStyle = "Linear", EasingDirection = "Out", DelayTime = 1 })
+		goal:set(200)
+		flush()
+		advance(0.1)
+		sert.near(tw:peek(), 200, 1e-2, "updated plain TweenConfig skips DelayTime mid-flight and completes at 200")
+		tw:Destroy()
+		goal:Destroy()
+		cfg:Destroy()
+
+		-- HDR Color3 preserves >1 channels vs ColorSequenceKeypoint gamut clipping
+		local hdrColor =
+			Flux.tween(Color3.new(2, 0, 0), { Time = 0.2, EasingStyle = "Linear", EasingDirection = "Out" })
+		hdrColor:set(Color3.new(0, 2, 0))
+		advance(0.1)
+		local midHdr = hdrColor:peek()
+		expect(midHdr.R > 0 or midHdr.G > 0, "HDR Color3 animates smoothly")
+		advance(0.1)
+		local endHdr = hdrColor:peek()
+		expect(endHdr.G > 1.5, `HDR Color3 preserves >1 channel ({endHdr.G})`)
+		hdrColor:Destroy()
+
+		local kpStart = ColorSequenceKeypoint.new(0, Color3.new(2, 0, 0))
+		local kpEnd = ColorSequenceKeypoint.new(0, Color3.new(0, 0, 2))
+		local kpTween = Flux.tween(kpStart, { Time = 0.2, EasingStyle = "Linear", EasingDirection = "Out" })
+		kpTween:set(kpEnd)
+		advance(0.1)
+		local midKp = kpTween:peek().Value
+		expect(
+			midKp.R >= 0 and midKp.R <= 1 and midKp.G >= 0 and midKp.G <= 1 and midKp.B >= 0 and midKp.B <= 1,
+			`ColorSequenceKeypoint clips channels to sRGB gamut ({midKp.R},{midKp.G},{midKp.B})`
+		)
+		kpTween:Destroy()
+
+		-- CFrame antipodal 2*pi shortest arc unwrap (0 -> 350 deg unwraps to -10 deg -> midpoint near -5 deg, LookVector.Z < 0)
+		local cfTween =
+			Flux.tween(CFrame.Angles(0, 0, 0), { Time = 0.2, EasingStyle = "Linear", EasingDirection = "Out" })
+		cfTween:set(CFrame.Angles(0, math.rad(350), 0))
+		advance(0.1)
+		expect(cfTween:peek().LookVector.Z < -0.9, "CFrame tween takes short -10 deg arc instead of +350 deg")
+		cfTween:Destroy()
+
+		-- Sequence keypoint count mismatch snaps target/current and safely ignores mismatched impulse
+		local seq2 = NumberSequence.new({
+			NumberSequenceKeypoint.new(0, 0, 0),
+			NumberSequenceKeypoint.new(1, 1, 0),
+		})
+		local seq3 = NumberSequence.new({
+			NumberSequenceKeypoint.new(0, 0, 0),
+			NumberSequenceKeypoint.new(0.5, 0.5, 0),
+			NumberSequenceKeypoint.new(1, 1, 0),
+		})
+		local seqSpring = Flux.spring(seq2, 8, 1)
+		seqSpring:impulse(seq3) -- count mismatch: safe no-op
+		seqSpring:set(seq3) -- count mismatch: snaps cleanly to 3 keypoints
+		expect(#seqSpring:peek().Keypoints == 3, "mismatched sequence target snaps cleanly to new keypoint count")
+		seqSpring:Destroy()
+
+		local cseq2 = ColorSequence.new({
+			ColorSequenceKeypoint.new(0, Color3.new(0, 0, 0)),
+			ColorSequenceKeypoint.new(1, Color3.new(1, 1, 1)),
+		})
+		local cseqTween = Flux.tween(cseq2, { Time = 0.2, EasingStyle = "Linear", EasingDirection = "Out" })
+		cseqTween:Destroy()
+	end
+)
+
+test(
+	"motion · quaternion CFrame shortest-arc/impulses/setCurrent, DelayTime rest vs mid-flight, HDR & zero-duration/infinite tweens",
+	function()
+		local CFrame = env.Compat.CFrame
+		local Color3 = env.Compat.Color3
+		local TweenInfo = env.Compat.TweenInfo
+
+		-- 1. CFrame 7-arg unit quaternion shortest-arc (170° -> -170° traverses 20° through 180°, not 340°)
+		local cfStart = CFrame.Angles(0, math.rad(170), 0)
+		local cfGoal = CFrame.Angles(0, math.rad(-170), 0)
+		local cfTween = Flux.tween(cfStart, TweenInfo.new(0.2, Enum.EasingStyle.Linear))
+		cfTween:set(cfGoal)
+		advance(0.1)
+		local _, midYaw, _ = cfTween:peek():ToOrientation()
+		expect(math.abs(math.deg(midYaw)) > 170, `shortest arc passes through +-180°, got {math.deg(midYaw)}°`)
+		advance(0.1)
+
+		-- CFrame pure translation impulse keeps rotation fixed + perpendicular angular spin works cleanly + setCurrent antipodal alignment
+		local cfSpring = Flux.spring(cfStart, 4, 1)
+		cfSpring:impulse(CFrame.new(50, 0, 0))
+		advance(0.05)
+		expect(math.abs(cfSpring:peek().X) > 0, "pure translation impulse moves position")
+		cfSpring:setVelocity(CFrame.Angles(0, 2, 0))
+		cfSpring:setCurrent(cfGoal) -- antipodal hemisphere alignment
+		advance(0.05)
+		local _, curYaw, _ = cfSpring:peek():ToOrientation()
+		expect(math.abs(math.deg(curYaw)) > 165, "setCurrent antipodal CFrame avoids full-turn unwrap")
+		cfSpring:Destroy()
+		cfTween:Destroy()
+
+		-- 2. Tween DelayTime: applies from rest & between repeats, skipped on mid-flight retarget
+		local infoSig = Flux.signal({ Time = 0.2, EasingStyle = "Linear", DelayTime = 0.1 } :: any)
+		local tGoal = Flux.signal(0)
+		local t = Flux.tween(tGoal, infoSig)
+		flush()
+		tGoal:set(100)
+		flush()
+		advance(0.05)
+		near(t:peek(), 0, 1e-3, "tween starting from rest respects DelayTime")
+		advance(0.10) -- 0.05 past delay -> 25% active
+		near(t:peek(), 25, 1e-2, "tween begins advancing after DelayTime")
+		tGoal:set(200) -- mid-flight retarget skips DelayTime
+		flush()
+		advance(0.10)
+		near(t:peek(), 112.5, 1e-2, "mid-flight retarget skips DelayTime and starts moving immediately")
+		-- Equal fresh config table at rest should not start or error
+		advance(0.20)
+		infoSig:set({ Time = 0.2, EasingStyle = "Linear", DelayTime = 0.1 })
+		flush()
+		near(t:peek(), 200, 1e-2, "settled tween ignores equal config table refresh")
+		t:Destroy()
+		tGoal:Destroy()
+		infoSig:Destroy()
+
+		-- 3. Reverses = true re-triggers cleanly after completing a cycle, and pause between repeats honors DelayTime
+		local revGoal = Flux.signal(0)
+		local rev =
+			Flux.tween(revGoal, TweenInfo.new(0.2, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut, 1, true, 0.1))
+		flush()
+		revGoal:set(10)
+		flush()
+		advance(0.1) -- initial delay done
+		advance(0.2) -- forward leg done -> 10
+		near(rev:peek(), 10, 1e-2, "forward leg peaks at 10")
+		advance(0.2) -- reverse leg finishes at 0.2 -> enters 0.1s inter-repeat DelayTime before repeat 1!
+		near(rev:peek(), 0, 1e-2, "reversing leg returns to 0 and enters inter-repeat delay")
+		advance(0.05) -- still inside inter-repeat delay
+		near(rev:peek(), 0, 1e-2, "stays at 0 during inter-repeat delay")
+		advance(0.35) -- finishes repeat 1 forward+reverse? Let's flush out to settle
+		advance(1.0)
+		near(rev:peek(), 0, 1e-2, "repeating reversing tween settles cleanly")
+		revGoal:set(20)
+		flush()
+		advance(0.1 + 0.2)
+		near(rev:peek(), 20, 1e-2, "retriggering completed reversing tween peaks at new goal")
+		advance(1.0)
+		near(rev:peek(), 0, 1e-2, "retriggering completed reversing tween finishes reversing back to start")
+		rev:Destroy()
+		revGoal:Destroy()
+
+		-- 4. Zero-duration / infinite / finite repeat tweens + math.huge step + NaN step safety
+		local z1 = Flux.tween(0, TweenInfo.new(0, Enum.EasingStyle.Linear, Enum.EasingDirection.Out, 2, false, 0.2))
+		z1:set(50)
+		advance(0.3)
+		near(z1:peek(), 50, 1e-3, "zero-duration repeating tween settles cleanly during delay")
+		advance(1.0)
+		near(z1:peek(), 50, 1e-3, "zero-duration repeating tween finishes")
+		z1:Destroy()
+
+		local zInf = Flux.tween(0, TweenInfo.new(0, Enum.EasingStyle.Linear, Enum.EasingDirection.Out, -1, true, 0.1))
+		zInf:set(10)
+		advance(0.15)
+		near(zInf:peek(), 0, 1e-3, "infinite zero-duration reversing tween cycles")
+		advance(math.huge) -- hits Engine.step(math.huge) & stepTween not (elapsed < math.huge)
+		zInf:Destroy()
+
+		local infNoDelay =
+			Flux.tween(0, TweenInfo.new(0, Enum.EasingStyle.Linear, Enum.EasingDirection.Out, -1, true, 0))
+		infNoDelay:set(10)
+		advance(0.05)
+		infNoDelay:Destroy()
+
+		advance(0 / 0)
+		advance(-1)
+
+		-- 5. HDR Color3 (> 1 components) + snap/setCurrent/HDR->sRGB clamping reset
+		local cGoal = Flux.signal(Color3.new(2, 0.5, 0))
+		local cTween = Flux.tween(cGoal, TweenInfo.new(0.2, Enum.EasingStyle.Linear))
+		local cSpring = Flux.spring(Color3.new(0, 0, 0), 4, 1)
+		cSpring:setCurrent(Color3.new(2, 0, 0))
+		cSpring:snap()
+		near(cSpring:peek().R, 0, 1e-2, "HDR spring snap returns to sRGB target cleanly")
+		cTween:snap(Color3.new(2, 0, 0))
+		expect(cTween:peek().R > 1, "snap preserves HDR peak")
+		cGoal:set(Color3.new(0, 1, 0))
+		flush()
+		advance(0.5)
+		expect(cTween:peek().R <= 1 and cTween:peek().G > 0.9, "transitioning from HDR to sRGB clears hdr flag")
+		cSpring:Destroy()
+		cTween:Destroy()
+		cGoal:Destroy()
+	end
+)
+
+test(
+	"motion · ColorSequence keypoint mismatch :setCurrent, reactive Color3 spring HDR reset, and idle tweenInfo update",
+	function()
+		local Color3 = env.Compat.Color3
+		local ColorSequence = env.Compat.ColorSequence
+		local ColorSequenceKeypoint = env.Compat.ColorSequenceKeypoint
+		local TweenInfo = env.Compat.TweenInfo
+
+		-- 1. ColorSequence spring :setCurrent with differing keypoint counts snaps cleanly
+		local cs2 = ColorSequence.new(Color3.new(1, 0, 0), Color3.new(0, 0, 1))
+		local cs3 = ColorSequence.new({
+			ColorSequenceKeypoint.new(0, Color3.new(0, 1, 0)),
+			ColorSequenceKeypoint.new(0.5, Color3.new(1, 1, 0)),
+			ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)),
+		})
+		local csSpring = Flux.spring(cs2, 4, 1)
+		csSpring:setCurrent(cs3)
+		expect(#csSpring:peek().Keypoints == 3, "setCurrent snaps when keypoint counts differ")
+		csSpring:Destroy()
+
+		-- 2. Reactive Color3 spring switching from HDR -> sRGB resets hdr flag
+		local cTarget = Flux.signal(Color3.new(2, 0.2, 0))
+		local cSpring = Flux.spring(cTarget, 8, 1)
+		expect(cSpring:peek().R > 1, "initial HDR color preserved")
+		cTarget:set(Color3.new(0, 1, 0))
+		flush()
+		advance(2.0)
+		expect(
+			cSpring:peek().R <= 1 and cSpring:peek().G > 0.9,
+			"reactive Color3 spring clears HDR after settling on sRGB"
+		)
+		cSpring:Destroy()
+		cTarget:Destroy()
+
+		-- 3. Idle tween ignores reactive tweenInfo update without spuriously animating
+		local infoSig = Flux.signal(TweenInfo.new(0.2, Enum.EasingStyle.Linear))
+		local idleTween = Flux.tween(10, infoSig)
+		infoSig:set(TweenInfo.new(0.5, Enum.EasingStyle.Quad))
+		flush()
+		advance(0.1)
+		near(idleTween:peek(), 10, 1e-4, "settled tween stays at rest when tweenInfo changes")
+		idleTween:Destroy()
+		infoSig:Destroy()
+	end
+)
+
+test(
+	"motion · HDR channels, oblique 3D CFrame quaternions, closed-form tween cycles, math.huge, and single-axis config",
+	function()
+		local Color3 = env.Compat.Color3
+		local CFrame = env.Compat.CFrame
+		local Enum = env.Compat.Enum
+		local TweenInfo = env.Compat.TweenInfo
+
+		-- 1. All 6 HDR Color3 channels (<0 and >1) plus reversing HDR->SDR tween & :snap()
+		local hdrCases = {
+			{ c = Color3.new(-0.0001, 0.5, 0.5), chan = "R" },
+			{ c = Color3.new(0.5, -0.0001, 0.5), chan = "G" },
+			{ c = Color3.new(0.5, 0.5, -0.0001), chan = "B" },
+			{ c = Color3.new(1.5, 0.5, 0.5), chan = "R" },
+			{ c = Color3.new(0.5, 1.5, 0.5), chan = "G" },
+			{ c = Color3.new(0.5, 0.5, 1.5), chan = "B" },
+		}
+		for idx, item in hdrCases do
+			local c = item.c
+			local revTween =
+				Flux.tween(Color3.new(0.5, 0.5, 0.5), { Time = 0.1, EasingStyle = "Linear", Reverses = true })
+			revTween:set(c)
+			advance(0.1) -- reaches HDR target c cleanly unclamped
+			local mid: any = revTween:peek()
+			near(mid[item.chan], (c :: any)[item.chan], 1e-3, `HDR channel #{idx} peak remains unclamped`)
+			advance(0.2) -- reverses back to sRGB start & clears hdr
+			near(revTween:peek().R, 0.5, 1e-2, `reversing tween returns to start for #{idx}`)
+			revTween:Destroy()
+		end
+
+		local sdrToHdr = Flux.spring(Color3.new(0, 0, 0), 8, 1)
+		sdrToHdr:setCurrent(Color3.new(2, 0, 0))
+		expect(sdrToHdr:peek().R > 1, "setCurrent HDR activates hdr flag on sRGB spring")
+		sdrToHdr:snap(Color3.new(0, 0.5, 0))
+		expect(sdrToHdr:peek().R <= 1 and math.abs(sdrToHdr:peek().G - 0.5) < 1e-2, "snap(sRGB) clears HDR flag")
+		sdrToHdr:Destroy()
+
+		-- 2. Oblique 3D CFrame quaternions, zero-angle velocity, and antipodal setCurrent
+		local cfInit = CFrame.new(1, 2, 3) * CFrame.Angles(0.4, 1.1, -0.7)
+		local cfTarget = CFrame.new(-3, 5, 1) * CFrame.Angles(-0.8, 0.5, 1.4)
+		local cfSpring = Flux.spring(cfInit, 8, 1)
+		cfSpring:impulse(CFrame.new(0, 0, 0)) -- zero-angle impulse
+		cfSpring:impulse(CFrame.Angles(0.5, -0.3, 0.8))
+		cfSpring:setVelocity(CFrame.new(2, 0, -1) * CFrame.Angles(0.2, 0.4, -0.6))
+		advance(1 / 30)
+		expect(cfSpring:peek().Position.X > 1, "setVelocity moves CFrame translation cleanly")
+		cfSpring:setCurrent(cfTarget)
+		near(cfSpring:peek().Position.X, -3, 1e-4, "setCurrent updates CFrame position immediately")
+		near(cfSpring:peek().LookVector.Z, cfTarget.LookVector.Z, 1e-3, "setCurrent updates 3D orientation")
+		cfSpring:set(cfTarget)
+		advance(2)
+		near(cfSpring:peek().LookVector.Y, cfTarget.LookVector.Y, 1e-3, "oblique 3D CFrame spring settles on target")
+		cfSpring:Destroy()
+
+		-- 3. Closed-form stepTween zero-duration, multi-repeat, inter-cycle delay, and math.huge edges
+		local zFin = Flux.tween(0, TweenInfo.new(0, Enum.EasingStyle.Linear, Enum.EasingDirection.Out, 3, false, 0.5))
+		zFin:set(10)
+		advance(0.6) -- completes DelayTime + advances 0-duration step while repeats remain
+		expect(zFin:peek() == 10, "zero-duration repeating tween holds target while repeats remain")
+		advance(1.5) -- completes remaining repeats cleanly at target
+		expect(zFin:peek() == 10, "zero-duration repeating tween completes at target")
+		zFin:Destroy()
+
+		local zFinRev = Flux.tween(0, TweenInfo.new(0, Enum.EasingStyle.Linear, Enum.EasingDirection.Out, 3, true, 0.5))
+		zFinRev:set(10)
+		advance(0.6)
+		expect(zFinRev:peek() == 0, "zero-duration reversing tween holds start while repeats remain")
+		advance(1.5)
+		expect(zFinRev:peek() == 0, "zero-duration reversing tween completes cleanly at start")
+		zFinRev:Destroy()
+
+		local zInfDelay =
+			Flux.tween(0, TweenInfo.new(0, Enum.EasingStyle.Linear, Enum.EasingDirection.Out, -1, false, 0.5))
+		zInfDelay:set(5)
+		advance(0.6)
+		expect(zInfDelay:peek() == 5, "zero-duration infinite tween with delay advances cycles cleanly")
+		zInfDelay:Destroy()
+
+		local zToggle = Flux.tween(0, TweenInfo.new(0, Enum.EasingStyle.Linear, Enum.EasingDirection.Out, -1, true, 0))
+		zToggle:set(7)
+		advance(0.01)
+		local p1 = zToggle:peek()
+		advance(0.01)
+		local p2 = zToggle:peek()
+		expect(
+			(p1 == 7 and p2 == 0) or (p1 == 0 and p2 == 7),
+			"zero-duration reversing infinite tween toggles endpoints"
+		)
+		zToggle:Destroy()
+
+		-- Multi-cycle finite reversing tween with DelayTime: reverse leg -> inter-cycle delay -> skip fullCycles -> finish
+		local cyc =
+			Flux.tween(0, { Time = 0.2, EasingStyle = "Linear", RepeatCount = 3, Reverses = true, DelayTime = 0.5 })
+		cyc:set(10)
+		advance(0.5) -- finish DelayTime (0.5)
+		expect(cyc:peek() == 0, "initial DelayTime holds at start")
+		advance(0.25) -- 0.05 into reverse leg (mid-back)
+		expect(cyc:peek() > 5 and cyc:peek() < 10, "tween enters reverse leg after forward duration")
+		advance(0.25) -- lands inside inter-cycle DelayTime (elapsed < 0 after cycle 1 reverses)
+		expect(cyc:peek() == 0, "inter-cycle DelayTime holds start value before cycle 2")
+		advance(1.8) -- skip > 1 full cycle cleanly
+		expect(cyc:peek() >= 0 and cyc:peek() <= 10, "skipping multiple full cycles clamps smoothly")
+		advance(3.0)
+		expect(cyc:peek() == 0, "finite reversing tween completes cleanly at start")
+		cyc:Destroy()
+
+		-- math.huge jumps finite spring & tween to end, infinite reversing tween to start
+		local infRev = Flux.tween(2, { Time = 0.2, EasingStyle = "Linear", RepeatCount = -1, Reverses = true })
+		infRev:set(12)
+		local finTw = Flux.tween(0, { Time = 1, EasingStyle = "Linear" })
+		finTw:set(50)
+		local finSp = Flux.spring(0, 4, 1)
+		finSp:set(30)
+		advance(math.huge)
+		expect(
+			infRev:peek() == 2 and finTw:peek() == 50 and finSp:peek() == 30,
+			"math.huge resolves finite/infinite motions cleanly"
+		)
+		infRev:Destroy()
+		finTw:Destroy()
+		finSp:Destroy()
+
+		-- 4. Single-axis dynamic frequency/damping & active tweenInfo retiming
+		local freqSig = Flux.signal(2)
+		local dynF = Flux.spring(0, freqSig)
+		dynF:set(10)
+		advance(0.05)
+		local slowPos = dynF:peek()
+		freqSig:set(12)
+		flush()
+		advance(0.05)
+		expect(dynF:peek() > slowPos, "increasing reactive frequency accelerates convergence")
+		dynF:Destroy()
+		freqSig:Destroy()
+
+		local dampSig = Flux.signal(0.2)
+		local dynD = Flux.spring(0, 8, dampSig)
+		dynD:set(10)
+		advance(0.1)
+		dampSig:set(2.0)
+		flush()
+		expect(dynD:peek() > 0, "reactive damping-only spring tracks damping updates")
+		dynD:Destroy()
+		dampSig:Destroy()
+
+		local actInfo = Flux.signal({ Time = 1.0, EasingStyle = "Linear" } :: any)
+		local actTween = Flux.tween(0, actInfo)
+		actTween:set(10)
+		advance(0.2)
+		actInfo:set({ Time = 0.2, EasingStyle = "Linear" })
+		flush()
+		advance(0.1)
+		expect(
+			actTween:peek() > 2 and actTween:peek() <= 10,
+			"changing tweenInfo mid-flight keeps advancing from current start"
+		)
+		actTween:Destroy()
+		actInfo:Destroy()
+
+		-- 5. Mid-flight HDR->SDR retarget preserves current HDR & non-string EasingStyle fallback
+		local hdrStart = Color3.new(2.5, 0.2, 0.1)
+		local hdrSp = Flux.spring(hdrStart, 4, 1)
+		hdrSp:set(Color3.new(0, 1, 0)) -- SDR target while current value is still HDR
+		advance(1 / 120)
+		expect(hdrSp:peek().R > 1.5, "retargeting HDR spring toward SDR keeps hdr enabled while above 1")
+		hdrSp:Destroy()
+
+		expectError(function()
+			Flux.tween(0, { Time = 0.1, EasingStyle = 123 :: any })
+		end, "Easing")
+	end
+)
