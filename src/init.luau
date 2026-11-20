@@ -4,6 +4,7 @@
 local Async = require("@self/Async")
 local Bind = require("@self/Bind")
 local Clock = require("@self/Clock")
+local Compat = require("@self/Compat")
 local Conditional = require("@self/Conditional")
 local Edit = require("@self/Edit")
 local Graph = require("@self/Graph")
@@ -40,11 +41,17 @@ export type Context<T> = Graph.Context<T>
 export type Selector<K> = Conditional.Selector<K>
 export type Spring<T> = Motion.Spring<T>
 export type Tween<T> = Motion.Tween<T>
+export type TweenConfig = Motion.TweenConfig
+export type ClockPhase = Clock.Phase
 export type SyncSignal<T = any> = Sync.SyncSignal<T>
 export type SyncValidator<T> = Sync.Validator<T>
 export type SyncNamespace = Sync.SyncNamespace
 export type HoverOptions = Interact.HoverOptions
+export type ScaleMode = Responsive.ScaleMode
 export type Breakpoint = Responsive.Breakpoint
+export type Breakpoints = Responsive.Breakpoints
+export type ResponsiveConfig = Responsive.Config
+export type ResponsivePartialConfig = Responsive.PartialConfig
 export type Input = Responsive.Input
 export type Platform = Responsive.Platform
 export type TextSize = Responsive.TextSize
@@ -263,9 +270,9 @@ local function stepFrame(dt: number)
 	syncStep()
 end
 
-if game then
-	local RunService = game:GetService("RunService")
-	local frame = if RunService:IsClient() then RunService.PreRender else RunService.Heartbeat
+local runService: any = if Compat.isRoblox then Compat.getService("RunService") else nil
+if runService ~= nil then
+	local frame = if runService:IsClient() then runService.PreRender else runService.Heartbeat
 	local _frameConnection = frame:Connect(function(dt: number)
 		if not Clock.isManual() then
 			stepFrame(dt)

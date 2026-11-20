@@ -62,27 +62,37 @@ rtest("frame · the hookup flushes at PreRender on a client and at Heartbeat els
 	e:Destroy()
 end)
 
-test("init · Flux(signal, initial?) bridges signals via __call", function()
-	local listener: ((string) -> ())? = nil
-	local disconnected = false
+test("init · Flux(table) keeps table signals; Flux(table, second) rejects extra arg", function()
 	local customSignal = {
-		Connect = function(_self, fn: (string) -> ())
-			listener = fn
-			return {
-				Disconnect = function()
-					disconnected = true
-				end,
-			}
+		Connect = function(_self, _fn: (string) -> ())
+			return { Disconnect = function() end }
 		end,
 	}
-	local node = Flux(customSignal, "start")
-	expect.eq(node:peek(), "start", "Flux(signal, initial) seeds initial value")
-	if listener then
-		listener("fired")
-	end
-	expect.eq(node:peek(), "fired", "Flux(signal, initial) receives emitted payloads")
+	local tableNode = Flux(customSignal)
+	expect(tableNode:peek() == customSignal, "Flux(customSignalTable) creates a signal holding the table")
+	tableNode:Destroy()
+	local ok, err = pcall(function()
+		Flux(customSignal, "start")
+	end)
+	expect(
+		not ok and string.find(tostring(err), "only an Instance takes a property name", 1, true) ~= nil,
+		"Flux(customSignal, initial) errors when not an RBXScriptSignal"
+	)
+end)
+
+rtest("init · Flux(rbxSignal, initial?) bridges RBXScriptSignal", function()
+	local event = Instance.new("BindableEvent")
+	local node = Flux(event.Event, "start")
+	expect.eq(node:peek(), "start", "Flux(rbxSignal, initial) seeds initial value")
+	event:Fire("fired")
+	expect(
+		env.frames(function()
+			return node:peek() == "fired"
+		end),
+		"Flux(rbxSignal, initial) receives emitted payloads"
+	)
 	node:Destroy()
-	expect(disconnected, "node:Destroy() disconnects signal created through Flux()")
+	event:Destroy()
 end)
 
 test("init · exports mount, portal, merge, scale, and fromSignal", function()
@@ -259,6 +269,7 @@ test("init · exports every public API and namespace member", function()
 		"UIPageLayout",
 	}
 	expect(type(Flux.Defaults) == "table", "Flux.Defaults is a table")
+	expect(env.Compat.Color3 ~= nil, "Compat.Color3 is loaded in unit tests")
 	for _, className in defaultClasses do
 		expect(type((Flux.Defaults :: any)[className]) == "table", `Flux.Defaults.{className} is a table`)
 	end

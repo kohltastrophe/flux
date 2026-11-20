@@ -1217,3 +1217,387 @@ test("bind · mountPortal cleans up already-mounted children when a nested item 
 	overlay:Destroy()
 	host:Destroy()
 end)
+
+test(
+	"bind & portal & on · fromSignal isolation, listen NaN/epoch, children portal switching, and Flux.on modes",
+	function()
+		-- 1. fromSignal owner/untrack isolation, metatable Connect/connect, throwing Connect, and sync destroy inside Connect
+		local trackedDep = Flux.signal(1)
+		local leakedCleanups = 0
+		local badOuter = false
+		local mtUpperSig = setmetatable({}, {
+			__index = {
+				Connect = function(_self, fn)
+					if Flux.getOwner() ~= nil then
+						badOuter = true
+					end
+					pcall(Flux.cleanup, function()
+						leakedCleanups += 1
+					end)
+					local _ = trackedDep()
+					fn("hello")
+					return function() end
+				end,
+			},
+		})
+		local mtLowerSig = setmetatable({}, {
+			__index = {
+				connect = function(_self, fn)
+					fn(42)
+					return function() end
+				end,
+			},
+		})
+		local nUpper: any
+		local nLower: any
+		local effectRuns = 0
+		local sc = Flux.scope(function()
+			Flux.effect(function()
+				effectRuns += 1
+				nUpper = Flux.fromSignal(mtUpperSig)
+				nLower = Flux.fromSignal(mtLowerSig)
+			end)
+		end)
+		flush()
+		expect(not badOuter and leakedCleanups == 0, "fromSignal Connect runs ownerless")
+		expect(nUpper() == "hello" and nLower() == 42, "fromSignal supports metatable Connect and connect")
+		trackedDep:set(2)
+		flush()
+		expect(effectRuns == 1, "tracked reads inside Connect do not subscribe outer effect")
+		sc:Destroy()
+
+		-- Throwing Connect / __index error propagates cleanly without leaking node
+		local throwingConnectSig = {
+			Connect = function()
+				error("connect boom")
+			end,
+		}
+		expectError(function()
+			Flux.fromSignal(throwingConnectSig)
+		end, "connect boom")
+
+		local badIndexSig = setmetatable({}, {
+			__index = function()
+				error("index boom")
+			end,
+		})
+		expectError(function()
+			Flux.fromSignal(badIndexSig)
+		end, "RBXScriptSignal")
+
+		expectError(function()
+			Flux.fromSignal(123 :: any)
+		end)
+
+		local syncConnDisconnected = 0
+		local raceSig = {
+			Connect = function(_self, fn)
+				env.task.defer(function()
+					fn(1)
+				end)
+				return function()
+					syncConnDisconnected += 1
+				end
+			end,
+		}
+		local killerNode = Flux.fromSignal(raceSig)
+		killerNode:Destroy()
+		settle()
+		expect(syncConnDisconnected == 1, "destroying fromSignal node disconnects listener")
+
+		local directDisconn = 0
+		local bombSig = {
+			Connect = function(_self, _fn)
+				return {
+					Disconnect = function()
+						directDisconn += 1
+					end,
+				}
+			end,
+		}
+		local bomb = Flux.fromSignal(bombSig)
+		bomb:Destroy()
+		expect(directDisconn == 1, "Disconnect method on connection is called on Destroy")
+
+		-- 2. Bind.listen with NaN initial / updates and rapid round-trip writes across flush
+		local lSig = Flux.signal(0 / 0 :: any)
+		local seenListen = {}
+		local unlisten = Flux.listen(lSig, function(v)
+			table.insert(seenListen, v)
+		end)
+		flush()
+		expect(#seenListen == 0, "listen does not fire on initial flush when initial value is NaN")
+		lSig:set(1)
+		lSig:set(2)
+		lSig:set(1)
+		flush()
+		expect(#seenListen == 1 and seenListen[1] == 1, "listen detects rapid round-trip version change after NaN")
+		lSig:set(0 / 0)
+		flush()
+		expect(#seenListen == 2 and seenListen[2] ~= seenListen[2], "listen delivers NaN update")
+		unlisten()
+		lSig:Destroy()
+
+		-- 3. Bind.children switching between direct Portal, Portal array, Child table, and Instance, plus autoOrder & dead prefix pruning
+		local portalTarget = Instance.new("Folder")
+		local childA = Instance.new("Frame")
+		childA.Name = "ChildA"
+		local childB = Instance.new("Frame")
+		childB.Name = "ChildB"
+		local pChild1 = Instance.new("Frame")
+		pChild1.Name = "PortalChild1"
+		local pChild2 = Instance.new("Frame")
+		pChild2.Name = "PortalChild2"
+		local pSpec1 = Flux.portal(portalTarget, pChild1)
+		local pSpec2 = Flux.portal(portalTarget, pChild2)
+
+		local kidsNode = Flux.signal(pSpec1 :: any)
+		local parent = Flux.new("Frame")({
+			Flux.new("Frame")({ Name = "ManualOrder", LayoutOrder = 5 }),
+			kidsNode,
+			Flux.new("Frame")({ Name = "TailSibling" }),
+		})
+		flush()
+		expect(pChild1.Parent == portalTarget, "direct portal in reactive children mounts")
+
+		kidsNode:set({ pSpec1, pSpec2, childA })
+		flush()
+		expect(
+			pChild1.Parent == portalTarget and pChild2.Parent == portalTarget and childA.Parent == parent,
+			"table of portals + child mounts"
+		)
+
+		kidsNode:set(childB)
+		flush()
+		expect(
+			childB.Parent == parent and childA.Parent == nil and pChild1.Parent == nil and pChild2.Parent == nil,
+			"switching to single Instance unmounts portals and prior table children"
+		)
+
+		kidsNode:set({ childA, childB })
+		flush()
+		expect(
+			childA.Parent == parent and childB.Parent == parent,
+			"single child survives transition to multi-child array"
+		)
+
+		parent:Destroy()
+		portalTarget:Destroy()
+		childA:Destroy()
+		childB:Destroy()
+		pChild1:Destroy()
+		pChild2:Destroy()
+		kidsNode:Destroy()
+
+		-- 4. Flux.on with single node, empty array, and record / store non-array dep
+		local recDep = Flux.store({ count = 3 })
+		local onStore = Flux.computed(Flux.on(recDep, function(s)
+			return s.count * 10
+		end))
+		expect(onStore() == 30, "Flux.on reads store directly rather than treating non-array table as array")
+		local onEmpty = Flux.computed(Flux.on({}, function(inp)
+			return #inp
+		end))
+		expect(onEmpty() == 0, "Flux.on handles empty array deps")
+		onEmpty:Destroy()
+		onStore:Destroy()
+		Flux.dispose(recDep)
+
+		-- 5. Dynamic Flux.portal evaluates targetSpec once on initial mount
+		local targetEvalCount = 0
+		local dest = Instance.new("Folder")
+		local payload = Instance.new("Frame")
+		local portalHost = Flux.new("Frame")({
+			Flux.portal(function()
+				targetEvalCount += 1
+				return dest
+			end, payload),
+		})
+		flush()
+		expect(
+			targetEvalCount == 1 and payload.Parent == dest,
+			"dynamic portal evaluates target getter once on initial mount"
+		)
+		portalHost:Destroy()
+		dest:Destroy()
+		payload:Destroy()
+		trackedDep:Destroy()
+	end
+)
+
+test(
+	"bind · mixed static + multiple dynamic child slots, slot compaction, portal cleanup, and Bind.on edges",
+	function()
+		-- 1. Frame with staticA, kids1, staticB, kids2 shifts LayoutOrder and compacts removed slots
+		local staticA = Flux.new("Frame")({ Name = "StaticA" })
+		local staticB = Flux.new("Frame")({ Name = "StaticB" })
+		local k1a, k1b, k1c = Instance.new("Frame"), Instance.new("Frame"), Instance.new("Frame")
+		local k2a = Instance.new("Frame")
+		local kids1 = Flux.signal({ k1a } :: any)
+		local kids2 = Flux.signal({ k2a } :: any)
+
+		local listHost = Flux.new("Frame")({
+			staticA,
+			kids1,
+			staticB,
+			kids2,
+		})
+		flush()
+		expect(
+			(staticA :: any).LayoutOrder == 1
+				and k1a.LayoutOrder == 2
+				and (staticB :: any).LayoutOrder == 3
+				and k2a.LayoutOrder == 4,
+			"mixed static and dynamic child slots receive contiguous LayoutOrder"
+		)
+
+		-- Expanding kids1 pushes staticB and kids2 forward
+		kids1:set({ k1a, k1b, k1c })
+		flush()
+		expect(
+			k1b.LayoutOrder == 3 and k1c.LayoutOrder == 4 and (staticB :: any).LayoutOrder == 5 and k2a.LayoutOrder == 6,
+			"expanding middle children slot shifts following static sibling and second children slot"
+		)
+
+		-- Reparenting staticB marks its slot stale and shrinks k2a to 3 immediately; emptying kids1 shifts k2a to 2
+		staticB.Parent = nil
+		kids1:set({ k1a })
+		flush()
+		expect(k1a.LayoutOrder == 2 and k2a.LayoutOrder == 3, "shrinking kids1 compacts stale staticB and shifts kids2")
+
+		local extraPortalPayload = Instance.new("Frame")
+		local extraScope = Flux.scope(function()
+			Flux.new("Frame")({ Flux.portal(listHost, extraPortalPayload) })
+		end)
+		kids1:set({})
+		flush()
+		expect(k2a.LayoutOrder == 2, "emptying kids1 shifts k2a down to 2")
+		extraScope:Destroy()
+		expect(k2a.LayoutOrder == 2, "portal teardown runs refreshParentSlots cleanly")
+		extraPortalPayload:Destroy()
+
+		-- 2. Portal into target containing static + dynamic slot shifts target orders and cleans on target Destroy
+		local portalTarget = Instance.new("Frame")
+		local targetStatic = Flux.new("Frame")({ Name = "TargetStatic" })
+		local pItem1, pItem2 = Instance.new("Frame"), Instance.new("Frame")
+		local dynTarget = Flux.signal(portalTarget :: any)
+		local hostScope = Flux.scope(function()
+			Flux.edit(portalTarget)({ targetStatic })
+			local pHost = Flux.new("Frame")({
+				Flux.portal(dynTarget, { pItem1, pItem2 }),
+			})
+			expect(pHost ~= nil)
+		end)
+		flush()
+		expect(
+			pItem1.Parent == portalTarget
+				and pItem2.Parent == portalTarget
+				and pItem1.LayoutOrder == 2
+				and pItem2.LayoutOrder == 3,
+			"portal mounts after existing static slot child on target"
+		)
+
+		-- Stopping scope unmounts portal children cleanly
+		hostScope:Destroy()
+		expect(pItem1.Parent == nil and pItem2.Parent == nil, "scope destroy unmounts multi-instance portal cleanly")
+		dynTarget:set(Instance.new("Folder"))
+		flush()
+		expect(pItem1.Parent == nil, "stopped dynamic portal ignores subsequent target changes")
+
+		-- Separate portal attached to target that gets destroyed cleans up cleanly
+		local fragileTarget = Instance.new("Frame")
+		local payload = Instance.new("Frame")
+		local fragileScope = Flux.scope(function()
+			Flux.new("Frame")({ Flux.portal(fragileTarget, payload) })
+		end)
+		expect(payload.Parent == fragileTarget)
+		fragileTarget:Destroy()
+		expect(payload.Parent == nil, "destroying portal target clears mounted payload Parent")
+		fragileScope:Destroy()
+
+		-- 3. Bind.on / fromSignal error validation, pre-flush/post-flush listen, self-write, and sibling disconnect
+		expectError(function()
+			Flux.fromSignal(123 :: any)
+		end, "Signal")
+		expectError(function()
+			Flux.fromSignal({} :: any)
+		end, "Signal")
+
+		local src = Flux.signal(1)
+		local preSeen = 0
+		local d1 = Flux.listen(src, function(v)
+			preSeen += v
+		end)
+		src:set(2)
+		flush()
+		expect(preSeen == 2, "pre-flush Bind.on listener receives flushed value once")
+
+		local postSeen = {}
+		local d2: any, d3: any
+		d2 = Flux.listen(src, function(v)
+			table.insert(postSeen, `d2:{v}`)
+			if v == 5 then
+				src:set(6) -- mid-dispatch write updates ver without skipping d3 on next flush
+				d3() -- disconnect sibling mid-dispatch
+			end
+		end)
+		d3 = Flux.listen(src, function(v)
+			table.insert(postSeen, `d3:{v}`)
+		end)
+		src:set(5)
+		flush()
+		flush()
+		expect(
+			postSeen[1] == "d2:5" and src:peek() == 6,
+			"listener mid-dispatch mutation and sibling disconnect stay safe"
+		)
+		d1()
+		d2()
+
+		local deadSigTable = {
+			Connect = function()
+				return { Disconnect = function() end }
+			end,
+		}
+		local bridged = Flux.fromSignal(deadSigTable :: any, "start")
+		bridged:Destroy()
+		expect(bridged:peek() == nil, "destroyed fromSignal node reads nil cleanly")
+
+		listHost:Destroy()
+		portalTarget:Destroy()
+		k1a:Destroy()
+		k1b:Destroy()
+		k1c:Destroy()
+		k2a:Destroy()
+		pItem1:Destroy()
+		pItem2:Destroy()
+		payload:Destroy()
+		kids1:Destroy()
+		kids2:Destroy()
+		dynTarget:Destroy()
+		src:Destroy()
+
+		-- 4. Non-instance children fallback and preserving parentSlots when 1 slot remains
+		local slotHost = Instance.new("Frame")
+		local slotA = Flux.signal({ Instance.new("Frame") } :: any)
+		local sHost = Flux.edit(slotHost)({ slotA })
+		expect(sHost == slotHost)
+		slotA:set("non-instance-string" :: any)
+		flush()
+		local f1 = Instance.new("Frame")
+		slotA:set({ f1 })
+		flush()
+		local extraP = Instance.new("Frame")
+		local sc = Flux.scope(function()
+			Flux.new("Frame")({ Flux.portal(slotHost, extraP) })
+		end)
+		sc:Destroy() -- unmounts portal while slotA remains (#slots == 1; kills #slots - 1 == 0 off-by-one)
+		local fNew = Instance.new("Frame")
+		slotA:set({ f1, fNew })
+		flush()
+		expect(fNew.LayoutOrder == 2, "parentSlots retains single remaining slot after portal teardown")
+		extraP:Destroy()
+		slotHost:Destroy()
+		slotA:Destroy()
+	end
+)

@@ -811,13 +811,13 @@ test("new · flattened tables deduplicate _attr_Name with __ATTR, _tag_Name, and
 	p2:Destroy()
 end)
 
-test("new · defaults applied and toggleable via Flux.Flags; AutoButtonColor is off either way", function()
+test("new · defaults applied and toggleable via Flux.Flags", function()
 	local btn
 	local s = Flux.scope(function()
 		btn = Flux.new("ImageButton")({})
 	end)
 	expect(btn.BorderSizePixel == 0, "class defaults applied when Flags.defaults is true")
-	expect(btn.AutoButtonColor == false, "AutoButtonColor off")
+	expect(btn.AutoButtonColor == false, "AutoButtonColor off via Flux.Defaults")
 	s:Destroy()
 	Flux.Flags.defaults = false
 	local btn2, btn3
@@ -830,7 +830,7 @@ test("new · defaults applied and toggleable via Flux.Flags; AutoButtonColor is 
 	local autoColorOverridden = btn3.AutoButtonColor
 	s2:Destroy()
 	expect(borderWithoutDefaults == 1, "no class defaults applied when Flags.defaults is false")
-	expect(autoColorWithoutDefaults == false, "AutoButtonColor stays off with the defaults disabled")
+	expect(autoColorWithoutDefaults == true, "AutoButtonColor keeps engine default when Flags.defaults is false")
 	expect(autoColorOverridden == true, "your own properties still win")
 end)
 
@@ -1918,8 +1918,8 @@ test("edit · forKey and forValue reorder updates auto LayoutOrder while preserv
 			and pinTen.LayoutOrder == 10
 			and ka.LayoutOrder == 1
 			and kb.LayoutOrder == 2
-			and vx.LayoutOrder == 2
-			and vy.LayoutOrder == 3,
+			and vx.LayoutOrder == 3
+			and vy.LayoutOrder == 4,
 		`initial LayoutOrder pins and auto-order ({ka.LayoutOrder},{kb.LayoutOrder},{vx.LayoutOrder},{vy.LayoutOrder})`
 	)
 
@@ -1932,8 +1932,8 @@ test("edit · forKey and forValue reorder updates auto LayoutOrder while preserv
 			and pinTen.LayoutOrder == 10
 			and kb.LayoutOrder == 1
 			and ka.LayoutOrder == 2
-			and vy.LayoutOrder == 2
-			and vx.LayoutOrder == 3,
+			and vy.LayoutOrder == 3
+			and vx.LayoutOrder == 4,
 		`reordered LayoutOrder updates while static 0/10 pins stay untouched ({kb.LayoutOrder},{ka.LayoutOrder},{vy.LayoutOrder},{vx.LayoutOrder})`
 	)
 
@@ -2076,3 +2076,241 @@ test("own · ignores nil schema arguments and rejects non-table inputs", functio
 		Flux.own(a, "invalid" :: any)
 	end)
 end)
+
+test("prop & flags · Flux.prop clones plain defaults per split and Flags.defaults disables AutoButtonColor", function()
+	local frozenDefault = table.freeze({ kept = true })
+	local SCHEMA = Flux.own({
+		items = Flux.prop({ "one" }),
+		nested = Flux.prop({ inner = { count = 1 } }),
+		frozen = Flux.prop(frozenDefault),
+	})
+
+	local first = Flux.split(nil :: any, SCHEMA)
+	local second = Flux.split(nil :: any, SCHEMA)
+	table.insert(first.items, "two")
+	first.nested.inner.count = 99
+	expect(#second.items == 1 and second.items[1] == "one", "plain array default is cloned per split")
+	expect(second.nested.inner.count == 1, "nested plain table default is deep-cloned per split")
+	expect(first.frozen == frozenDefault and second.frozen == frozenDefault, "frozen default keeps table identity")
+
+	local prevDefaults = Flux.Flags.defaults
+	Flux.Flags.defaults = false
+	local rawBtn = Instance.new("TextButton")
+	local rawAuto = rawBtn.AutoButtonColor
+	rawBtn:Destroy()
+	local fluxBtn = Flux.new("TextButton")({})
+	expect(fluxBtn.AutoButtonColor == rawAuto, "Flags.defaults = false keeps engine default AutoButtonColor")
+	fluxBtn:Destroy()
+	Flux.Flags.defaults = prevDefaults
+end)
+
+test(
+	"edit & split · diamond default cloning, non-table split args, __TAG model guard, and sorted deferred inits",
+	function()
+		-- 1. Diamond leaf default cloning preserves internal aliasing while isolating instances
+		local leaf = { count = 1 }
+		local SCHEMA = Flux.own({
+			pair = Flux.prop({ left = leaf, right = leaf }),
+		})
+		local s1 = Flux.split(nil :: any, SCHEMA)
+		local s2 = Flux.split(nil :: any, SCHEMA)
+		expect(
+			s1.pair.left == s1.pair.right and s1.pair.left ~= leaf,
+			"diamond leaf aliases internally in cloned default"
+		)
+		s1.pair.left.count = 99
+		expect(s2.pair.left.count == 1 and s2.pair.right.count == 1, "cloned diamond stays isolated across splits")
+
+		-- 2. split degrades gracefully on non-table props and non-table key groups (returns {})
+		local ownStr, restStr = Flux.split("not-a-table" :: any, { "a" })
+		expect(next(ownStr) == nil and next(restStr) == nil, "non-table props splits into empty own and rest tables")
+		local ownBadKey, restBadKey = Flux.split({ a = 1 }, 123 :: any)
+		expect(next(ownBadKey) == nil and restBadKey.a == 1, "non-table key group returns empty own and preserves rest")
+		local g1, g2, gRest = Flux.split({ a = 1, b = 2 }, 123 :: any, { "a" })
+		expect(next(g1) == nil and g2.a == 1 and gRest.b == 2, "non-table multi-group skips bad group cleanly")
+
+		-- 3. __TAG rejects Flux.model
+		local tagNode = Flux.signal(true)
+		local tagHost = Instance.new("Frame")
+		expectError(function()
+			Flux.edit(tagHost)({
+				__TAG = Flux.model(tagNode) :: any,
+			})
+		end)
+		tagHost:Destroy()
+		tagNode:Destroy()
+
+		-- 4. Reactive tag cleanup guard prevents updates after destroy
+		local dynTag = Flux.signal("Alpha" :: any)
+		local dynFrame = Flux.new("Frame")({
+			__TAG = dynTag,
+		})
+		flush()
+		expect(tagsOf(dynFrame) == "Alpha", "initial reactive tag applied")
+		dynFrame:Destroy()
+		dynTag:set("Beta")
+		flush()
+		dynTag:Destroy()
+
+		-- 5. Dynamic Flux.portal invalid initial target warns without crashing constructor & cleans up
+		local portalTarget = Flux.signal("bad-target" :: any)
+		local modal = Instance.new("Frame")
+		local host = nil :: any
+		local warns = env.warnings(function()
+			host = Flux.new("Frame")({
+				Flux.portal(portalTarget, modal),
+			})
+			flush()
+		end)
+		expect(
+			#warns >= 1 and modal.Parent == nil,
+			"invalid initial dynamic portal target warns cleanly without throwing"
+		)
+		local validParent = Instance.new("Folder")
+		portalTarget:set(validParent)
+		flush()
+		expect(modal.Parent == validParent, "valid dynamic target mounts portal after prior warning")
+		host:Destroy()
+		expect(modal.Parent == nil, "destroying host unmounts portal child")
+		validParent:Destroy()
+		modal:Destroy()
+		portalTarget:Destroy()
+
+		-- 6. Deterministic sorted init execution after Parent and cancellation on early Destroy
+		local container = Instance.new("Folder")
+		local order = {}
+		local child = Flux.new("Frame")({
+			Parent = container,
+			[3] = function(inst)
+				table.insert(order, `3:{inst.Parent == container}`)
+			end,
+			[1] = function(inst)
+				table.insert(order, `1:{inst.Parent == container}`)
+				inst:Destroy()
+			end,
+			[2] = function()
+				table.insert(order, "2")
+			end,
+		})
+		settle()
+		expect(
+			#order == 1 and order[1] == "1:true",
+			"init callbacks run sorted after Parent and skip remaining if destroyed"
+		)
+		expect(child.Parent == nil, "child destroyed during init")
+		container:Destroy()
+
+		-- 7. Static property/attribute writes & Flux.new error cleanup isolate owner/untrack
+		local leakProbe = Flux.signal(1)
+		local leakedScopeCalls = 0
+		local outer = Flux.scope(function()
+			expectError(function()
+				Flux.new("Frame")({
+					Name = "Doomed",
+					__ATTR = { Ready = true },
+					__CLEAN = {
+						function()
+							leakedScopeCalls += 1
+						end,
+					},
+					NoSuchPropertyForBoom = 123 :: any,
+				})
+			end)
+		end)
+		expect(leakedScopeCalls == 1, "throwing Flux.new runs __CLEAN cleanup synchronously without leaking")
+		outer:Destroy()
+		leakProbe:Destroy()
+	end
+)
+
+test(
+	"edit · tag refcounting/cleanup, nested Parent vs root Parent, nested action destroy guard, and split table props",
+	function()
+		-- 1. Shared tag refcounting across two separate reactive edits + double cleanup + _tag_ replacement
+		local target = Instance.new("Frame")
+		local tags1 = Flux.signal({ "Shared", "First" } :: any)
+		local tags2 = Flux.signal({ "Shared" } :: any)
+		Flux.edit(target)({ __TAG = tags1, _tag_Role = true })
+		local c2 = Flux.scope(function()
+			Flux.edit(target)({ __TAG = tags2 })
+		end)
+		flush()
+		expect(
+			target:HasTag("Shared") and target:HasTag("First") and target:HasTag("Role"),
+			"initial overlapping tags applied"
+		)
+
+		Flux.edit(target)({ _tag_Role = false })
+		expect(not target:HasTag("Role"), "_tag_Role = false strips named tag cleanly")
+
+		tags1:set({})
+		flush()
+		expect(target:HasTag("Shared") and not target:HasTag("First"), "Shared tag kept while second claim remains")
+		tags2:set({})
+		flush()
+		expect(not target:HasTag("Shared"), "Shared tag removed when final claim clears")
+		c2:Destroy()
+		c2:Destroy() -- idempotent double-destroy
+		tags1:Destroy()
+		tags2:Destroy()
+
+		-- Destroying instance cleans up tagCounts safely
+		local inst2 = Flux.new("Frame")({ __TAG = { "AutoClean" } })
+		expect(inst2:HasTag("AutoClean"))
+		inst2:Destroy()
+		expect(inst2.Parent == nil, "destroying tagged instance runs cleanup cleanly")
+
+		-- 2. Nested Parent in child table honored when root omits Parent; root Parent wins when provided
+		local nestParent = Instance.new("Folder")
+		local rootParent = Instance.new("Folder")
+		local usedNested = Flux.new("Frame")({
+			{ Parent = nestParent, __ATTR = { NestedAttr = 1 } },
+			_attr_Direct = "yes",
+		})
+		expect(
+			usedNested.Parent == nestParent
+				and usedNested:GetAttribute("NestedAttr") == 1
+				and usedNested:GetAttribute("Direct") == "yes",
+			"nested Parent and merged nested __ATTR apply when root omits Parent"
+		)
+
+		local rootWins = Flux.new("Frame")({
+			Parent = rootParent,
+			__ATTR = { NestedAttr = 9 },
+			{ Parent = nestParent, __ATTR = { NestedAttr = 2, Extra = true } },
+		})
+		expect(
+			rootWins.Parent == rootParent
+				and rootWins:GetAttribute("NestedAttr") == 9
+				and rootWins:GetAttribute("Extra") == true,
+			"root Parent and root __ATTR key override nested directives while preserving unoverridden attrs"
+		)
+
+		-- 3. Nested numeric action callback skipped if instance destroyed before settle()
+		local ranAfterDestroy = false
+		local ephemeral = Flux.new("Frame")({
+			{
+				function()
+					ranAfterDestroy = true
+				end,
+			},
+		})
+		ephemeral:Destroy()
+		settle()
+		expect(not ranAfterDestroy, "deferred nested action skips cleanly when instance is destroyed early")
+
+		-- 4. Flux.split treats non-PROP_DEFAULT literal tables as props, not defaulted schema specs
+		local schema = { literalList = { "one", "two" }, flagged = { true }, opt = Flux.prop(42) }
+		local matched, rest = Flux.split({ literalList = { "custom" }, extra = "x" }, schema)
+		expect(
+			matched.opt == 42 and matched.literalList[1] == "custom" and rest.extra == "x",
+			"split preserves explicit table props and clones Flux.prop defaults"
+		)
+
+		target:Destroy()
+		usedNested:Destroy()
+		rootWins:Destroy()
+		nestParent:Destroy()
+		rootParent:Destroy()
+	end
+)
