@@ -25,9 +25,8 @@ local Compat = require("./Compat")
 local Graph = require("./Graph")
 
 local Instance = Compat.Instance
+local compatTask = Compat.task
 local warn = Compat.warn
-local Players: Players? = Compat.getService("Players")
-local RunService: RunService? = Compat.getService("RunService")
 
 local sampleSignal: any = Graph.signal(nil)
 local SignalMT: any = getmetatable(sampleSignal)
@@ -122,10 +121,13 @@ type Sync = {
 	gone: { [any]: true },
 	ackDirty: { [any]: boolean },
 	playerDirty: { [any]: { [Synced]: boolean } },
+	rollbackDirty: { [any]: { [Synced]: boolean } },
 	globalDirty: { [Synced]: boolean },
 	announce: { Synced },
 	validating: Synced?,
+	validatingPlayer: any,
 	wrote: boolean,
+	localOnly: boolean?,
 	-- client
 	joined: boolean,
 	sent: number,
@@ -133,6 +135,7 @@ type Sync = {
 	outDirty: { [Synced]: boolean },
 }
 
+local MAX_BATCH_PAIRS = 256
 local instances: { [Sync]: true } = {}
 local default: Sync? = nil
 
@@ -171,7 +174,8 @@ local function idOf(n: number): string
 end
 
 local function nodeValue(signal: any): any
-	return signal[1][1]
+	local inner = rawget(signal, 1)
+	return if inner ~= nil then inner[1] else nil
 end
 
 local function valueFor(entry: Synced, player: any): any
@@ -194,7 +198,7 @@ local function written(sync: Sync, entry: Synced, player: any?)
 		sync.outDirty[entry] = true
 		return
 	end
-	if sync.validating == entry then
+	if sync.validating == entry and (player == nil or player == sync.validatingPlayer) then
 		sync.wrote = true
 	end
 	if player == nil then
@@ -255,26 +259,32 @@ PlayerMT.__call = call
 PlayerMT.update = update
 
 function SyncMT.set(self: Synced, value: any, force: boolean?): any
+	if rawget(self :: any, 1) == nil then
+		return rawSet(self, value, force)
+	end
 	local old = nodeValue(self)
 	rawSet(self, value, force)
 	local sync = self._sync
 	if sync.isServer and sync.validating == self then
 		sync.wrote = true
 	end
+	self._touched = true
 	if old ~= value or force then
-		self._touched = true
 		written(sync, self, nil)
 	end
 	return value
 end
 
 function PlayerMT.set(self: PlayerSignal, value: any, force: boolean?): any
+	if rawget(self :: any, 1) == nil then
+		return rawSet(self, value, force)
+	end
 	local old = nodeValue(self)
 	rawSet(self, value, force)
 	local owner = self._owner
 	if owner then
 		local sync = owner._sync
-		if sync.isServer and sync.validating == owner then
+		if sync.isServer and sync.validating == owner and self._player == sync.validatingPlayer then
 			sync.wrote = true
 		end
 		if old ~= value or force then
@@ -282,6 +292,10 @@ function PlayerMT.set(self: PlayerSignal, value: any, force: boolean?): any
 		end
 	end
 	return value
+end
+
+function SyncMT.Destroy(_self: Synced)
+	error("Flux.Sync: synced signals cannot be destroyed directly", 2)
 end
 
 function SyncMT.of(self: Synced, player: any): any
@@ -312,11 +326,20 @@ end
 
 function SyncMT.clear(self: Synced, player: any)
 	local sync = self._sync
-	if sync.isServer and sync.validating == self then
+	if sync.isServer and sync.validating == self and player == sync.validatingPlayer then
 		sync.wrote = true
 	end
 	if drop(self, player) then
 		written(sync, self, player)
+	end
+end
+
+function PlayerMT.Destroy(self: PlayerSignal)
+	local owner = self._owner
+	if owner then
+		SyncMT.clear(owner, self._player)
+	else
+		rawDestroy(self)
 	end
 end
 
@@ -417,9 +440,9 @@ local function runValidator(
 	value: any
 ): (boolean, any)
 	local thread = coroutine.create(validator)
-	sync.validating, sync.wrote = entry, false
+	sync.validating, sync.validatingPlayer, sync.wrote = entry, player, false
 	local ok, count, accepted, replacement = unpackResume(coroutine.resume(thread, player, value))
-	sync.validating = nil
+	sync.validating, sync.validatingPlayer = nil, nil
 	if coroutine.status(thread) ~= "dead" then
 		coroutine.close(thread)
 		if not entry._yieldWarned then
@@ -440,21 +463,36 @@ local function runValidator(
 end
 
 local function applyServer(sync: Sync, entry: Synced, player: any, value: any)
+	local accepted = false
 	local validator = entry._validator
 	if validator then
 		local accept, stored = runValidator(sync, entry, validator, player, value)
 		if accept then
+			accepted = true
 			local target: any = if entry._own then SyncMT.of(entry, player) else entry
 			target:set(stored)
 		end
 	end
 	if valueFor(entry, player) ~= value then
-		written(sync, entry, player)
+		if entry._unreliable then
+			local rollback = sync.rollbackDirty[player]
+			if rollback == nil then
+				rollback = {}
+				sync.rollbackDirty[player] = rollback
+			end
+			rollback[entry] = true
+		elseif not (accepted and entry._ownCount == 0 and sync.globalDirty[entry]) then
+			written(sync, entry, player)
+		end
 	else
 		-- the client already shows this value; skip echoing it back to them
 		local dirty = sync.playerDirty[player]
 		if dirty then
 			dirty[entry] = nil
+		end
+		local rollback = sync.rollbackDirty[player]
+		if rollback then
+			rollback[entry] = nil
 		end
 	end
 end
@@ -465,6 +503,7 @@ local function hello(sync: Sync, player: any)
 	end
 	sync.received[player] = 0
 	sync.playerDirty[player] = nil
+	sync.rollbackDirty[player] = nil
 	local links = {}
 	for key, entry in sync.signals do
 		links[entry._id :: string] = { key, valueFor(entry, player) }
@@ -491,11 +530,35 @@ local function receive(sync: Sync, ...: any)
 		sync.ackDirty[player] = true
 		local args = { ... }
 		local byId = sync.byId
-		for i = 2, n, 2 do
-			local id = args[i]
+		local lastArg = math.min(n, 1 + MAX_BATCH_PAIRS * 2)
+		if lastArg <= 3 then
+			local id = args[2]
 			local entry = if type(id) == "string" then byId[id] else nil
 			if entry then
-				applyServer(sync, entry, player, args[i + 1])
+				applyServer(sync, entry, player, args[3])
+			end
+		else
+			local seenIndex: { [string]: number } = {}
+			local entries: { Synced } = {}
+			local values: { any } = {}
+			local uniqueCount = 0
+			for i = 2, lastArg, 2 do
+				local id = args[i]
+				local entry = if type(id) == "string" then byId[id] else nil
+				if entry then
+					local slot = seenIndex[id]
+					if slot ~= nil then
+						values[slot] = args[i + 1]
+					else
+						uniqueCount += 1
+						seenIndex[id] = uniqueCount
+						entries[uniqueCount] = entry
+						values[uniqueCount] = args[i + 1]
+					end
+				end
+			end
+			for i = 1, uniqueCount do
+				applyServer(sync, entries[i], player, values[i])
 			end
 		end
 		return
@@ -528,6 +591,11 @@ end
 local ensureServerRemotes: (sync: Sync) -> (any, any)
 
 local function flushServer(sync: Sync)
+	if sync.localOnly then
+		table.clear(sync.globalDirty)
+		table.clear(sync.announce)
+		return
+	end
 	local reliable, unreliable
 	if sync == default then
 		reliable, unreliable = ensureServerRemotes(sync)
@@ -535,20 +603,51 @@ local function flushServer(sync: Sync)
 		reliable = sync.reliable
 		unreliable = sync.unreliable or reliable
 	end
-	local received, globalDirty, playerDirty, ackDirty =
-		sync.received, sync.globalDirty, sync.playerDirty, sync.ackDirty
+	local received, globalDirty, playerDirty, rollbackDirty, ackDirty =
+		sync.received, sync.globalDirty, sync.playerDirty, sync.rollbackDirty, sync.ackDirty
 
 	local announce = sync.announce
 	if #announce > 0 then
-		local links = {}
+		local anyScoped = false
 		for _, entry in announce do
-			links[entry._id] = { entry._key, nodeValue(entry) }
-			if entry._ownCount == 0 then
-				globalDirty[entry] = nil
+			if entry._ownCount > 0 then
+				anyScoped = true
+				break
 			end
 		end
-		table.clear(announce)
-		reliable:FireAllClients(links)
+		if not anyScoped then
+			local hasRecipients = next(received) ~= nil
+			local links = if hasRecipients then {} else nil
+			for _, entry in announce do
+				if links then
+					links[entry._id] = { entry._key, nodeValue(entry) }
+				end
+				globalDirty[entry] = nil
+				for _, dirty in playerDirty do
+					dirty[entry] = nil
+				end
+			end
+			table.clear(announce)
+			if links then
+				reliable:FireAllClients(links)
+			end
+		else
+			for player in received do
+				local dirty = playerDirty[player]
+				local links = {}
+				for _, entry in announce do
+					links[entry._id] = { entry._key, valueFor(entry, player) }
+					if dirty then
+						dirty[entry] = nil
+					end
+				end
+				reliable:FireClient(player, links)
+			end
+			for _, entry in announce do
+				globalDirty[entry] = nil
+			end
+			table.clear(announce)
+		end
 	end
 
 	-- shared values of signals with per-player overrides go out per player, skipping players with their own
@@ -564,11 +663,22 @@ local function flushServer(sync: Sync)
 	for player, ack in received do
 		local dirty = playerDirty[player]
 		local hasDirty = dirty ~= nil and next(dirty) ~= nil
-		if not hasDirty and sn == 0 and not ackDirty[player] then
+		local rollback = rollbackDirty[player]
+		local hasRollback = rollback ~= nil and next(rollback) ~= nil
+		if not hasDirty and not hasRollback and sn == 0 and not ackDirty[player] then
 			continue
 		end
 		reliableBuf[1] = ack
 		rn, un = 1, 0
+		if hasRollback and rollback ~= nil then
+			for entry in rollback do
+				rn = push(reliableBuf, rn, entry._id, valueFor(entry, player))
+				if dirty then
+					dirty[entry] = nil
+				end
+			end
+			table.clear(rollback)
+		end
 		if dirty ~= nil and hasDirty then
 			for entry in dirty do
 				rn, un = pushEntry(reliableBuf, rn, unreliableBuf, un, entry, valueFor(entry, player))
@@ -655,6 +765,7 @@ local function playerRemoving(sync: Sync, player: any)
 	sync.received[player] = nil
 	sync.ackDirty[player] = nil
 	sync.playerDirty[player] = nil
+	sync.rollbackDirty[player] = nil
 end
 
 local function start(sync: Sync)
@@ -687,7 +798,7 @@ local InstanceMT = table.freeze({
 	}),
 })
 
-local function newSync(isServer: boolean, reliable: any, unreliable: any): Sync
+local function newSync(isServer: boolean, reliable: any, unreliable: any, localOnly: boolean?): Sync
 	local raw: any = setmetatable({
 		isServer = isServer,
 		reliable = reliable,
@@ -701,10 +812,13 @@ local function newSync(isServer: boolean, reliable: any, unreliable: any): Sync
 		gone = setmetatable({}, { __mode = "k" }),
 		ackDirty = {},
 		playerDirty = {},
+		rollbackDirty = {},
 		globalDirty = {},
 		announce = {},
 		validating = nil,
+		validatingPlayer = nil,
 		wrote = false,
+		localOnly = if localOnly then true else nil,
 		joined = false,
 		sent = 0,
 		acked = 0,
@@ -721,12 +835,15 @@ end
 
 local function onPlayerRemoving(player: Player)
 	-- deferred so other PlayerRemoving handlers (saving data, say) can still read `sig:of(player)`
-	task.defer(playerRemoving, default :: Sync, player)
+	compatTask.defer(playerRemoving, default :: Sync, player)
 end
 
 local function connectClient(sync: Sync, container: Instance)
 	local event = container:WaitForChild("SyncEvent") :: RemoteEvent
 	local unreliableEvent = container:WaitForChild("SyncUnreliable") :: UnreliableRemoteEvent
+	if default ~= sync then
+		return
+	end
 	sync.reliable = event
 	table.insert(sync.connections, event.OnClientEvent:Connect(onEvent))
 	table.insert(sync.connections, unreliableEvent.OnClientEvent:Connect(onEvent))
@@ -766,14 +883,23 @@ end
 -- there.
 local function getDefault(): Sync
 	if default then
-		if default.isServer then
+		if default.isServer and not default.localOnly then
 			ensureServerRemotes(default)
 		end
 		return default
 	end
-	local runService, players = RunService, Players
+	local runService = Compat.getService("RunService")
+	local players = Compat.getService("Players")
 	if not Compat.isRoblox or not runService or not players then
 		error("Flux.Sync needs Roblox; headless tests use Sync._internal.create", 3)
+	end
+	local okEdit, isEdit = pcall(function()
+		return runService:IsEdit()
+	end)
+	if (okEdit and isEdit == true) or (runService:IsStudio() and not runService:IsRunning()) then
+		local sync = newSync(true, nil, nil, true)
+		default = sync
+		return sync
 	end
 	if runService:IsServer() then
 		local event: RemoteEvent = findOrCreate(script, "SyncEvent", "RemoteEvent")
@@ -786,7 +912,7 @@ local function getDefault(): Sync
 	end
 	local sync = newSync(false, nil, nil)
 	default = sync
-	task.spawn(connectClient, sync, script)
+	compatTask.spawn(connectClient, sync, script)
 	return sync
 end
 
@@ -803,6 +929,10 @@ end
 
 function NamespaceMT.__call(ns: any, key: string, initial: any, validate: Validator<any>?): any
 	return signal(rawget(ns, "_sync") or getDefault(), key, initial, validate)
+end
+
+function NamespaceMT.__newindex(_ns: any, key: any, _value: any)
+	error(`Flux.Sync is read-only (attempted to assign key "{tostring(key)}")`, 2)
 end
 
 table.freeze(NamespaceMT)
@@ -832,11 +962,15 @@ end
 local Sync: any = setmetatable({ flush = flushDefault }, NamespaceMT)
 
 --- @ignore
-Sync._internal = table.freeze({
-	-- Flushes every Sync instance; init.luau runs it each frame after the graph flush.
-	flushAll = stepAll,
-	step = stepAll,
-	create = createInternal,
-})
+rawset(
+	Sync,
+	"_internal",
+	table.freeze({
+		-- Flushes every Sync instance; init.luau runs it each frame after the graph flush.
+		flushAll = stepAll,
+		step = stepAll,
+		create = createInternal,
+	})
+)
 
 return Sync :: SyncNamespace & { _internal: any }

@@ -721,7 +721,7 @@ local syncModelSpec = {
 			serverInst:receive(player, ...)
 		end)
 		srvEnv.game:GetService("Players").PlayerRemoving:Connect(function(player)
-			serverInst:leave(player)
+			serverInst:playerRemoving(player)
 		end)
 
 		local pub = serverSync("Public", 1, validateSyncV)
@@ -1026,7 +1026,7 @@ test("sync · replicates across sert.sim server and client peers over RemoteEven
 		serverInst:receive(player, ...)
 	end)
 	srvEnv.game:GetService("Players").PlayerRemoving:Connect(function(player)
-		serverInst:leave(player)
+		serverInst:playerRemoving(player)
 	end)
 
 	local score = serverSync("Score", 10)
@@ -1262,3 +1262,237 @@ sert.test.roblox("sync · sweeping remotes under ReplicatedStorage recreates the
 	expect(sig2() == 99 and Flux.Sync[key2] == sig2, "newly created signal works after partial remote sweep")
 	expect(syncFolder:FindFirstChild("SyncEvent") ~= nil, "getDefault recreates missing remote cleanly")
 end)
+
+test(
+	"sync · SyncMT/PlayerMT Destroy, read-only namespace, validator scoping, 256-pair cap, and duplicate-nil coalescing",
+	function()
+		local w = world(2)
+		local gold = w.server("Gold", 10)
+		local other = w.server("Other", "init")
+		local c1, c2 = w.clients[1], w.clients[2]
+		w.joinAll()
+
+		-- 1. SyncMT.Destroy errors on shared synced signal; namespace __newindex rejects direct assignment
+		local okDestroyShared = pcall(function()
+			gold:Destroy()
+		end)
+		expect(not okDestroyShared, "calling :Destroy() on shared Sync signal errors")
+
+		local okAssignNs = pcall(function()
+			(w.server :: any).Illegal = 123
+		end)
+		expect(not okAssignNs, "Sync namespace rejects direct field writes")
+
+		-- 2. PlayerMT.Destroy delegates to clear(player) and reverts override to shared value
+		local p1Gold = gold:of(c1)
+		p1Gold(999)
+		w.step()
+		expect(c1.sync.Gold() == 999 and c2.sync.Gold() == 10, "per-player override replicated")
+		p1Gold:Destroy()
+		w.step()
+		expect(c1.sync.Gold() == 10, "PlayerMT:Destroy clears override and replicates fallback to shared value")
+
+		-- Writing a disposed PlayerMT signal after player left throws / does not crash or leak
+		local p2Gold = gold:of(c2)
+		p2Gold(55)
+		w.serverInst:playerRemoving(c2) -- leave while p2Gold was dirty before step() clears playerDirty
+		w.step()
+		local okWriteDead, _ = pcall(function()
+			p2Gold(77)
+		end)
+		expect(not okWriteDead or p2Gold() == nil, "disposed per-player signal is torn down cleanly")
+
+		-- 3. Validator mutating another player's :of(other) does not swallow sending player's validator return
+		local valSig = w.server("Validated", 0, function(player, val)
+			if player == c1 then
+				other:of(c1)("side-effect")
+				return true, math.clamp(val :: number, 0, 100)
+			end
+			return false
+		end)
+		w.settle()
+		c1.sync.Validated(500)
+		w.settle()
+		expect(
+			valSig() == 100 and c1.sync.Validated() == 100 and c1.sync.Other() == "side-effect",
+			"validator return still commits when validator writes another signal"
+		)
+
+		-- 4. MAX_BATCH_PAIRS = 256 cap + duplicate-ID coalescing including nil payload
+		local keys = {}
+		for i = 1, 260 do
+			keys[i] = w.server(`cap{i}`, 0, function(_p, v)
+				return true, v
+			end)
+		end
+		local sigValidatorCalls = 0
+		local dupKey = w.server("DupNil", "start", function(_p, v)
+			sigValidatorCalls += 1
+			return true, v
+		end)
+		table.clear(w.log)
+		local lateClient = w.addClient()
+		w.join(lateClient)
+		local dupId: any = nil
+		for id, meta in w.log[1][1] do
+			if meta[1] == "DupNil" then
+				dupId = id
+				break
+			end
+		end
+		expect(dupId ~= nil, "resolved signal ID for DupNil")
+
+		for i = 1, 260 do
+			c1.sync[`cap{i}`](9)
+		end
+		w.settle()
+		local acceptedCap = 0
+		for i = 1, 260 do
+			if keys[i]() == 9 then
+				acceptedCap += 1
+			end
+		end
+		expect(acceptedCap == 256, `MAX_BATCH_PAIRS caps single packet at 256 pairs, got {acceptedCap}`)
+
+		w.serverInst:receive(c1, dupId, "first", dupId, nil)
+		w.settle()
+		expect(
+			dupKey() == nil and sigValidatorCalls == 1,
+			"duplicate-ID pair coalesces to final nil value and runs validator once"
+		)
+
+		-- 5. announce with 0 clients does not send broadcasts
+		local w0 = world(0)
+		table.clear(w0.log)
+		local s0 = w0.server("Lonely", 5)
+		s0(10)
+		w0.step()
+		expect(#w0.log == 0, "0 connected clients emits no remote packets")
+		w0.destroy()
+		w.destroy()
+	end
+)
+
+test(
+	"sync · client leave with pending playerDirty, client :of/:clear/:update/:validate no-ops, and client packet handling",
+	function()
+		local w = world(2)
+		local gold = w.server("Gold", 0, function(_, v)
+			return true, v
+		end)
+		local c1, c2 = w.clients[1], w.clients[2]
+		w.joinAll()
+
+		-- 1. Server writes per-player dirty override and player leaves BEFORE w.step() (cleans playerDirty)
+		gold:of(c2)(777)
+		w.serverInst:playerRemoving(c2)
+		w.step()
+		expect(c1.sync.Gold() == 0, "c2 leaving before flush cleans dirty entry without corrupting c1")
+
+		-- 2. Client-side helpers (:validate, :update, :unreliable, :clear)
+		c1.sync.Gold:validate(function()
+			return false
+		end)
+		c1.sync.Gold:unreliable(true)
+		c1.sync.Gold:clear(c1)
+		c1.sync.Gold:update(function(v)
+			return (v :: number) + 5
+		end)
+		w.settle()
+		expect(
+			gold:of(c1)() == 5 and c1.sync.Gold() == 5 and gold() == 0,
+			"client :update replicates per-player override when server entered :of mode and ignores server-only config methods"
+		)
+
+		local lateScoped = w.server("LateScoped", 1)
+		local p1Late = lateScoped:of(c1)
+		p1Late(42)
+		w.step()
+		expect(c1.sync.LateScoped() == 42, "late-announced signal with per-player override sends per-player announce")
+
+		-- 3. Disposed per-player signals after player leave stay nil on write attempts
+		w.serverInst:playerRemoving(c1)
+		pcall(function()
+			p1Late:set(99)
+		end)
+		expect(p1Late() == nil, "writes to disposed per-player Sync signal after leave do not revive value")
+		w.destroy()
+	end
+)
+
+test(
+	"sync · unreliable rollback packet, validator clamp/cross-write, validator error recovery, and leaving with rollbackDirty",
+	function()
+		local w = world(2)
+		local c1, c2 = w.clients[1], w.clients[2]
+		local allow = true
+		local shouldThrow = false
+		local crossSignal = w.server("Cross", 0)
+		local fastPos = w.server("FastPos", 10, function(player, val)
+			if shouldThrow then
+				error("validator crash")
+			end
+			if not allow then
+				return false
+			end
+			crossSignal:of(c2)(val :: number + 1)
+			return true, math.min(val :: number, 100)
+		end):unreliable(true)
+		w.joinAll()
+
+		-- 1. Valid client write clamped & updates crossSignal for c2
+		c1.sync.FastPos(250)
+		w.settle()
+		expect(
+			fastPos() == 100 and crossSignal:of(c2)() == 251,
+			"validator clamps accepted value and supports cross-player write"
+		)
+
+		-- 2. Rejected unreliable write emits reliable rollback packet directly to offending client
+		allow = false
+		table.clear(w.log)
+		c1.sync.FastPos(999)
+		w.settle()
+		local sawReliableRollback = false
+		for _, entry in w.log do
+			if entry.unreliable == false and entry.to == c1 then
+				sawReliableRollback = true
+				break
+			end
+		end
+		expect(
+			sawReliableRollback and fastPos() == 100 and c1.sync.FastPos() == 100,
+			"rejected unreliable client update rolls back reliably to server value"
+		)
+
+		-- 3. Validator error clears validating state so subsequent valid client writes work
+		shouldThrow = true
+		c1.sync.FastPos(5)
+		flush()
+		c1.inst:flush()
+		pcall(function()
+			w.deliverServer()
+		end)
+		shouldThrow = false
+		allow = true
+		c1.sync.FastPos(42)
+		w.settle()
+		expect(fastPos() == 42, "validator error clears validating state cleanly for later updates")
+
+		-- 4. Leaving with pending rollbackDirty cleans rollbackDirty cleanly & destroying synced signal directly errors
+		allow = false
+		c2.sync.FastPos(888)
+		flush()
+		c2.inst:flush()
+		w.deliverServer()
+		w.serverInst:playerRemoving(c2) -- leaves BEFORE w.serverInst:flush() drains rollbackDirty[c2]
+		w.step()
+		expect(c1.sync.FastPos() == 42, "leaving before rollback flush cleans rollbackDirty without error")
+
+		local okDestroy = pcall(function()
+			fastPos:Destroy()
+		end)
+		expect(not okDestroy, "direct Destroy on synced signal raises explicit error")
+		w.destroy()
+	end
+)
