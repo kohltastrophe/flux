@@ -30,14 +30,11 @@ The authoritative table lives in [`src/Edit.luau`](https://github.com/kohltastro
 
 ## Disabling Defaults
 
-Set `Flux.Flags.defaults = false` at startup to disable the visual default overrides in `Flux.Defaults` globally:
+Set `Flux.Flags.defaults = false` at startup to disable all property overrides in `Flux.Defaults` globally (including `AutoButtonColor = false` on `TextButton` and `ImageButton`), yielding pure Roblox engine defaults:
 
 ```luau
 Flux.Flags.defaults = false
 ```
-
-> [!NOTE] AutoButtonColor Remains Disabled
-> `Flux.new` sets `AutoButtonColor = false` on `TextButton` and `ImageButton` unconditionally before applying `Flux.Defaults`, so it remains `false` even when `Flux.Flags.defaults = false` or `Flux.Defaults.TextButton.AutoButtonColor = nil`. Pass `AutoButtonColor = true` in the properties table (or set `Flux.Defaults.TextButton.AutoButtonColor = true` while `Flux.Flags.defaults` is `true`) when you want the engine's default hover tinting.
 
 ## Customizing Defaults
 

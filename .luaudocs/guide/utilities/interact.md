@@ -58,7 +58,7 @@ Pass `{ within = true }` when tracking a container (such as a card, list row, or
 
 - **Pointer / Touch:** Starts on `MouseButton1` or `Touch` inside `object` (unless covered by an input-sinking GUI above it) and stays `true` until that specific input ends *anywhere* on screen, so dragging slightly off a button never leaves it stuck.
 - **Gamepad / Keyboard:** Starts when `ButtonA`, `Return`, or `KeypadEnter` is pressed while `object` is [`GuiService.SelectedObject`](https://create.roblox.com/docs/reference/engine/classes/GuiService#SelectedObject) (and no `TextBox` has focus).
-- Opening the Roblox escape menu (`GuiService.MenuIsOpen`) releases any active press right away.
+- **Focus & Menu Release:** Opening the Roblox escape menu (`GuiService.MenuIsOpen`) releases active 2D/3D presses immediately while leaving presses inside isolated `PluginGui` docks active. Active `PluginGui` presses release on `UserInputService.InputEnded`, `WindowFocusReleased` (on either `PluginGui` or `UserInputService`), or when the held input's `UserInputState` changes to `End` or `Cancel`.
 
 ```luau
 local pressed = Flux.Interact.press(button)

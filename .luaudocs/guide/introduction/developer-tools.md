@@ -29,7 +29,7 @@ rojo sourcemap --output sourcemap.json
 
 ## Headless & Virtual-Time Testing
 
-Flux's core graph (`Graph`, `Clock`) has zero Roblox globals, and the full `Flux` package runs under the standalone [`luau` CLI](https://github.com/luau-lang/luau) once lightweight Roblox datatype shims (`Color3`, `Enum`, `TweenInfo`, `Vector2`, `UDim`, etc., such as [`sert`](https://github.com/kohltastrophe/sert)'s headless environment) are installed before `require(Flux)`. You can step timers, springs, tweens, and frame flushes deterministically in unit tests without launching Studio. See **[Testing](/guide/tips/testing)** for details.
+The `Flux` package loads directly under the standalone [`luau` CLI](https://github.com/luau-lang/luau) with zero setup, so reactive signals, stores, control flow, `Flux.Color.Oklab` vector helpers, `Flux.Responsive`, `Flux.Clock`, and `number` or `vector` animations (`Flux.spring`, `Flux.tween`) run without Roblox globals. Install [`sert`](https://github.com/kohltastrophe/sert)'s headless environment before `require(Flux)` when testing `Instance` trees, `Color3` helpers, layout or interaction helpers, or full Roblox datatypes without launching Studio. See **[Testing](/guide/tips/testing)** for details.
 
 ## UI Previewing (Storybooks)
 

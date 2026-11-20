@@ -15,13 +15,13 @@ Bug reports and pull requests are welcome. Open an issue first for anything larg
 ```text
 src/                     the Flux package (Rojo root, --!strict Luau)
   init.luau              public Flux table, callable constructor, and Instance creation (new, edit)
-  Graph.luau             reactive graph (signal, computed, effect, scope, context, batching, and flush)
+  Graph.luau             reactive graph (signal, computed, effect, scope, context, batching, safe, and flush)
   Store.luau             deep reactive proxy tables and array helpers
-  Conditional.luau       reactive control flow (show, switch, presence) and list mapping (forValue, forIndex)
+  Conditional.luau       reactive control flow (show, switch, presence) and list mapping (forValue, forKey, forIndex)
   Bind.luau              two-way Instance property bindings (bind, model) and action helpers
   Edit.luau              declarative property, attribute, tag, event, ref, and child application
-  Motion.luau            physics springs, parametric tweens, and perceptual Oklab/Oklch color helpers
-  Async.luau             cancellable reactive tasks (async) and error boundaries (safe)
+  Motion.luau            physics springs, parametric tweens, and perceptual Oklab color helpers
+  Async.luau             cancellable reactive tasks (async)
   Sync.luau              server-to-client and per-player state replication
   Layout.luau            terse UI layout and constraint builders
   Interact.luau          pointer, hover, press, and focus interaction tracking
@@ -55,12 +55,15 @@ CI runs static checks, unit tests, line coverage, and mutation testing in fastes
 
 ```sh
 npx --yes luaudocs@latest llms --check               # verify root llms.txt matches src/ and .luaudocs/
+luau test/standalone.luau                            # pure-Luau compatibility checks without sert mocks
 python3 tools/sert.py lint                           # luau-lsp (new solver), test/types probes, and stylua --check
 python3 tools/sert.py run                            # headless test suite on standalone luau
+python3 tools/sert.py run --codegen                  # headless test suite with --codegen enabled
 python3 tools/sert.py run -a "Graph"                 # filter tests by name or tag (e.g. -a "@file=Graph")
 python3 tools/sert.py run --coverage                 # run suite and write coverage.out
 python3 tools/sert.py coverage --min 90              # enforce >= 90% line coverage across src/
-python3 tools/sert.py audit --no-run                    # audit zero-assertion and trivial tests
+python3 tools/sert.py coverage --diff --min 90       # enforce >= 90% line coverage across changed src/ lines
+python3 tools/sert.py audit --no-run                 # audit zero-assertion and trivial tests
 python3 tools/sert.py mutate --no-coverage-run --min 85  # enforce >= 85% mutation score across src/
 ```
 

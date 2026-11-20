@@ -86,7 +86,7 @@ end)
 
 ## Disposing by Hand with `Flux.dispose`
 
-`Flux.dispose(obj)` runs the same teardown engine right away on any `Cleanable`. It accepts a 0-arg function `() -> ()`, `Instance`, `RBXScriptConnection`, suspended `thread`, `Flux.store` proxy, table with a `Destroy`/`destroy`/`Disconnect`/`disconnect` method, or an array of them:
+`Flux.dispose(obj)` runs the same teardown engine right away on any `Cleanable`. It accepts a 0-arg function `() -> ()`, `Instance`, `RBXScriptConnection`, suspended `thread`, `Flux.store` proxy, object (table or userdata) with a `Destroy`/`destroy`/`Disconnect`/`disconnect` method, or an array-shaped table (`obj[1] ~= nil`, traversed with cycle protection while leaving plain record tables untouched):
 
 ```luau
 local connections = {

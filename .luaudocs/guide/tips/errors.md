@@ -34,7 +34,7 @@ rawJson('{"ok": true}')
 print(parsed().ok) -- true
 ```
 
-Any reactive dependencies read before `tryFn` threw remain tracked, so updating `rawJson` re-runs `parsed` and recovers cleanly. Calling `reset()` forces `tryFn` to re-run even when no tracked signal changed (such as retrying a time-dependent or external check), while calling `reset` after `parsed` heals or is destroyed does nothing. The `fallback` handler itself runs **untracked** so fallback logging or recovery reads don't subscribe the computation to unintended dependencies.
+Any reactive dependencies read before `tryFn` threw remain tracked, so updating `rawJson` re-runs `parsed` and recovers cleanly. When `tryFn` throws, Flux disposes any partial child scopes, effects, and cleanups created before the failure immediately prior to invoking `fallback`. Calling `reset()` forces `tryFn` to re-run even when no tracked signal changed (such as retrying a time-dependent or external check), while calling `reset` after `parsed` heals or is destroyed does nothing. The `fallback` handler itself runs **untracked** under the `safe` node's owner so fallback logging or recovery reads don't subscribe the computation to unintended dependencies.
 
 ## Asynchronous Errors
 

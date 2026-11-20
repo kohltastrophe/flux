@@ -112,7 +112,7 @@ local function Badge(props: BadgeProps): TextLabel
 end
 ```
 
-- **Single source of truth:** `Flux.prop()` marks the key in `OWN`, while the type cast beside it gives `typeof(OWN)` and `own` (`Flux.Pick<BadgeProps, typeof(OWN)>`) their exact `--!strict` property types (keeping required props required). Pass a default value (`Flux.prop(default)`) to make a key optional in `Flux.Props` while guaranteeing a non-`nil` `default` value inside `own` whenever callers omit it or pass `nil`. Annotated key-literal arrays like `local OWN: { "label" | "accent" } = { "label", "accent" }` also preserve exact `Pick` and `Omit` types on a single group (two or more groups widen to `Flux.Partial<T>`).
+- **Single source of truth:** `Flux.prop()` marks the key in `OWN`, while the type cast beside it gives `typeof(OWN)` and `own` (`Flux.Pick<BadgeProps, typeof(OWN)>`) their exact `--!strict` property types (keeping required props required). Pass a default value (`Flux.prop(default)`) to make a key optional in `Flux.Props` while guaranteeing a non-`nil` `default` value inside `own` whenever callers omit it or pass `nil` (plain unfrozen table defaults without metatables are deep-cloned on each `Flux.split` call so mutations don't leak across component instances). Annotated key-literal arrays like `local OWN: { "label" | "accent" } = { "label", "accent" }` also preserve exact `Pick` and `Omit` types on a single group (two or more groups widen to `Flux.Partial<T>`).
 - **Pass-through forwarding:** `rest` is typed as `Flux.Omit<BadgeProps, typeof(OWN)>` and holds every remaining property, event, numeric child, and `__ATTR` / `__EVENT` / `__TAG` / `__CLEAN` directive without mutating `props`.
 - **Composing schemas with `Flux.own`:** Freeze a standalone schema or merge several shared schemas into one with `Flux.own(...)`:
 
@@ -140,11 +140,11 @@ local function Card(props: Flux.Props<"Frame">?)
 		Size = UDim2.fromOffset(320, 180),
 	}, props)
 
-	return Flux.new "Frame"(Flux.split(resolved))
+	return Flux.new "Frame"(resolved)
 end
 ```
 
-Indexing `resolved` forwards directly to the rightmost source table defining that key, so reactive getters, nodes, and events stay intact without cloning or eager evaluation. In `--!strict`, a non-optional key on any merged table narrows away optionality from earlier tables (`Flux.Merge<A, B>`). Pass `Flux.split(resolved)` when forwarding a merged view straight into `Flux.new` or `Flux.edit`.
+Indexing `resolved` forwards directly to the rightmost source table defining that key, so reactive getters, nodes, and events stay intact without cloning or eager evaluation. Because `Flux.merge` is shallow per key, rightmost numeric children and directive tables (`__ATTR`, `__TAG`, `__CLEAN`) overwrite earlier ones at the same key; wrap `{ base, rest }` as nested arrays at numeric indices or chain `Flux.edit(base)(rest)` when you want defaults and caller additions to accumulate. In `--!strict`, a non-optional key on any merged table narrows away optionality from earlier tables (`Flux.Merge<A, B>`). `Flux.new` and `Flux.edit` accept `Flux.merge(...)` views directly, or you can call `Flux.split(resolved)` to materialize a plain writable copy when needed.
 
 ## Accepting Children
 

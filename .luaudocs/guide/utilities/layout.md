@@ -100,11 +100,13 @@ Flux.grid({
 	cell = Vector2.new(100, 100), -- CellSize
 	gap = 8,                      -- CellPadding
 	fill = "x",                   -- "x" (default) | "y"
-	align = "center",             -- HorizontalAlignment ("start" | "center" | "end")
-	justify = "center",           -- VerticalAlignment ("start" | "center" | "end")
+	align = "center",             -- cross-axis alignment ("start" | "center" | "end")
+	justify = "center",           -- main-axis alignment along `fill` ("start" | "center" | "end")
 	maxCells = 4,                 -- FillDirectionMaxCells
 })
 ```
+
+Like `Flux.list`, `justify` maps to the main `fill` axis and `align` crosses it, re-routing automatically when `fill` is `"y"` or reactive.
 
 ## `flex` {#flex}
 

@@ -28,7 +28,7 @@ loadingProgress(1)
 `Flux.tween` takes two arguments:
 
 1. **`target`**: The value (or reactive source) the tween animates toward.
-2. **`tweenInfo`** *(optional)*: A Roblox [`TweenInfo`](https://create.roblox.com/docs/reference/engine/datatypes/TweenInfo) controlling duration (`Time`), easing style, direction, repeat count, and `Reverses` (`TweenInfo.DelayTime` is ignored so retargets respond immediately). Defaults to `0.3` seconds with `Cubic` `InOut` easing.
+2. **`tweenInfo`** *(optional)*: A Roblox [`TweenInfo`](https://create.roblox.com/docs/reference/engine/datatypes/TweenInfo) or plain `Flux.TweenConfig` table (`{ Time?, EasingStyle?, EasingDirection?, RepeatCount?, Reverses?, DelayTime? }`) controlling duration, easing curve, repeats, and reversal. `DelayTime` applies when starting a tween from rest and between repeat cycles, while mid-flight retargets skip `DelayTime` and redirect right away. Defaults to `0.3` seconds with `Cubic` `InOut` easing.
 
 The returned `Flux.Tween<T>` node works like a [Signal](/guide/concepts/signals). Read it with `tween()`, retarget it with `tween(newGoal)` or `:set(newGoal)`, and bind it directly to properties.
 

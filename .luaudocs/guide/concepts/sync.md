@@ -35,7 +35,7 @@ local round = Flux.Sync("Round", "Lobby") -- SyncSignal<string>
 print(Flux.Sync.Round == round) --> true
 ```
 
-`Flux.Sync.Key` looks up a signal by name (`"ready"` and `"flush"` are reserved methods on `Flux.Sync`) and creates it if it doesn't exist yet, starting at `nil`. A later `Flux.Sync(key, initial)` fills in the initial value as long as nothing has written the signal yet. A client can index a key before the server has created it. The client's signal links up and takes the server's value once the server announces it.
+The `Flux.Sync` namespace is read-only for assignments (`Flux.Sync.X = ...` throws). `Flux.Sync.Key` looks up a signal by name (`"ready"` and `"flush"` are reserved methods on `Flux.Sync`) and creates it if it doesn't exist yet, starting at `nil`. A later `Flux.Sync(key, initial)` fills in the initial value as long as nothing has written the signal yet. A client can index a key before the server has created it. The client's signal links up and takes the server's value once the server announces it. Shared `SyncSignal` instances cannot be destroyed manually (`sig:Destroy()` throws; pass `Flux.dispose(sig:of(player))` or call `sig:of(player):Destroy()` to clear a single player's override instead).
 
 > [!WARNING] Typos Create New Signals
 > `Flux.Sync.Cions` quietly creates a separate signal named `"Cions"`. Declare each signal once in a shared module with `Flux.Sync(key, initial)` and require that module, rather than indexing by name across files.
@@ -122,6 +122,8 @@ Unreliable messages can drop or arrive out of order, and the last value in a bur
 ## Limitations
 
 - Sync replicates values, not events. Use a `RemoteEvent` for one-off actions like "play this sound".
+- In Studio Edit Mode (`RunService:IsRunning() == false`), Sync runs local-only in memory with `Flux.Sync.ready()` set to `true`, skipping `RemoteEvent` creation and `WaitForChild`.
+- Server inbound batch processing handles at most 256 pairs per remote packet and coalesces duplicate signal IDs within a packet (preserving trailing `nil` clears).
 - `Flux.setter(sig)` writes the node directly and doesn't replicate. Call the signal or `:set` instead.
 - Values must be serializable over a `RemoteEvent` (plain values or tables with string or array keys, without functions or metatables).
 - A table changed in place isn't seen as a change. Write a new table, or call `sig:update()` (or `sig:set(value, true)`) to replicate an in-place change.

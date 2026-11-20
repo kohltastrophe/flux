@@ -38,7 +38,7 @@ local tripled = Flux(function()
 end)
 ```
 
-Pass an optional `equals(old, new)` comparator as the second argument to stop downstream updates when a recomputed result hasn't logically changed (see [Custom Equality](/guide/concepts/signals#custom-equality)). `equals` skips the initial evaluation; on later runs where `equals(old, new)` returns `true`, the Computed updates its cached value to `new` while keeping downstream observers asleep.
+Pass an optional `equals(old, new)` comparator as the second argument to stop downstream updates when a recomputed result hasn't logically changed (see [Custom Equality](/guide/concepts/signals#custom-equality)). `equals` skips the initial evaluation and runs untracked; when `equals(old, new)` returns `true` on later runs, the Computed keeps its previous cached value `old` (matching `Flux.signal`) so downstream observers stay asleep.
 
 If you only need a tracked getter function `() -> T` without node methods or operators, `Flux.createMemo(fn, equals?)` skips the node table wrapper. See [Optimization](/guide/tips/optimization#zero-wrapper-primitives).
 

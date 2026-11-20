@@ -34,7 +34,7 @@ assert(label.Text == "Count: 5")
 
 `Flux.Clock` is the shared time source for Flux's scheduler and animations ([`Flux.spring`](/guide/motion/spring), [`Flux.tween`](/guide/motion/tween), including [`Flux.presence`](/guide/concepts/conditionals#animating-exits-with-presence) exit animations that call `done()` when a spring or tween settles).
 
-In production on Roblox, `Flux.Clock` delegates straight to `os.clock()`, `workspace:GetServerTimeNow()`, `task.*`, and `RunService`. In tests (or headless Luau, which is always in manual mode), enable manual mode with `Flux.Clock.manual(true)` so time advances only when you call `Flux.Clock.step(seconds)`:
+In Roblox, `Flux.Clock` defaults to live mode and delegates to `os.clock()`, `workspace:GetServerTimeNow()`, `task.*`, and `RunService`; in Roblox tests, switch to manual mode with `Flux.Clock.manual(true)` so time advances only when you call `Flux.Clock.step(seconds)`. Outside Roblox, `Flux.Clock` defaults to manual virtual time right away (call `Flux.Clock.manual(false)` to opt into live `os.clock()`, `os.time()`, and synchronous `Clock.defer` outside Roblox):
 
 ```luau
 local Clock = Flux.Clock
@@ -59,17 +59,17 @@ Clock.reset() -- clear any pending timers, waits, and deferred tasks between tes
 | Function | Description |
 | :--- | :--- |
 | **`Clock.now()`** | Monotonic time in seconds (`os.clock()` live, virtual clock in manual mode). |
-| **`Clock.wall()`** | Synchronized Unix timestamp (`GetServerTimeNow()` live, `2026-01-01T00:00:00Z + now` manual). |
+| **`Clock.wall()`** | Synchronized Unix timestamp (`workspace:GetServerTimeNow()` when available, `os.time()` live outside Roblox, `2026-01-01T00:00:00Z + now` manual). |
 | **`Clock.delay(seconds, fn, ...)`** | Schedules `fn` after `seconds` (`task.delay` live, virtual heap in manual mode). |
 | **`Clock.wait(seconds?)`** | Yields the current coroutine for `seconds` (default `0`, waking on `Clock.step(0)` in manual mode) and returns elapsed time. |
-| **`Clock.defer(fn, ...)`** | Defers `fn` to the end of the current resumption cycle (`task.defer` live). |
+| **`Clock.defer(fn, ...)`** | Defers `fn` to the end of the current resumption cycle (`task.defer` live, running synchronously when no `task` scheduler exists). |
 | **`Clock.cancel(thread)`** | Cancels a thread scheduled with `Clock.delay`, `Clock.defer`, or `Clock.wait`. |
 | **`Clock.connect(phase, fn)`** | Connects `fn(dt)` to `"PreRender"`, `"RenderStepped"`, or `"Heartbeat"`. |
-| **`Clock.manual(enabled)`** | Switches between the live Roblox engine clock (`false`) and the manual virtual clock (`true`). |
+| **`Clock.manual(enabled)`** | Switches between the live clock (`false`, default in Roblox) and the manual virtual clock (`true`, default outside Roblox). |
 | **`Clock.isManual()`** | Returns `true` when the clock is in manual mode. |
 | **`Clock.step(seconds, frameLength?)`** | Advances manual time by `seconds` in slices of at most `frameLength` (default `1/60`). |
 | **`Clock.drain()`** | Runs all pending `Clock.defer` callbacks immediately in FIFO order. |
-| **`Clock.reset()`** | Cancels all pending manual timers, waits, deferred calls, and manual frame listeners between tests. |
+| **`Clock.reset()`** | Cancels all pending manual timers, waits, deferred calls, and manual frame listeners between tests while preserving live listeners connected outside manual mode. |
 
 Each manual frame of `dt` seconds executes in engine order:
 1. Advances `now` by `dt` and wakes due `delay` and `wait` threads in deadline order.
@@ -101,6 +101,6 @@ scope:Destroy()
 
 ## Headless & Full-Engine Tests in CI {#full-engine-tests-in-ci}
 
-Internal graph and scheduler modules (`Graph`, `Clock`) have zero Roblox globals. Requiring the top-level `Flux` package in standalone `luau` needs Roblox datatype shims (`Color3`, `UDim`, `UDim2`, `Vector2`, `Vector3`, `CFrame`, `Rect`, `NumberRange`, `NumberSequence`, `ColorSequence`, `TweenInfo`, `Enum`) installed first, such as [`sert`](https://github.com/kohltastrophe/sert)'s headless runner.
+The top-level `Flux` package loads directly in standalone `luau` without synthetic Roblox datatype stubs. Signals, stores, control flow, `Flux.Clock`, `Flux.Responsive` defaults, `Flux.Color.Oklab` `vector` helpers, and `number` or `vector` springs and tweens (with plain config tables) run natively on the VM. `Flux.Color` `Color3` helpers, Roblox datatype animations (`UDim2`, `CFrame`, `Rect`, `Color3`, sequences), `Layout` builders, `Interact` helpers, and `Instance` trees require Roblox or [`sert`](https://github.com/kohltastrophe/sert)'s headless test environment.
 
 For tests that create Roblox `Instance`s or exercise engine services (`CollectionService`, input, and layout geometry), build a test place with [Rojo](https://rojo.space/) and run the suite in Roblox Studio or in CI via the [Open Cloud Luau Execution API](https://create.roblox.com/docs/cloud/guides/luau-execution).

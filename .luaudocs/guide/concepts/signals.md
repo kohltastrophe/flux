@@ -161,7 +161,7 @@ The underlying `GetPropertyChangedSignal`, `GetAttributeChangedSignal`, or `Coll
 
 ## Bridging Signals {#bridging-signals}
 
-Use `Flux.fromSignal(signal, initial?)` (or the `Flux(signal, initial?)` shorthand) to turn any [`RBXScriptSignal`](https://create.roblox.com/docs/reference/engine/datatypes/RBXScriptSignal) or custom table signal exposing `:Connect()` or `:connect()` into a read-only reactive node. Without `initial`, the node starts at `nil` (`Node<Payload?>`); pass `initial` to seed it with a non-`nil` value (`Node<Payload | Initial>`):
+Use `Flux.fromSignal(signal, initial?)` (or `Flux(rbxSignal, initial?)` for an [`RBXScriptSignal`](https://create.roblox.com/docs/reference/engine/datatypes/RBXScriptSignal)) to turn an event source into a read-only reactive node. `Flux.fromSignal` bridges `RBXScriptSignal`s as well as custom table or userdata signals exposing `:Connect()` or `:connect()` (whereas `Flux(table)` creates a mutable table signal). Without `initial`, the node starts at `nil` (`Node<Payload?>`); pass `initial` to seed it with a non-`nil` value (`Node<Payload | Initial>`):
 
 ```luau
 local lastPress = Flux.fromSignal(button.Activated)
@@ -173,7 +173,7 @@ local statusText = Flux.computed(function()
 end)
 ```
 
-The signal connection disconnects automatically when the node or its enclosing [Scope](/guide/concepts/scopes) is destroyed.
+The signal connection disconnects automatically when the node or its enclosing [Scope](/guide/concepts/scopes) is destroyed. Because `Flux.fromSignal` bridges the first argument through `==` deduplication, repeated identical payloads don't re-fire dependents; for multi-argument events or pulse triggers, connect with `signal:Connect(...)` and write a `Flux.signal` (using `:set(value, true)` or incrementing a counter).
 
 ## Observer Lifecycle Hooks
 
