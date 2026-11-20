@@ -40,12 +40,21 @@ jobs:
       - name: sert lint
         run: python3 tools/sert.py lint
 
+      - name: Standalone Luau
+        run: luau test/standalone.luau
+
+      - name: Standalone Luau (codegen)
+        run: luau --codegen test/standalone.luau
+
       - name: Check llms.txt
         if: "github.event_name != 'push' || startsWith(github.event.head_commit.message, 'chore: release')"
         run: npx --yes luaudocs@latest llms --check
 
       - name: sert run
         run: python3 tools/sert.py run --coverage
+
+      - name: sert run (codegen)
+        run: python3 tools/sert.py run --codegen
 
       - name: sert coverage
         run: python3 tools/sert.py coverage --min 90 --badge
