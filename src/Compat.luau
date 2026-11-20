@@ -20,6 +20,8 @@ type Compat = {
 	clock: () -> number,
 	typeof: (value: any) -> string,
 	getService: (name: string) -> any,
+	requireRoblox: (name: string) -> (),
+	robloxStubs: (prefix: string, names: { string }) -> { [string]: any },
 	services: { [string]: any },
 	Instance: any,
 	Color3: typeof(Color3),
@@ -39,7 +41,7 @@ type Compat = {
 	NumberSequenceKeypoint: typeof(NumberSequenceKeypoint),
 }
 
-local rawWarn: (...any) -> () = if IS_ROBLOX then warn else print
+local rawWarn: (...any) -> () = warn or print
 local warnHook: ((message: string) -> ())? = nil
 
 local function warn(...: any)
@@ -66,7 +68,7 @@ end
 Clock._internal.setReport(warn)
 
 local compatTask: any = table.freeze({
-	spawn = if IS_ROBLOX then task.spawn else Clock._internal.spawn,
+	spawn = Clock._internal.spawn,
 	defer = Clock.defer,
 	delay = Clock.delay,
 	wait = Clock.wait,
@@ -85,9 +87,12 @@ local Compat: any = {
 		then setmetatable({}, {
 			__index = function(self: { [string]: any }, name: string): any
 				local getService: (DataModel, string) -> Instance = game.GetService
-				local service = getService(game, name)
-				self[name] = service
-				return service
+				local ok, service = pcall(getService, game, name)
+				if ok and service ~= nil then
+					self[name] = service
+					return service
+				end
+				return nil
 			end,
 		})
 		else {} :: { [string]: any },
@@ -111,6 +116,23 @@ local Compat: any = {
 
 function Compat.getService(name: string): any
 	return Compat.services[name]
+end
+
+function Compat.requireRoblox(name: string)
+	if Compat.Instance == nil then
+		error(`{name} requires a Roblox environment`, 3)
+	end
+end
+
+function Compat.robloxStubs(prefix: string, names: { string }): { [string]: any }
+	local stubs: { [string]: any } = {}
+	for _, name in names do
+		local message = `{prefix}.{name} requires a Roblox environment`
+		stubs[name] = function()
+			error(message, 2)
+		end
+	end
+	return table.freeze(stubs)
 end
 
 if IS_ROBLOX then

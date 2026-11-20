@@ -149,7 +149,8 @@ test("clock · cancel stops a delay, a deferred call and a wait", function()
 			coroutine.yield()
 			table.insert(ran, "self")
 		end)
-		coroutine.resume(selfThread)
+		local ok, err = coroutine.resume(selfThread)
+		expect(ok, err)
 		Clock.cancel(delayed)
 		Clock.cancel(deferred)
 		Clock.cancel(waiting)
@@ -742,5 +743,217 @@ test("clock · multi-child heap ordering, step validation, phase defer draining,
 			{ "pre", "pre-defer", "hb", "hb-defer" },
 			"Clock.defer drains between PreRender and Heartbeat and at frame end"
 		)
+	end)
+end)
+
+test("clock · live mode reports real time, defers without scheduler, and restores manual mode", function()
+	local wasManual = Clock.isManual()
+	Clock.manual(false)
+	local ok, err = pcall(function()
+		eq(Clock.isManual(), false, "Clock.manual(false) enters live mode")
+		expect(type(Clock.now()) == "number", "live Clock.now() returns a number")
+		expect(type(Clock.wall()) == "number", "live Clock.wall() returns a number")
+		local ran = false
+		Clock.defer(function(v)
+			ran = v == 9
+		end, 9)
+		if IS_ROBLOX then
+			Clock.wait(0.05)
+		end
+		expect(ran, "live Clock.defer runs callback")
+		if not IS_ROBLOX then
+			fails(function()
+				Clock.delay(0.1, function() end)
+			end)
+			fails(function()
+				Clock.wait(0.1)
+			end)
+			fails(function()
+				Clock.connect("Heartbeat", function() end)
+			end)
+		end
+	end)
+	Clock.reset()
+	if wasManual then
+		Clock.manual(true)
+	end
+	if not ok then
+		error(err, 0)
+	end
+end)
+
+test(
+	"clock · NaN sanitization, rescheduling cancellation, step guards, live connect gating, and reset preservation",
+	function()
+		manual(function()
+			-- 1. NaN wait / delay sanitize to 0 and fire immediately on step(0) / drain()
+			local nanRan = 0
+			Clock.delay(0 / 0, function()
+				nanRan += 1
+			end)
+			local coWait = coroutine.create(function()
+				Clock.wait(0 / 0)
+				nanRan += 1
+			end)
+			local okStart, startErr = coroutine.resume(coWait)
+			expect(okStart, startErr)
+			Clock.step(0)
+			expect(nanRan == 2, "NaN delay and wait sanitize to immediate fire")
+
+			-- 2. Rescheduling same suspended thread cancels prior timer or deferred entry
+			local wakeTimes = {}
+			local t0 = Clock.now()
+			local t1 = coroutine.create(function()
+				table.insert(wakeTimes, Clock.now())
+			end)
+			Clock.delay(1, t1)
+			Clock.defer(t1) -- must cancel the 1s delay timer
+			Clock.drain()
+			Clock.step(1.5)
+			expect(#wakeTimes == 1 and wakeTimes[1] - t0 < 0.01, "defer cancels prior delay timer on same thread")
+
+			local wake2 = {}
+			local t2 = coroutine.create(function()
+				table.insert(wake2, Clock.now())
+			end)
+			Clock.defer(t2)
+			Clock.delay(0.5, t2) -- must cancel prior defer entry
+			Clock.step(0.1)
+			expect(#wake2 == 0, "delay cancels prior defer entry on same thread")
+			Clock.step(0.5)
+			expect(#wake2 == 1, "rescheduled delay fires once at 0.5s")
+
+			-- Cancelling an already dead coroutine is a safe no-op
+			Clock.cancel(t2)
+
+			-- 3. Clock.step rejects non-finite, zero/negative, and re-entrant steps
+			fails(function()
+				Clock.step(-0.1)
+			end)
+			fails(function()
+				Clock.step(0 / 0)
+			end)
+			fails(function()
+				Clock.step(math.huge)
+			end)
+
+			local reentryFailed = false
+			Clock.delay(0.05, function()
+				local okStep = pcall(Clock.step, 0.05)
+				reentryFailed = not okStep
+			end)
+			Clock.step(0.1)
+			expect(reentryFailed, "re-entrant Clock.step throws inside timer callback")
+
+			-- 4. timer.seq > last deferral: scheduling 0s timer during step runs on subsequent tick while earlier-seq due timer still runs
+			local order = {}
+			Clock.delay(0.1, function()
+				table.insert(order, "A")
+				Clock.delay(0, function()
+					table.insert(order, "B-deferred")
+				end)
+			end)
+			Clock.delay(0.15, function()
+				table.insert(order, "C")
+			end)
+			Clock.step(0.2, 0.2)
+			expect(
+				#order == 2 and order[1] == "A" and order[2] == "C",
+				"timer scheduled during runFrame defers past same-frame step"
+			)
+			Clock.step(0)
+			expect(#order == 3 and order[3] == "B-deferred", "deferred timer runs on next tick")
+
+			-- 5. Large virtualNow scaled tolerance still triggers near-boundary timers accurately
+			Clock.step(1e7, 1e7)
+			local bigFired = false
+			Clock.delay(0.1, function()
+				bigFired = true
+			end)
+			Clock.step(0.1)
+			expect(bigFired, "scaled epsilon triggers deadline accurately at large Clock.now()")
+
+			-- 6. Leaving manual mode inside a step stops remaining Clock.step cleanly
+			local steppedTicks = 0
+			local connDrop = Clock.connect("Heartbeat", function()
+				steppedTicks += 1
+				if steppedTicks == 1 then
+					Clock.manual(false)
+				end
+			end)
+			Clock.step(0.1)
+			expect(steppedTicks == 1 and not Clock.isManual(), "turning manual off stops active step loop")
+			connDrop()
+			Clock.manual(true)
+
+			-- 7. Live Clock.connect (live == true) is preserved across Clock.reset() and steps under manual(true) (Q7), or guards when RunService missing
+			if IS_ROBLOX then
+				Clock.manual(false)
+				local liveCalls = 0
+				local liveConn = Clock.connect("Heartbeat", function()
+					liveCalls += 1
+				end)
+				Clock.manual(true)
+				Clock.reset()
+				Clock.step(1 / 60)
+				expect(liveCalls == 1, "live Clock.connect survives Clock.reset() and steps under manual clock")
+				liveConn()
+				Clock.step(1 / 60)
+				expect(liveCalls == 1, "disconnected live listener stops firing")
+			else
+				Clock.manual(false)
+				fails(function()
+					Clock.connect("Heartbeat", function() end)
+				end, "RunService")
+				Clock.manual(true)
+			end
+		end)
+	end
+)
+
+test("clock · same-thread delay-to-delay and defer-to-defer rescheduling cancels prior schedule", function()
+	manual(function()
+		local fired = {}
+		local thDelay = coroutine.create(function()
+			table.insert(fired, `delay@{Clock.now()}`)
+		end)
+		Clock.delay(0.1, thDelay)
+		Clock.delay(0.5, thDelay) -- cancels 0.1s delay on same thread
+		Clock.step(0.2)
+		expect(#fired == 0, "second delay canceled first delay on same thread")
+		Clock.step(0.4)
+		expect(#fired == 1, "rescheduled delay fires once at 0.5s")
+
+		local deferCount = 0
+		local thDefer = coroutine.create(function()
+			deferCount += 1
+		end)
+		Clock.defer(thDefer)
+		Clock.defer(thDefer) -- cancels first defer on same thread
+		Clock.drain()
+		expect(deferCount == 1, "second defer cancels first defer on same thread")
+	end)
+end)
+
+test("clock · self-disconnecting manual listener and Clock.wait(0) wake cleanly", function()
+	manual(function()
+		local hits = 0
+		local disc: (() -> ())? = nil
+		disc = Clock.connect("Heartbeat", function()
+			hits += 1
+			if disc ~= nil then
+				disc()
+			end
+		end)
+		Clock.step(1 / 60)
+		Clock.step(1 / 60)
+		expect(hits == 1, "manual Heartbeat listener disconnecting inside its callback stops on next frame")
+
+		local waitedDt: number? = nil
+		coroutine.resume(coroutine.create(function()
+			waitedDt = Clock.wait(0)
+		end))
+		Clock.step(0)
+		expect(waitedDt ~= nil and (waitedDt :: number) >= 0, "Clock.wait(0) wakes cleanly on step(0)")
 	end)
 end)

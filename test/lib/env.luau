@@ -163,10 +163,16 @@ function env.fresh(prefix: string): string
 end
 
 function env.reset()
-	if IS_ROBLOX and Clock.isManual() then
-		Clock.manual(false)
+	if IS_ROBLOX then
+		if Clock.isManual() then
+			Clock.manual(false)
+		end
 	else
-		Clock.reset()
+		if not Clock.isManual() then
+			Clock.manual(true)
+		else
+			Clock.reset()
+		end
 		if engine ~= nil then
 			bridge()
 		end
