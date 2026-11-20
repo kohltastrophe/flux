@@ -424,3 +424,65 @@ engineTest(
 		Flux.flush()
 	end
 )
+
+test("responsive · scaleOf/breakpointOf edge inputs and platform/input service combinations", function()
+	-- Edge inputs: zero/negative reference, nil viewport reactive source, min > max
+	local nilVp = Flux(nil :: any)
+	local sNil = Responsive.scaleOf({ viewport = nilVp, reference = Vector2.new(0, 0) })
+	expect(type(sNil:get()) == "number" and sNil:get() >= 0, "nil viewport and zero reference degrade safely")
+	local bNil = Responsive.breakpointOf({ viewport = nilVp })
+	expect(
+		bNil:get() == "phone" or bNil:get() == "tablet" or bNil:get() == "desktop",
+		"nil viewport picks a valid breakpoint"
+	)
+	sNil:Destroy()
+	bNil:Destroy()
+
+	local clamped = Responsive.scaleOf({
+		viewport = Flux(Vector2.new(1920, 1080)),
+		min = 0.8,
+		max = 0.5,
+	})
+	expect(type(clamped:get()) == "number", "inverted min/max bounds remain numeric")
+	clamped:Destroy()
+
+	local inputFor = (if IS_ROBLOX
+		then require((game :: any).ReplicatedStorage.Flux.Responsive) :: any
+		else require("../../src/Responsive") :: any)._inputFor
+	expect(inputFor("MouseMovement") == "keyboard" and inputFor("Touch") == "touch", "pointer & touch map accurately")
+
+	if not IS_ROBLOX and env.engine ~= nil then
+		local services = env.Compat.services
+		local Enum = env.Enum
+		local UserInputService = services.UserInputService
+		local VRService = services.VRService
+
+		-- Console / VR / Touch combinations
+		UserInputService.KeyboardEnabled = false
+		UserInputService.MouseEnabled = false
+		UserInputService.TouchEnabled = true
+		UserInputService.GamepadEnabled = false
+		env.settle()
+		expect.eq(Responsive.platform:get(), "mobile", "touch without keyboard resolves mobile")
+
+		UserInputService.TouchEnabled = false
+		UserInputService.GamepadEnabled = true
+		env.settle()
+		expect.eq(Responsive.platform:get(), "console", "gamepad without keyboard/touch/mouse resolves console")
+
+		VRService.VREnabled = true
+		env.settle()
+		expect.eq(Responsive.platform:get(), "vr", "VR enabled resolves vr platform")
+
+		VRService.VREnabled = false
+		UserInputService.GamepadEnabled = false
+		UserInputService.KeyboardEnabled = true
+		UserInputService.MouseEnabled = true
+		UserInputService.PreferredInput = Enum.PreferredInput.Touch
+		env.settle()
+		expect.eq(Responsive.input:get(), "touch", "PreferredInput.Touch sets touch input")
+		UserInputService.PreferredInput = Enum.PreferredInput.KeyboardAndMouse
+		env.settle()
+		expect.eq(Responsive.platform:get(), "pc", "platform restores to pc")
+	end
+end)
