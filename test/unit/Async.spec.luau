@@ -748,3 +748,61 @@ test("async · overlapping fetches never overwrite a later mutate or resolve aft
 	coroutine.resume(parked2[2], "after-destroy-2")
 	expect(b._effect == nil and b.data == nil, "neither overlapping fetch mutates state after Destroy")
 end)
+
+test("async · mutate(nil) clears data and resets loading and error state", function()
+	local src = new("key")
+	local resource = Async(src, function(v)
+		return `val:{v}`
+	end, "seed")
+	flush()
+	expect(resource.data:get() == "val:key" and resource.state:get() == "ready", "initial fetch resolves")
+
+	resource:mutate(nil)
+	expect(resource.data:get() == nil, "mutate(nil) writes nil into data")
+	expect(resource.loading:get() == false and resource.error:get() == nil, "mutate(nil) clears loading and error")
+	expect(resource.state:get() == "ready", "mutate(nil) transitions state to ready")
+	resource:Destroy()
+	src:Destroy()
+end)
+
+test("async · pre-flush refetch and mutate skip duplicate flush run (including NaN inputs)", function()
+	local nan = 0 / 0
+	local src1 = new(nan)
+	local runs1 = 0
+	local lastRef: any = nil
+	local a1 = Async(src1, function(_v, _prev, refetching)
+		runs1 += 1
+		lastRef = refetching
+		return "done"
+	end)
+	a1:refetch("init")
+	flush()
+	env.settle()
+	expect(
+		runs1 == 1 and lastRef == "init" and a1.data:get() == "done" and a1.state:get() == "ready",
+		"pre-flush refetch on NaN input runs once without duplicate effect flush"
+	)
+
+	src1:set(42)
+	flush()
+	env.settle()
+	expect(runs1 == 2, "changing source away from NaN triggers subsequent fetch")
+	a1:Destroy()
+	src1:Destroy()
+
+	local src2 = new(10)
+	local runs2 = 0
+	local a2 = Async(src2, function(v)
+		runs2 += 1
+		return v * 2
+	end)
+	a2:mutate(99)
+	flush()
+	env.settle()
+	expect(
+		runs2 == 0 and a2.data:get() == 99 and a2.state:get() == "ready" and not a2.loading:get(),
+		"pre-flush mutate suppresses initial fetcher run and settles ready"
+	)
+	a2:Destroy()
+	src2:Destroy()
+end)
