@@ -1828,3 +1828,256 @@ test("interact · MouseEnter seeds inset-adjusted cursor coordinates on an idle 
 	expect.eq(hovering:get(), true, "fallback GetMouseLocation hovers on nil MouseEnter coordinates")
 	hovering:Destroy()
 end)
+
+test(
+	"interact · PluginGui stays active during MenuIsOpen and 3D collectors survive Heartbeat until MenuIsOpen or MouseLeave",
+	function()
+		local world = hoverWorld()
+		local pluginRoot = {
+			WindowFocusReleased = fakeSignal(),
+			IsA = function(_, c)
+				return c == "PluginGui"
+			end,
+			GetRelativeMousePosition = function()
+				return Vector2.new(10, 10)
+			end,
+			GetGuiObjectsAtPosition = function()
+				return {}
+			end,
+		}
+		local pluginBtn = fakeGui()
+		pluginBtn.MouseEnter = fakeSignal()
+		pluginBtn.MouseLeave = fakeSignal()
+		function pluginBtn:IsA()
+			return false
+		end
+		function pluginBtn:FindFirstAncestorWhichIsA(cls)
+			return if cls == "LayerCollector" or cls == "PluginGui" then pluginRoot else nil
+		end
+		pluginRoot.GetGuiObjectsAtPosition = function()
+			return { pluginBtn }
+		end
+
+		local services: any = world.env
+		local baseServices = fakeServices()
+		services.UserInputService.InputBegan = baseServices.UserInputService.InputBegan
+		services.UserInputService.GetFocusedTextBox = function()
+			return nil
+		end
+		services.GuiService.GetPropertyChangedSignal = baseServices.GuiService.GetPropertyChangedSignal
+		local heartbeat = services.RunService.Heartbeat
+
+		local pluginHover = InteractModule._hoverWith(pluginBtn, services)
+		local pluginPress = InteractModule._pressWith(pluginBtn, services)
+		services.GuiService.MenuIsOpen = true
+
+		local moveIn = fakeInput(Enum.UserInputType.MouseMovement)
+		moveIn.Position = Vector2.new(10, 10)
+		pluginBtn.InputBegan:Fire(moveIn)
+		heartbeat:Fire()
+		expect.eq(pluginHover:get(), true, "PluginGui hover remains active while MenuIsOpen is true")
+
+		local pressIn = fakeInput(Enum.UserInputType.MouseButton1)
+		pressIn.Position = Vector2.new(10, 10)
+		pluginBtn.InputBegan:Fire(pressIn)
+		expect.eq(pluginPress:get(), true, "PluginGui press succeeds while MenuIsOpen is true")
+
+		services.GuiService.MenuIsOpen = false
+		pluginHover:Destroy()
+		pluginPress:Destroy()
+
+		-- 3D SurfaceGui / BillboardGui retention
+		local surfaceRoot = {
+			IsA = function(_, c)
+				return c == "SurfaceGuiBase"
+			end,
+		}
+		local inSurface = true
+		local surfaceBtn = fakeGui()
+		surfaceBtn.MouseEnter = fakeSignal()
+		surfaceBtn.MouseLeave = fakeSignal()
+		function surfaceBtn:IsA()
+			return false
+		end
+		function surfaceBtn:FindFirstAncestorWhichIsA(cls)
+			if not inSurface then
+				return nil
+			end
+			return if cls == "LayerCollector" then surfaceRoot else nil
+		end
+
+		local surfaceHover = InteractModule._hoverWith(surfaceBtn, services)
+		local surfMove = fakeInput(Enum.UserInputType.MouseMovement)
+		surfMove.Position = Vector2.new(20, 20)
+		surfaceBtn.InputBegan:Fire(surfMove)
+		heartbeat:Fire()
+		expect.eq(surfaceHover:get(), true, "3D SurfaceGui hover survives Heartbeat")
+
+		surfaceBtn.MouseLeave:Fire()
+		expect.eq(surfaceHover:get(), false, "3D SurfaceGui MouseLeave clears hover")
+
+		surfaceBtn.InputBegan:Fire(surfMove)
+		expect.eq(surfaceHover:get(), true)
+		services.GuiService.MenuIsOpen = true
+		heartbeat:Fire()
+		expect.eq(surfaceHover:get(), false, "MenuIsOpen clears 3D SurfaceGui hover")
+		surfaceHover:Destroy()
+	end
+)
+
+test(
+	"interact · PluginGui input end, WindowFocusReleased, InputState cancel, 3D visibility & deferred memo clear",
+	function()
+		local world = hoverWorld()
+		local pluginRoot = {
+			WindowFocusReleased = fakeSignal(),
+			IsA = function(_, c)
+				return c == "PluginGui" or c == "LayerCollector"
+			end,
+			GetRelativeMousePosition = function()
+				return Vector2.new(10, 10)
+			end,
+			GetGuiObjectsAtPosition = function()
+				return {}
+			end,
+		}
+		local pluginBtn = fakeGui()
+		pluginBtn.MouseEnter = fakeSignal()
+		pluginBtn.MouseLeave = fakeSignal()
+		function pluginBtn:IsA()
+			return false
+		end
+		function pluginBtn:FindFirstAncestorWhichIsA(cls)
+			return if cls == "LayerCollector" or cls == "PluginGui" then pluginRoot else nil
+		end
+		pluginRoot.GetGuiObjectsAtPosition = function()
+			return { pluginBtn }
+		end
+
+		local services: any = world.env
+		local baseServices = fakeServices()
+		services.UserInputService.InputBegan = baseServices.UserInputService.InputBegan
+		services.UserInputService.GetFocusedTextBox = function()
+			return nil
+		end
+		services.GuiService.GetPropertyChangedSignal = baseServices.GuiService.GetPropertyChangedSignal
+
+		local pluginPress = InteractModule._pressWith(pluginBtn, services)
+		local p1 = fakeInput(Enum.UserInputType.MouseButton1)
+		p1.Position = Vector2.new(10, 10)
+		pluginBtn.InputBegan:Fire(p1)
+		expect.eq(pluginPress:get(), true, "PluginGui press starts")
+
+		-- Release via UserInputService.InputEnded (outside button)
+		services.UserInputService.InputEnded:Fire(p1)
+		expect.eq(pluginPress:get(), false, "PluginGui press releases on UserInputService.InputEnded")
+
+		-- Release via pluginRoot.WindowFocusReleased
+		local p2 = fakeInput(Enum.UserInputType.MouseButton1)
+		p2.Position = Vector2.new(10, 10)
+		pluginBtn.InputBegan:Fire(p2)
+		expect.eq(pluginPress:get(), true, "second PluginGui press starts")
+		pluginRoot.WindowFocusReleased:Fire()
+		expect.eq(pluginPress:get(), false, "PluginGui WindowFocusReleased releases active press")
+
+		-- Release via Input.UserInputState Change to Cancel / End during press
+		local p3 = fakeInput(Enum.UserInputType.MouseButton1)
+		p3.Position = Vector2.new(10, 10)
+		local stateChangedSig = fakeSignal()
+		p3.GetPropertyChangedSignal = function(_self, prop)
+			return if prop == "UserInputState" then stateChangedSig else fakeSignal()
+		end
+		pluginBtn.InputBegan:Fire(p3)
+		expect.eq(pluginPress:get(), true, "third PluginGui press starts")
+		p3.UserInputState = Enum.UserInputState.Cancel
+		stateChangedSig:Fire()
+		expect.eq(pluginPress:get(), false, "UserInputState.Cancel releases active press")
+
+		-- UserInputService.WindowFocusReleased releases PluginGui press
+		local p4 = fakeInput(Enum.UserInputType.MouseButton1)
+		p4.Position = Vector2.new(10, 10)
+		pluginBtn.InputBegan:Fire(p4)
+		expect.eq(pluginPress:get(), true, "fourth PluginGui press starts")
+		services.UserInputService.WindowFocusReleased:Fire()
+		expect.eq(pluginPress:get(), false, "UserInputService.WindowFocusReleased releases PluginGui press")
+
+		pluginPress:Destroy()
+
+		-- 3D BillboardGui hover clears when collector Enabled = false or ancestor Visible = false
+		local billboard = {
+			Enabled = true,
+			IsA = function(_, c)
+				return c == "BillboardGui" or c == "SurfaceGuiBase"
+			end,
+		}
+		local ancestorVisible: any = {
+			Visible = true,
+			Parent = billboard,
+			IsA = function(_, c)
+				return c == "GuiObject"
+			end,
+		}
+		local card3D = fakeGui()
+		card3D.Parent = ancestorVisible
+		card3D.MouseEnter = fakeSignal()
+		card3D.MouseLeave = fakeSignal()
+		function card3D:IsA(c)
+			return c == "GuiObject"
+		end
+		function card3D:FindFirstAncestorWhichIsA(cls)
+			return if cls == "LayerCollector" or cls == "BillboardGui" then billboard else nil
+		end
+
+		local hover3D = InteractModule._hoverWith(card3D, services)
+		local move3D = fakeInput(Enum.UserInputType.MouseMovement)
+		move3D.Position = Vector2.new(20, 20)
+		card3D.InputBegan:Fire(move3D)
+		services.RunService.Heartbeat:Fire()
+		expect.eq(hover3D:get(), true, "3D BillboardGui hover active while visible & enabled")
+
+		billboard.Enabled = false
+		services.RunService.Heartbeat:Fire()
+		expect.eq(hover3D:get(), false, "disabling BillboardGui clears 3D hover on Heartbeat")
+
+		billboard.Enabled = true
+		card3D.InputBegan:Fire(move3D)
+		services.RunService.Heartbeat:Fire()
+		expect.eq(hover3D:get(), true, "3D BillboardGui hover restores when re-enabled")
+
+		ancestorVisible.Visible = false
+		services.RunService.Heartbeat:Fire()
+		expect.eq(hover3D:get(), false, "hiding ancestor clears 3D hover on Heartbeat")
+		hover3D:Destroy()
+
+		-- s/covered memo token caches within same event turn and clears after deferred turn
+		local queries = 0
+		local tokenObj = {}
+		local gui2D = {
+			GetGuiObjectsAtPosition = function()
+				queries += 1
+				return {}
+			end,
+			IsA = function(_, c)
+				return c == "ScreenGui" or c == "LayerCollector"
+			end,
+			Enabled = true,
+		}
+		local item = {
+			Visible = true,
+			Parent = gui2D,
+			FindFirstAncestorWhichIsA = function(_, cls)
+				return if cls == "LayerCollector" then gui2D else nil
+			end,
+		}
+		expect.eq(Flux.Interact.sunk(10, 10, item :: any, tokenObj), false, "sunk false on empty hit list")
+		expect.eq(
+			Flux.Interact.covered(10, 10, item :: any, tokenObj),
+			false,
+			"covered reuses memoized query with token"
+		)
+		expect.eq(queries, 1, "single GetGuiObjectsAtPosition call per memo token")
+		env.settle()
+		expect.eq(Flux.Interact.sunk(10, 10, item :: any, tokenObj), false, "memo cache clears after deferred turn")
+		expect.eq(queries, 2, "memo cache re-queries after deferred turn")
+	end
+)
