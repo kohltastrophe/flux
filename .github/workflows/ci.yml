@@ -35,7 +35,7 @@ jobs:
         with:
           mode: check
 
-      - uses: kohltastrophe/sert/actions/setup@v0.2.0
+      - uses: kohltastrophe/sert/actions/setup@v0.2.1
 
       - name: sert lint
         run: python3 tools/sert.py lint
@@ -65,7 +65,9 @@ jobs:
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: "!startsWith(github.event.head_commit.message || github.event.pull_request.title, 'chore: release')"
         with:
-          path: .sert/mutate
+          path: |
+            .sert/mutate
+            .sert/coverage-map.json
           key: sert-mutate-${{ runner.os }}-${{ github.sha }}
           restore-keys: |
             sert-mutate-${{ runner.os }}-
@@ -97,7 +99,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: kohltastrophe/sert/actions/setup@v0.2.0
+      - uses: kohltastrophe/sert/actions/setup@v0.2.1
 
       - name: sert cloud
         env:

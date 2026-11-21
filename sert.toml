@@ -10,7 +10,7 @@
 # Work against a sert checkout: put `[override] sert = "../sert"` in sert.local.toml (gitignored).
 
 [sert]
-version = "0.2.0"
+version = "0.2.1"
 
 [test]
 specs = ["test/**/*.spec.luau"]
