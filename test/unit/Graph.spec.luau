@@ -771,6 +771,9 @@ test("node · a throwing onDestroy is reported and teardown continues", function
 		end)
 		flush()
 	end)
+	sert.defer(function()
+		scope:Destroy()
+	end)
 	local warnings = env.warnings(function()
 		scope:Destroy()
 	end)
@@ -799,6 +802,9 @@ test("node · onDestroy callbacks run untracked", function()
 			end
 		end)
 		flush()
+	end)
+	sert.defer(function()
+		scope:Destroy()
 	end)
 	rerun(2)
 	flush()
@@ -1078,6 +1084,9 @@ test(
 		e:onDestroy(function()
 			destroyed += 1
 		end)
+		sert.defer(function()
+			e:Destroy()
+		end)
 		local warnings = env.warnings(flush)
 		expect(runs == 100, `it ran 100 times, then was disposed (ran {runs})`)
 		expect(cleanups == 100 and destroyed == 1, "its cleanups and onDestroy ran")
@@ -1238,6 +1247,9 @@ end)
 test("onObserved · fires on the first observer and the last one leaving, through computeds", function()
 	local log = {}
 	local s = Flux.signal(0)
+	sert.defer(function()
+		s:Destroy()
+	end)
 	s:onObserved(function()
 		table.insert(log, "on")
 	end)
@@ -1246,6 +1258,9 @@ test("onObserved · fires on the first observer and the last one leaving, throug
 	end)
 	local c = Flux.computed(function()
 		return s() + 1
+	end)
+	sert.defer(function()
+		c:Destroy()
 	end)
 	expect(c() == 1 and #log == 0, "a read outside any effect doesn't observe it")
 	local scope = Flux.scope(function()
@@ -1256,12 +1271,17 @@ test("onObserved · fires on the first observer and the last one leaving, throug
 			s()
 		end)
 	end)
+	sert.defer(function()
+		scope:Destroy()
+	end)
 	flush()
 	expect(table.concat(log, ",") == "on", "observed once, though two effects depend on it")
 	scope:Destroy()
 	expect(table.concat(log, ",") == "on,off", "unobserved once")
 	s(1)
 	expect(c() == 2, "still readable")
+	c:Destroy()
+	s:Destroy()
 end)
 
 test("onObserved · a computed's hooks follow the effects that read it", function()
@@ -1270,6 +1290,11 @@ test("onObserved · a computed's hooks follow the effects that read it", functio
 	local gate = Flux.signal(true)
 	local c = Flux.computed(function()
 		return s() * 2
+	end)
+	sert.defer(function()
+		c:Destroy()
+		s:Destroy()
+		gate:Destroy()
 	end)
 	c:onObserved(function()
 		table.insert(log, "on")
@@ -1284,6 +1309,9 @@ test("onObserved · a computed's hooks follow the effects that read it", functio
 			end
 		end)
 	end)
+	sert.defer(function()
+		scope:Destroy()
+	end)
 	flush()
 	gate(false)
 	flush()
@@ -1291,6 +1319,9 @@ test("onObserved · a computed's hooks follow the effects that read it", functio
 	flush()
 	expect(table.concat(log, ",") == "on,off,on", "follows the branch: " .. table.concat(log, ","))
 	scope:Destroy()
+	c:Destroy()
+	s:Destroy()
+	gate:Destroy()
 end)
 
 test("computed · an equal result is stored but doesn't notify observers", function()
@@ -1362,6 +1393,9 @@ end)
 
 test("dispose · a Flux node is destroyed, once", function()
 	local node = new(7)
+	sert.defer(function()
+		node:Destroy()
+	end)
 	local destroyed = 0
 	node:onDestroy(function()
 		destroyed += 1
@@ -1458,27 +1492,34 @@ test("safe · nil fallback is valid", function()
 	local s = Flux.safe(function(): number?
 		error("always")
 	end, nil)
+	sert.defer(function()
+		s:Destroy()
+	end)
 	expect(s:get() == nil, "nil fallback")
 end)
 
 test("safe · a recovery fn that throws re-raises its own error unchanged", function()
-	local ok, caught = pcall(function()
-		return Flux.safe(function(): string
-			error("inner")
-		end, function(): string
-			error("handler boom", 0)
-		end):get()
+	local s1 = Flux.safe(function(): string
+		error("inner")
+	end, function(): string
+		error("handler boom", 0)
 	end)
+	sert.defer(function()
+		s1:Destroy()
+	end)
+	local ok, caught = pcall(s1.get, s1)
 	expect(not ok and caught == "handler boom", `the handler's message, not a wrapped copy (got {caught})`)
 
 	local errObj = { code = 500 }
-	local okTable, caughtTable = pcall(function()
-		return Flux.safe(function(): string
-			error("inner")
-		end, function(): string
-			error(errObj)
-		end):get()
+	local s2 = Flux.safe(function(): string
+		error("inner")
+	end, function(): string
+		error(errObj)
 	end)
+	sert.defer(function()
+		s2:Destroy()
+	end)
+	local okTable, caughtTable = pcall(s2.get, s2)
 	expect(not okTable and caughtTable == errObj, "a thrown table re-raises as the same table")
 end)
 
@@ -2281,6 +2322,9 @@ test(
 			comp:peek()
 			return comp
 		end)
+		sert.defer(function()
+			scope:Destroy()
+		end)
 
 		expect(
 			afterRawDestroyed == 0 and afterSafeDestroyed == 0,
@@ -2525,6 +2569,9 @@ test(
 		end, function()
 			return if Flux.isReactive() then "reactive" else "recovered"
 		end)
+		sert.defer(function()
+			recoveredFromSafe:Destroy()
+		end)
 		sert.eq(recoveredFromSafe:get(), "recovered")
 		sert(not Flux.isReactive(), "0-arg untrack before throw inside safe does not leak")
 		sOk:set(true)
@@ -2614,6 +2661,9 @@ test("safe · retry reset re-evaluates fallback, unsubscribes on heal, and ignor
 		lastReset = reset
 		return `err #{attempt}`
 	end)
+	sert.defer(function()
+		node:Destroy()
+	end)
 
 	sert.eq(node:get(), "err #1")
 	sert(type(lastReset) == "function", "safe recovery receives reset callback")
@@ -2685,9 +2735,17 @@ test("safe · observed Flux.safe recovers from late throws across multiple reset
 		savedReset = resetFn
 		return -resets
 	end)
+	sert.defer(function()
+		s:Destroy()
+		fail:Destroy()
+		value:Destroy()
+	end)
 
 	local eff = Flux.effect(function()
 		table.insert(seen, s:get())
+	end)
+	sert.defer(function()
+		eff:Destroy()
 	end)
 	flush()
 	sert.eq(seen, { 1 }, "observed baseline")
@@ -2735,6 +2793,9 @@ test(
 	function()
 		-- 1. onObserved writing s:set(v) updates downstream observers cleanly
 		local s = Flux.signal(1)
+		sert.defer(function()
+			s:Destroy()
+		end)
 		local observedSeen = {}
 		s:onObserved(function()
 			s:set(99)
@@ -2742,12 +2803,19 @@ test(
 		local effWrite = Flux.effect(function()
 			table.insert(observedSeen, s:get())
 		end)
+		sert.defer(function()
+			effWrite:Destroy()
+		end)
 		flush()
 		expect(observedSeen[#observedSeen] == 99, "onObserved s:set(v) propagates to active observer")
 		effWrite:Destroy()
+		s:Destroy()
 
 		-- 2. onObserved destroying an observer triggers onUnobserved deferred without corrupting graph
 		local target = Flux.signal("ok")
+		sert.defer(function()
+			target:Destroy()
+		end)
 		local targetObs, targetUnobs = 0, 0
 		local effKill: any = nil
 		target:onObserved(function()
@@ -2762,6 +2830,9 @@ test(
 		effKill = Flux.effect(function()
 			target:get()
 		end)
+		sert.defer(function()
+			effKill:Destroy()
+		end)
 		flush()
 		expect(
 			targetObs == 1 and targetUnobs == 1 and not Graph.isObserved(target),
@@ -2771,8 +2842,14 @@ test(
 
 		-- 3. Attaching onUnobserved on an already-observed node fires when its last observer leaves
 		local already = Flux.signal(5)
+		sert.defer(function()
+			already:Destroy()
+		end)
 		local lateEff = Flux.effect(function()
 			already:get()
+		end)
+		sert.defer(function()
+			lateEff:Destroy()
 		end)
 		flush()
 		expect(Graph.isObserved(already), "baseline observed")
@@ -2792,6 +2869,13 @@ test(
 		local hookOwnerDuringOff = "unset" :: any
 		local innerRuns = 0
 		local innerEffect: any = nil
+		sert.defer(function()
+			if innerEffect then
+				innerEffect:Destroy()
+			end
+			src:Destroy()
+			side:Destroy()
+		end)
 		src:onObserved(function()
 			hookOwnerDuringOn = Flux.getOwner()
 			local _ = side:get()
@@ -2811,6 +2895,9 @@ test(
 				outerRuns += 1
 				src:get()
 			end)
+		end)
+		sert.defer(function()
+			sc:Destroy()
 		end)
 		flush()
 		expect(hookOwnerDuringOn == nil and outerRuns == 1 and innerRuns == 1, "onObserved ran ownerless")
@@ -2910,6 +2997,9 @@ end)
 
 test("cycles & stabilize · cycle detection rolls back observer graphs cleanly and recovers", function()
 	local hook = Flux.signal(0)
+	sert.defer(function()
+		hook:Destroy()
+	end)
 	hook:onObserved(function() end)
 
 	local mode = Flux.signal(0)
@@ -2948,6 +3038,15 @@ test("cycles & stabilize · cycle detection rolls back observer graphs cleanly a
 		local _ = pcall(function()
 			return b()
 		end)
+	end)
+	sert.defer(function()
+		effA:Destroy()
+		effB:Destroy()
+		a:Destroy()
+		b:Destroy()
+		mode:Destroy()
+		extra:Destroy()
+		multi:Destroy()
 	end)
 	flush()
 
@@ -3084,6 +3183,10 @@ test(
 		end, function()
 			table.insert(events, "fallback")
 			return "recovered"
+		end)
+		sert.defer(function()
+			s:Destroy()
+			trigger:Destroy()
 		end)
 		expect(s() == "ok", "initial safe succeeds")
 		trigger:set(true)
@@ -3339,6 +3442,9 @@ test(
 
 		-- 5. Cycle variants: direct self-cycle (L560), wasDead goLive rollback (L601-602, L686-694), list rollback (L606-607), and nOld==2/nNew==3 reconcile rollback (L822-825, L858-879)
 		local hookNode = Flux.signal(0)
+		sert.defer(function()
+			hookNode:Destroy()
+		end)
 		hookNode:onObserved(function() end)
 
 		local selfMode = Flux.signal(0)
@@ -4008,6 +4114,11 @@ test(
 		end, function()
 			return rec()
 		end)
+		sert.defer(function()
+			safeThrow:Destroy()
+			failGate:Destroy()
+			rec:Destroy()
+		end)
 		expect(safeThrow() == 0, "safe recovers and evaluates fallback after throw following zero-arg untrack")
 		failGate:set(false)
 		rec:set(1)
@@ -4137,6 +4248,7 @@ end)
 test("stabilize() unstable guard · cycle detection across write paths and negative non-looping tests", function()
 	local function assertUnstableCaught(label: string, setupFn: () -> (any, () -> ()))
 		local trigger, cleanupFn = setupFn()
+		sert.defer(cleanupFn)
 		if trigger then
 			trigger:set(1)
 		end
@@ -4656,6 +4768,10 @@ test(
 		local he = Flux.effect(function()
 			local _ = hs()
 		end)
+		sert.defer(function()
+			he:Destroy()
+			hs:Destroy()
+		end)
 		flush()
 		he:Destroy()
 		hs:Destroy()
@@ -4859,6 +4975,12 @@ test(
 		local e2 = Flux.effect(function()
 			local _ = h2()
 		end)
+		sert.defer(function()
+			h1:Destroy()
+			h2:Destroy()
+			e1:Destroy()
+			e2:Destroy()
+		end)
 		flush()
 		expect(hookCount == 1)
 		h1:Destroy()
@@ -4951,3 +5073,3151 @@ test(
 		c:Destroy()
 	end
 )
+
+test("graph · arbitrary-depth DAGs (>128 and 1200 depth) and iterative lifecycle paths", function()
+	local function makeChain(baseSig: any, depth: number): { any }
+		local nodes = table.create(depth) :: { any }
+		local prev: any = baseSig
+		for i = 1, depth do
+			local dep = prev
+			local n = Flux.computed(function()
+				return dep() + 1
+			end)
+			nodes[i] = n
+			prev = n
+		end
+		for i = 80, depth, 80 do
+			local _ = nodes[i]()
+		end
+		local _ = nodes[depth]()
+		return nodes
+	end
+
+	-- 1. Exercise shallow subscribe() growing heapCap past 512 before deeper graphs allocate
+	local sGrow = Flux.signal(0)
+	local growChain = makeChain(sGrow, 520)
+	local topObs = Flux.computed(function()
+		return growChain[520]() + 1
+	end)
+	local growEff = Flux.effect(function()
+		local _ = topObs()
+	end)
+	flush()
+	expect(topObs() == 521, "520-deep chain grows heap via shallow subscribe cleanly")
+	growEff:Destroy()
+	topObs:Destroy()
+	for i = 520, 1, -1 do
+		growChain[i]:Destroy()
+	end
+	sGrow:Destroy()
+
+	-- 2. Depth 1200 acyclic DAG: build, two heap doublings (512->1024->2048), lazy pull, goLiveIter, stabilize, settleIter, goDeadIter, pullDeadIter, teardown
+	local s1k = Flux.signal(10)
+	local chain1k = makeChain(s1k, 1200)
+	expect(chain1k[1200]() == 1210, "depth=1200 initial chunked pull matches")
+
+	s1k:set(20)
+	-- Direct unchunked dead pull across a 200-node unprimed tail segment
+	expect(chain1k[200]() == 220, "pullDeadIter computes 200-deep dirty segment cleanly")
+	expect(chain1k[1200]() == 1220, "depth=1200 dead pull propagates cleanly")
+
+	local seen1k = 0
+	local eff1k = Flux.effect(function()
+		seen1k = chain1k[1200]()
+	end)
+	flush()
+	expect(seen1k == 1220, "goLiveIter activates depth=1200 chain")
+
+	-- Stabilize push across 1200 nodes
+	s1k:set(30)
+	flush()
+	expect(seen1k == 1230, "stabilize propagates depth=1200 chain")
+
+	-- settleIter: direct read of dirty depth=1200 live chain before flush()
+	s1k:set(40)
+	expect(chain1k[1200]() == 1240, "settleIter settles live depth=1200 chain prior to flush")
+	flush()
+	expect(seen1k == 1240, "flush after settleIter remains consistent")
+
+	-- goDeadIter: destroy effect across 1200-deep chain, then dead pull again
+	eff1k:Destroy()
+	s1k:set(50)
+	for i = 200, 1000, 200 do
+		local _ = chain1k[i]()
+	end
+	expect(chain1k[1200]() == 1250, "pullDeadIter after goDeadIter on depth=1200 chain")
+
+	for i = 1200, 1, -1 do
+		chain1k[i]:Destroy()
+	end
+	s1k:Destroy()
+
+	-- 2b. Non-cyclic deep (>150) height raise across single & multi-observer branches via raiseVisit -> raiseIter
+	local baseA = Flux.signal(1)
+	local baseB = Flux.signal(100)
+	local raiseGate = Flux.signal(false)
+	local chainB = makeChain(baseB, 20)
+	local chainA = table.create(160) :: { any }
+	local a160Runs = 0
+	chainA[1] = Flux.computed(function()
+		if raiseGate() then
+			return baseA() + chainB[20]()
+		end
+		return baseA()
+	end)
+	for i = 2, 160 do
+		local prevA = chainA[i - 1]
+		if i == 160 then
+			chainA[i] = Flux.computed(function()
+				a160Runs += 1
+				return prevA() + 1
+			end)
+		else
+			chainA[i] = Flux.computed(function()
+				return prevA() + 1
+			end)
+		end
+	end
+	local _ = chainA[80]()
+	local _ = chainA[160]()
+	local fan1 = Flux.computed(function()
+		return chainA[140]()
+	end)
+	local fan2 = Flux.computed(function()
+		return chainA[140]() * 2
+	end)
+	local seenA160, seenFan1, seenFan2 = 0, 0, 0
+	local effMain = Flux.effect(function()
+		seenA160 = chainA[160]()
+	end)
+	local effFan1 = Flux.effect(function()
+		seenFan1 = fan1()
+	end)
+	local effFan2 = Flux.effect(function()
+		seenFan2 = fan2()
+	end)
+	flush()
+	expect(seenA160 == 160 and seenFan1 == 140 and seenFan2 == 280 and a160Runs == 1, "baseline 160-chain")
+
+	raiseGate:set(true)
+	flush()
+	expect(seenA160 == 280 and seenFan1 == 260 and seenFan2 == 520, "deep raiseIter raises all multi-obs heights")
+	local runsBeforeLiveRead = a160Runs
+	expect(chainA[160]() == 280 and a160Runs == runsBeforeLiveRead, "live read after raiseIter uses cached stamp")
+	baseB:set(200)
+	flush()
+	expect(seenA160 == 380 and seenFan1 == 360 and seenFan2 == 720, "deep raised DAG propagates downstream writes")
+
+	effFan2:Destroy()
+	effFan1:Destroy()
+	effMain:Destroy()
+	fan2:Destroy()
+	fan1:Destroy()
+	for i = 160, 1, -1 do
+		chainA[i]:Destroy()
+	end
+	for i = 20, 1, -1 do
+		chainB[i]:Destroy()
+	end
+	raiseGate:Destroy()
+	baseB:Destroy()
+	baseA:Destroy()
+
+	-- 3. Deep (>150) hooks (onObserved / onUnobserved), dirty goLiveIter, goDeadIter states, and multi-observer diamonds
+	local hSig = Flux.signal(1)
+	local sigObsCount, sigUnobsCount = 0, 0
+	hSig:onObserved(function()
+		sigObsCount += 1
+	end)
+	hSig:onUnobserved(function()
+		sigUnobsCount += 1
+	end)
+	local hChain = makeChain(hSig, 170)
+	local midObsCount, midUnobsCount = 0, 0
+	hChain[85]:onObserved(function()
+		midObsCount += 1
+	end)
+	hChain[85]:onUnobserved(function()
+		midUnobsCount += 1
+	end)
+	-- Add a secondary branch to create multi-observer diamond forks
+	local forkTop = Flux.computed(function()
+		return hChain[160]() + hChain[170]()
+	end)
+	local _ = forkTop()
+	-- Dirty hSig before going live so finishGoLive hits dirty == true (no deps changed yet -> unchanged? write first!)
+	hSig:set(2)
+	local hSeen = 0
+	local hEff = Flux.effect(function()
+		hSeen = forkTop()
+	end)
+	sert.defer(function()
+		hEff:Destroy()
+		hSig:Destroy()
+		for i = 170, 1, -1 do
+			hChain[i]:Destroy()
+		end
+	end)
+	flush()
+	expect(hSeen == 334 and sigObsCount == 1 and midObsCount == 1, "goLiveIter fires hooks and commits dirty tree")
+
+	-- Error then goDeadIter on deep chain
+	local errGate = Flux.signal(false)
+	local errSig = Flux.signal(5)
+	local errChain = makeChain(errSig, 160)
+	local topErr = Flux.computed(function()
+		local v = errChain[160]()
+		if errGate() then
+			error("deep fault")
+		end
+		return v
+	end)
+	local _ = topErr()
+	local errSeen = 0
+	local errEff = Flux.effect(function()
+		local ok, v = pcall(topErr)
+		if ok then
+			errSeen = v
+		end
+	end)
+	flush()
+	expect(errSeen == 165, "baseline deep error chain")
+	errGate:set(true)
+	flush() -- leaves topErr in ERRORED
+	errEff:Destroy() -- goDeadIter on clean + ERRORED
+	hEff:Destroy() -- goDeadIter with hooks -> onUnobserved
+	expect(sigUnobsCount == 1 and midUnobsCount == 1, "goDeadIter fires onUnobserved hooks")
+
+	-- Re-verify settleIter with STALE/ERRORED and clean stamps + pullDeadIter STALE/live/disposed/unchanged branches
+	errGate:set(false)
+	expect(topErr() == 165, "heals deep errored chain")
+
+	-- pullDeadIter: STALE live dependency, STALE dead dependency, STALE disposed dependency, changed value & unchanged skip
+	local deadSrc = Flux.signal(1)
+	local toggleTarget = Flux.signal(100)
+	local toggleMod = Flux.computed(function()
+		local _ = deadSrc()
+		return toggleTarget()
+	end)
+	local cMid = makeChain(toggleMod, 165)
+	local extraBranch = Flux.computed(function()
+		return deadSrc() * 0 + 1
+	end)
+	local deadTailRuns = 0
+	local deadTail = Flux.computed(function()
+		deadTailRuns += 1
+		return cMid[165]() + extraBranch()
+	end)
+	for i = 80, 165, 80 do
+		local _ = cMid[i]()
+	end
+	local _ = deadTail()
+	-- Dirty via update() -> STALE on dead dep, then on live dep
+	extraBranch:update()
+	expect(deadTail() == 266, "pullDeadIter refreshes STALE dead dep")
+
+	-- Make cMid[1] observed separately (live) and mark it dirty with settle/stale
+	local liveTap = Flux.effect(function()
+		local _ = cMid[1]()
+	end)
+	flush()
+	deadSrc:set(2) -- toggleMod stays 100, cMid[1] stays live-clean after stabilize or before flush
+	local beforeSkipRuns = deadTailRuns
+	local deadTailVal = deadTail() -- pullDeadIter hits s[OBSERVERS] refresh(s, 0) + unchanged changed stamp!
+	flush()
+	expect(
+		deadTailVal == 266 and deadTailRuns == beforeSkipRuns,
+		"pullDeadIter handles live branch refresh and skips recompute on unchanged upstream stamp"
+	)
+
+	-- Now change toggleTarget (100 -> 200) -> pullDeadIter sees changed upstream and recomputes cMid[2..165] & deadTail
+	toggleTarget:set(200)
+	local changedDeadTail = deadTail()
+	flush()
+	expect(
+		changedDeadTail == 366 and deadTailRuns == beforeSkipRuns + 1,
+		"pullDeadIter recomputes downstream chain when stWaiting source changes value"
+	)
+
+	liveTap:Destroy()
+	-- Destroy extraBranch while dead so goLiveIter hits list == nil and pullDeadIter sees non-live disposed dep
+	extraBranch:Destroy()
+	cMid[1]:update()
+	expect(deadTail() == 365 or deadTail() == 366, "pullDeadIter handles destroyed dead dependency cleanly")
+
+	-- 4. Deep (>150) raiseIter + goLiveIter cycle detection & rollback (single-observer and multi-observer)
+	local cycGate = Flux.signal(false)
+	local cycBase = Flux.signal(1)
+	local cycNodes = table.create(165) :: { any }
+	local cycPrev: any = cycBase
+	for i = 1, 165 do
+		local d = cycPrev
+		if i == 1 then
+			cycNodes[i] = Flux.computed(function()
+				local v = d()
+				if cycGate() then
+					return v + cycNodes[165]()
+				end
+				return v
+			end)
+		else
+			cycNodes[i] = Flux.computed(function()
+				return d() + 1
+			end)
+		end
+		cycPrev = cycNodes[i]
+	end
+	for i = 80, 165, 80 do
+		local _ = cycNodes[i]()
+	end
+	local _ = cycNodes[165]()
+
+	-- Test goLiveIter rollback & raiseIter cycle via multi-observer diamond on cycNodes[165]
+	local sideA = Flux.computed(function()
+		return cycNodes[165]() + 10
+	end)
+	local sideB = Flux.computed(function()
+		return cycNodes[165]() + 20
+	end)
+	local topDia = Flux.computed(function()
+		return sideA() + sideB()
+	end)
+	local _ = sideA()
+	local _ = sideB()
+	local _ = topDia()
+	local cycEff = Flux.effect(function()
+		pcall(topDia)
+	end)
+	flush()
+	env.warnings(function()
+		cycGate:set(true)
+		flush()
+	end)
+	cycGate:set(false)
+	cycBase:set(10)
+	flush()
+	expect(topDia() == 378, "deep (>150) raiseIter & goLiveIter recover cleanly after cycle")
+
+	-- Also test goLiveIter hitting res < 0 (raiseIter cycle) during initial goLive of a primed cycle-gated tree
+	cycEff:Destroy()
+	-- Re-prime cycNodes[1] while dead with cycGate=true so cycNodes[1] records cycNodes[165] in its sources while both are dead
+	cycGate:set(true)
+	local _ = cycNodes[1]()
+	local tmpEff = Flux.effect(function()
+		local _ = cycNodes[165]()
+	end)
+	local goLiveCycleWarns = env.warnings(flush)
+	cycGate:set(false)
+	expect(#goLiveCycleWarns >= 1, "goLiveIter cycle rollback warns and cleans up stack")
+	tmpEff:Destroy()
+	for i = 165, 1, -1 do
+		cycNodes[i]:Destroy()
+	end
+	topDia:Destroy()
+	sideA:Destroy()
+	sideB:Destroy()
+	cycBase:Destroy()
+	cycGate:Destroy()
+	deadTail:Destroy()
+	for i = 165, 1, -1 do
+		cMid[i]:Destroy()
+	end
+	toggleMod:Destroy()
+	toggleTarget:Destroy()
+	deadSrc:Destroy()
+	topErr:Destroy()
+	for i = 160, 1, -1 do
+		errChain[i]:Destroy()
+	end
+	errSig:Destroy()
+	errGate:Destroy()
+	forkTop:Destroy()
+	for i = 170, 1, -1 do
+		hChain[i]:Destroy()
+	end
+	hSig:Destroy()
+end)
+
+test(
+	"graph · unstable heapPushed guard, bare untrack/self-dispose at idx==last, disposeChildren shapes & Node API",
+	function()
+		-- 1. heapPushed + checkCompRun via untrack(fn) inside computed at h == heapMin (both n == 1 and n > 1 signal)
+		local u1 = Flux.signal(0)
+		local c1 = Flux.computed(function()
+			local v = u1()
+			if v > 0 and v < 150 then
+				untrack(function()
+					u1:set(v + 1)
+				end)
+			end
+			return v
+		end)
+		local e1 = Flux.effect(function()
+			local _ = c1()
+		end)
+		flush()
+		u1:set(1)
+		local w1 = env.warnings(flush)
+		expect(
+			#w1 >= 1 and string.find(w1[1], "unstable", 1, true) ~= nil,
+			"untrack signal write inside computed at heapMin (n==1) triggers unstable guard"
+		)
+		e1:Destroy()
+		c1:Destroy()
+		u1:Destroy()
+
+		local u2 = Flux.signal(0)
+		local c2a = Flux.computed(function()
+			local v = u2()
+			if v > 0 and v < 150 then
+				untrack(function()
+					u2:set(v + 1)
+				end)
+			end
+			return v
+		end)
+		local c2b = Flux.computed(function()
+			return u2() * 2
+		end)
+		local e2 = Flux.effect(function()
+			local _ = c2a()
+			local _ = c2b()
+		end)
+		flush()
+		u2:set(1)
+		local w2 = env.warnings(flush)
+		expect(
+			#w2 >= 1 and string.find(w2[1], "unstable", 1, true) ~= nil,
+			"untrack signal write inside computed at heapMin (n>1) triggers unstable guard"
+		)
+		e2:Destroy()
+		c2a:Destroy()
+		c2b:Destroy()
+		u2:Destroy()
+
+		-- 2. Bare untrack() (without retrack) at end of computed & effect when idx == last (not curNode path)
+		local bSig = Flux.signal(1)
+		local bHidden = Flux.signal(10)
+		local bCompRuns = 0
+		local bComp = Flux.computed(function()
+			bCompRuns += 1
+			local v = bSig()
+			untrack()
+			return v + bHidden()
+		end)
+		local bEffRuns = 0
+		local bEff = Flux.effect(function()
+			bEffRuns += 1
+			local _ = bComp()
+			untrack()
+			local _ = bHidden()
+		end)
+		flush()
+		expect(bCompRuns == 1 and bEffRuns == 1)
+		bHidden:set(20)
+		flush()
+		expect(bCompRuns == 1 and bEffRuns == 1, "bare untrack() at idx==last leaves hidden untracked cleanly")
+		bSig:set(2)
+		flush()
+		expect(bCompRuns == 2 and bEffRuns == 2, "bare untrack() after identical idx==last cleans state cleanly")
+		bEff:Destroy()
+		bComp:Destroy()
+		bSig:Destroy()
+		bHidden:Destroy()
+
+		-- 3. Self-disposing computed and effect when idx == last (DISPOSED_NSRC caught cleanly)
+		local sdSig = Flux.signal(0)
+		local sdComp: any
+		sdComp = Flux.computed(function()
+			local v = sdSig()
+			if v > 0 then
+				sdComp:Destroy()
+			end
+			return v
+		end)
+		local sdHold = Flux.effect(function()
+			local _ = sdComp()
+		end)
+		flush()
+		sdSig:set(1)
+		flush()
+		expect(sdComp:peek() == nil, "self-disposing computed at idx==last reaps cleanly")
+		sdHold:Destroy()
+
+		local seSig = Flux.signal(0)
+		local seEff: any
+		seEff = Flux.effect(function()
+			local v = seSig()
+			if v > 0 then
+				seEff:Destroy()
+			end
+		end)
+		flush()
+		seSig:set(1)
+		flush()
+		seSig:set(2)
+		flush()
+		expect(not Graph.isObserved(seSig), "self-disposing effect at idx==last reaps cleanly")
+		sdSig:Destroy()
+		seSig:Destroy()
+
+		-- 4. Effect-subscribe cycle attribution in drain & reconcileEffect
+		local ecGate = Flux.signal(0)
+		local ecA: any
+		local ecB: any
+		ecA = Flux.computed(function()
+			if ecGate() > 0 then
+				return ecB() + 1
+			end
+			return 1
+		end)
+		ecB = Flux.computed(function()
+			return ecA() + 1
+		end)
+		local _ = ecB()
+		ecGate:set(1)
+		local ecEff = Flux.effect(function()
+			local _ = ecA()
+		end)
+		local ecWarn = env.warnings(flush)
+		expect(#ecWarn >= 1, "drain attributes initial effect-subscribe cycle cleanly")
+		ecEff:Destroy()
+		ecGate:set(0)
+		ecA:Destroy()
+		ecB:Destroy()
+		ecGate:Destroy()
+
+		-- 5. 7-slot effects (0,1,2,6 srcs; grow/shrink) & ALL disposeChildren chained shapes + rollbackReconcileTail + defer=false + markList multi-obs
+		local s0, s1, s2, s3, s4, s5, s6 =
+			Flux.signal(1),
+			Flux.signal(2),
+			Flux.signal(3),
+			Flux.signal(4),
+			Flux.signal(5),
+			Flux.signal(6),
+			Flux.signal(7)
+		local effSeen = 0
+		local deadCleanCount = 0
+		local nestedEffRuns = 0
+		local nestedScopeClean = 0
+		local deadPlain: any
+		local deadWithChild: any
+		local cOne: any
+		local cTwo: any
+		local cZero: any
+		local cChainMulti: any
+		local extComp: any
+		local scDispose = Flux.scope(function()
+			-- 0-source effect
+			Flux.createEffect(function()
+				effSeen += 1
+			end)
+			-- Nested child scope (hits disposeOne branch in disposeChildren fast path)
+			Flux.scope(function()
+				Flux.cleanup(function()
+					nestedScopeClean += 1
+				end)
+			end)
+			-- Externally observed computed (hits disposeOne branch for observed child computed)
+			extComp = Flux.computed(function()
+				return s5() + 10
+			end)
+			-- Unobserved (dead) computed without children
+			deadPlain = Flux.computed(function()
+				return s1() + 5
+			end)
+			-- Unobserved (dead) computed WITH a child cleanup
+			deadWithChild = Flux.computed(function()
+				Flux.cleanup(function()
+					deadCleanCount += 1
+				end)
+				return s2() + 5
+			end)
+			-- 1-source effect + 1-source chained computed + nested child effect (node[E_CHILDREN])
+			cOne = Flux.computed(function()
+				return s1() + 1
+			end)
+			Flux.createEffect(function()
+				effSeen += cOne()
+				Flux.createEffect(function()
+					nestedEffRuns += 1
+					effSeen += s2()
+				end)
+			end)
+			-- 1-source effect + 2-source chained computed (clearCompSrcs)
+			cTwo = Flux.computed(function()
+				return s1() + s2()
+			end)
+			Flux.createEffect(function()
+				effSeen += cTwo()
+			end)
+			-- 1-source effect + 0-source chained computed
+			cZero = Flux.computed(function()
+				return 42
+			end)
+			Flux.createEffect(function()
+				effSeen += cZero()
+			end)
+			-- Multi-source effect + chained computed + non-chained signal (disposeMultiEffect + disposeChained)
+			cChainMulti = Flux.computed(function()
+				return s3() + s4()
+			end)
+			Flux.createEffect(function()
+				effSeen += s0() + cChainMulti()
+			end)
+			-- 6-source dynamic grow/shrink effect
+			local wide = Flux.computed(function()
+				return s1() + s2() + s3() + s4() + s5() + s6()
+			end)
+			Flux.createEffect(function()
+				if s0() > 1 then
+					effSeen += wide() + s1() + s2() + s3() + s4() + s5()
+				else
+					effSeen += wide()
+				end
+			end)
+		end)
+		local extVal = 0
+		local extEff = Flux.effect(function()
+			extVal = extComp()
+		end)
+		sert.defer(function()
+			extEff:Destroy()
+		end)
+		flush()
+		expect(extVal == 16, "externally observed computed ran before disposeChildren")
+		local _ = deadPlain()
+		local _ = deadWithChild()
+		s0:set(2)
+		flush()
+		s0:set(1)
+		flush()
+		scDispose:Destroy()
+		extEff:Destroy()
+		cOne:set(999)
+		expect(
+			deadCleanCount == 1
+				and nestedScopeClean == 1
+				and extComp:peek() == nil
+				and cOne:peek() == nil
+				and cTwo:peek() == nil
+				and cZero:peek() == nil
+				and cChainMulti:peek() == nil
+				and deadPlain:peek() == nil
+				and deadWithChild:peek() == nil,
+			"disposeChildren tears down chained/dead/external computeds and scopes and ignores post-dispose writes"
+		)
+		local effSeenAfterDispose = effSeen
+		local nestedRunsAfterDispose = nestedEffRuns
+		s0:set(10)
+		s1:set(11)
+		s2:set(12)
+		s3:set(13)
+		s4:set(14)
+		s5:set(15)
+		s6:set(16)
+		flush()
+		expect(
+			effSeen == effSeenAfterDispose and nestedEffRuns == nestedRunsAfterDispose,
+			"torn down effects and nested child effects do not re-run after disposeChildren"
+		)
+		s0:set(1)
+		s1:set(2)
+		s2:set(3)
+		s3:set(4)
+		s4:set(5)
+		s5:set(6)
+		s6:set(7)
+		expect(
+			not Graph.isObserved(s0)
+				and not Graph.isObserved(s1)
+				and not Graph.isObserved(s3)
+				and not Graph.isObserved(s6),
+			"disposeChildren cleans 0/1/2/6-source effects and all chained computeds without leaks"
+		)
+
+		-- rollbackReconcileTail (nNew=6 diverging over nOld=6) + defer=false (multi-obs: 1 dirty + 1 effect) + markList (2+ obs)
+		local mGate = Flux.signal(0)
+		local mHead = Flux.signal(1)
+		local cycY: any
+		local tailComp: any
+		tailComp = Flux.computed(function()
+			if mGate() == 0 then
+				return s1() + s2() + s3()
+			end
+			return s1() + s4() + s5() + cycY()
+		end)
+		cycY = Flux.computed(function()
+			return tailComp() + 1
+		end)
+		local cycYTapped = Flux.effect(function()
+			pcall(cycY)
+		end)
+		local mMulti = Flux.computed(function()
+			return mHead() * 3
+		end)
+		local mObs1 = Flux.computed(function()
+			return mMulti() + 1
+		end)
+		local mObs2Runs = 0
+		local mObsEff = Flux.effect(function()
+			mObs2Runs += 1
+			local _ = mMulti()
+			pcall(tailComp)
+		end)
+		local mObs1Tap = Flux.effect(function()
+			local _ = mObs1()
+		end)
+		flush()
+		mMulti:set(99) -- markList multi-observer outside effect
+		local inEffMark = Flux.effect(function()
+			mMulti:set(100) -- markList multi-observer inside effect
+		end)
+		flush()
+		mHead:set(2)
+		flush() -- exercises defer=false on mMulti (mObs1 dirty + mObsEff clean/dirty mix)
+		env.warnings(function()
+			mGate:set(1)
+			flush() -- exercises rollbackReconcileTail
+		end)
+		mGate:set(0)
+		flush()
+		expect(
+			mObs2Runs >= 2 and tailComp:peek() == 9,
+			"rollbackReconcileTail and markList multi-observer paths succeed"
+		)
+
+		-- 6. Node API parity: call, get, peek, raw, read, getter across live clean, dead clean, pull, hit, and miss
+		local apiSig = Flux.signal(10)
+		local apiComp = Flux.computed(function()
+			return apiSig() * 2
+		end)
+		local apiGetter = Flux.getter(apiComp)
+		expect(apiComp() == 20 and apiComp:get() == 20 and apiComp:peek() == 20)
+		expect(Flux.raw(apiComp) == 20 and Flux.read(apiComp) == 20 and apiGetter() == 20)
+		local apiReader = Flux.effect(function()
+			local _ = apiComp()
+			local _ = apiComp:get()
+			local _ = apiGetter()
+			local _ = Flux.read(apiComp)
+		end)
+		flush()
+		apiSig:set(25)
+		expect(apiComp() == 50 and apiComp:get() == 50 and apiComp:peek() == 50)
+		expect(Flux.raw(apiComp) == 50 and Flux.read(apiComp) == 50 and apiGetter() == 50)
+		apiReader:Destroy()
+		apiComp:Destroy()
+		apiSig:Destroy()
+
+		-- 7. rawFn, untrack(fn) self-cycle, and direct computed write markList (1-obs & N-obs, re==nil & re~=nil)
+		local rawTrig = Flux.signal(1)
+		local rawHidden = Flux.signal(10)
+		local rawCleanCount = 0
+		local rawCompRuns = 0
+		local rawComp = Flux.computed(function()
+			rawCompRuns += 1
+			local base = rawTrig()
+			local h = Flux.raw(function()
+				Flux.cleanup(function()
+					rawCleanCount += 1
+				end)
+				return rawHidden()
+			end)
+			return base + h
+		end)
+		expect(rawComp() == 11 and rawCleanCount == 0)
+		rawHidden:set(20)
+		expect(rawComp() == 11 and rawCompRuns == 1, "raw(fn) inside computed does not subscribe to hidden reads")
+		rawTrig:set(2)
+		expect(
+			rawComp() == 22 and rawCompRuns == 2 and rawCleanCount == 1,
+			"raw(fn) cleanup attaches to computed and fires on recompute"
+		)
+		rawComp:Destroy()
+		expect(rawCleanCount == 2, "raw(fn) cleanup fires on computed Destroy")
+
+		-- live computed calling Flux.raw(throwing) during stabilize(): pEval == nil -> rawFn sets evalNode = active
+		local rawErrSig = Flux.signal(1)
+		local rawErrCleaned = 0
+		local rawErrComp = Flux.computed(function()
+			local v = rawErrSig()
+			Flux.cleanup(function()
+				rawErrCleaned += 1
+			end)
+			if v == 2 then
+				Flux.raw(function()
+					error("raw stab boom", 0)
+				end)
+			end
+			return v * 10
+		end)
+		local rawErrSeen = 0
+		local rawErrEff = Flux.effect(function()
+			local ok, val = pcall(rawErrComp)
+			if ok then
+				rawErrSeen = val
+			end
+		end)
+		flush()
+		expect(rawErrSeen == 10, "live rawErrComp initial value")
+		rawErrSig:set(2)
+		local rawErrWarns = env.warnings(flush)
+		local okRawErr = pcall(rawErrComp.peek, rawErrComp)
+		expect(
+			#rawErrWarns == 0 and not okRawErr and rawErrCleaned == 2,
+			`raw(fn) throw during stabilize marks active computed ERRORED (warns={#rawErrWarns}, ok={okRawErr}, cleaned={rawErrCleaned})`
+		)
+		rawErrSig:set(3)
+		flush()
+		expect(rawErrSeen == 30, "rawErrComp heals on recovery")
+		rawErrEff:Destroy()
+		rawErrComp:Destroy()
+		rawErrSig:Destroy()
+
+		-- withOwner inside computed with raw(fn): pSet == true preserves explicit owner
+		local extClean = 0
+		local extScope = Flux.scope(function() end)
+		local ownerPreserved = Flux.computed(function()
+			return Flux.withOwner(extScope, function()
+				return Flux.raw(function()
+					Flux.cleanup(function()
+						extClean += 1
+					end)
+					return 5
+				end)
+			end)
+		end)
+		expect(ownerPreserved() == 5 and extClean == 0)
+		ownerPreserved:Destroy()
+		expect(extClean == 0, "pSet == true inside raw(fn) kept external owner instead of attaching to computed")
+		extScope:Destroy()
+		expect(extClean == 1, "external owner cleanup fires on its Destroy")
+
+		local suspTrig = Flux.signal(1)
+		local suspRawClean = 0
+		local suspEffRuns = 0
+		local suspEff = Flux.effect(function()
+			suspEffRuns += 1
+			local _ = suspTrig()
+			untrack()
+			Flux.raw(function()
+				Flux.cleanup(function()
+					suspRawClean += 1
+				end)
+				return rawHidden()
+			end)
+		end)
+		flush()
+		rawHidden:set(30)
+		flush()
+		expect(
+			suspEffRuns == 1 and suspRawClean == 0,
+			"raw(fn) after bare untrack() skips subscription to hidden signal"
+		)
+		suspTrig:set(2)
+		flush()
+		expect(
+			suspEffRuns == 2 and suspRawClean == 1,
+			"raw(fn) after bare untrack() attaches cleanup to suspended effect"
+		)
+		suspEff:Destroy()
+		expect(suspRawClean == 2, "raw(fn) suspended cleanup runs on Destroy")
+
+		-- live computed calling Flux.untrack(throwing) during stabilize(): pEval == nil -> sets evalNode = active
+		local untrackErrSig = Flux.signal(1)
+		local untrackErrComp = Flux.computed(function()
+			local v = untrackErrSig()
+			if v == 2 then
+				Flux.untrack(function()
+					error("untrack stab boom", 0)
+				end)
+			end
+			return v * 10
+		end)
+		local untrackErrSeen = 0
+		local untrackErrEff = Flux.effect(function()
+			local ok, val = pcall(untrackErrComp)
+			if ok then
+				untrackErrSeen = val
+			end
+		end)
+		flush()
+		untrackErrSig:set(2)
+		local untrackErrWarns = env.warnings(flush)
+		local okUntrackErr = pcall(untrackErrComp.peek, untrackErrComp)
+		expect(
+			#untrackErrWarns == 0 and not okUntrackErr,
+			`untrack(fn) throw during stabilize marks active computed ERRORED (warns={#untrackErrWarns}, ok={okUntrackErr})`
+		)
+		untrackErrSig:set(3)
+		flush()
+		expect(untrackErrSeen == 30, "untrackErrComp heals on recovery")
+		untrackErrEff:Destroy()
+		untrackErrComp:Destroy()
+		untrackErrSig:Destroy()
+
+		-- Direct computed :set() on 1-observer and N-observer (outside effect & inside running effect)
+		local dBase = Flux.signal(1)
+		local singleSetComp = Flux.computed(function()
+			return dBase() * 2
+		end)
+		local singleSeen = 0
+		local singleObs = Flux.effect(function()
+			singleSeen = singleSetComp()
+		end)
+		flush()
+		singleSetComp:set(77)
+		flush()
+		expect(singleSeen == 77, "1-observer computed :set() notifies observer outside effect")
+
+		local multiSetComp = Flux.computed(function()
+			return dBase() * 3
+		end)
+		local obsAVal, obsBVal = 0, 0
+		local obsA = Flux.effect(function()
+			obsAVal = multiSetComp()
+		end)
+		local obsB = Flux.effect(function()
+			obsBVal = multiSetComp()
+		end)
+		flush()
+		multiSetComp:set(99)
+		flush()
+		expect(obsAVal == 99 and obsBVal == 99, "multi-observer computed :set() outside effect notifies all observers")
+
+		local selfWriteRuns = 0
+		local obsC = Flux.effect(function()
+			selfWriteRuns += 1
+			local v = multiSetComp()
+			if v == 99 then
+				multiSetComp:set(200) -- deferSelf on obsC + markOne on obsA/obsB
+			end
+		end)
+		flush()
+		expect(
+			obsAVal == 200 and obsBVal == 200 and selfWriteRuns == 2,
+			"multi-observer computed :set() inside observing effect defers self and notifies siblings"
+		)
+		obsC:Destroy()
+		obsB:Destroy()
+		obsA:Destroy()
+		multiSetComp:Destroy()
+		singleObs:Destroy()
+		singleSetComp:Destroy()
+		dBase:Destroy()
+		rawHidden:Destroy()
+		rawTrig:Destroy()
+		suspTrig:Destroy()
+
+		-- 8. Additional targeted mutation killers: getMemo dirty slot hit, writeComputed on dirty computed,
+		--    setSignal slow return value, runEffectNow self-requeue via :peek(), and trackSlow diverged dedup / nested divergence
+		local mGate2 = Flux.signal(1)
+		local mSig2 = Flux.signal(10)
+		local mComp2 = Flux.computed(function()
+			return mSig2() * 2
+		end)
+		local mSeen2 = 0
+		local mEff2 = Flux.effect(function()
+			if mGate2() == 2 then
+				mSig2:set(20)
+			end
+			mSeen2 = Flux.read(mComp2)
+		end)
+		flush()
+		expect(mSeen2 == 20, "Flux.read(comp) initial read")
+		mGate2:set(2)
+		flush()
+		expect(mSeen2 == 40, "getMemo r[i]==node slot hit pulls dirty computed mid-run")
+		mEff2:Destroy()
+
+		-- writeComputed on dirty computed: no-force equal after pull skips obs, force=true wakes obs,
+		-- and calling comp:set() inside another effect does NOT subscribe caller to comp's upstream signal
+		local wBase = Flux.signal(1)
+		local wComp = Flux.computed(function()
+			return math.abs(wBase()) * 2
+		end)
+		local wObsRuns = 0
+		local wObsVal = 0
+		local wObsEff = Flux.effect(function()
+			wObsRuns += 1
+			wObsVal = wComp()
+		end)
+		flush()
+		wBase:set(-1) -- wComp is dirty before flush (pulls 2 == old 2)
+		wComp:set(2) -- pulls wComp -> old == 2 == value without force -> skips observer!
+		flush()
+		expect(wObsRuns == 1 and wObsVal == 2, "writeComputed without force skips when pulled dirty value equals arg")
+		wBase:set(1) -- dirty again (pulls 2)
+		wComp:set(2, true) -- force=true wakes observer
+		flush()
+		expect(wObsRuns == 2 and wObsVal == 2, "writeComputed with force=true notifies observer even when equal")
+
+		local wCallerRuns = 0
+		local wTrig = Flux.signal(0)
+		local wCaller = Flux.effect(function()
+			wCallerRuns += 1
+			if wTrig() > 0 then
+				wBase:set(9) -- dirty wComp inside effect
+				expect(wBase:set(9) == 9, "setSignal slow path returns written value")
+				wComp:set(99) -- pulls wComp inside effect without leaking curNode
+			end
+		end)
+		flush()
+		wTrig:set(1)
+		flush()
+		wBase:set(10) -- wCaller must NOT have subscribed to wBase when wComp:set pulled wComp!
+		flush()
+		expect(wCallerRuns == 2, "writeComputed inside effect does not subscribe caller to upstream sources")
+		wCaller:Destroy()
+		wObsEff:Destroy()
+		wComp:Destroy()
+		wTrig:Destroy()
+		wBase:Destroy()
+		mComp2:Destroy()
+		mSig2:Destroy()
+		mGate2:Destroy()
+
+		-- runEffectNow self-requeue via e:peek()
+		local rSig = Flux.signal(1)
+		local rRuns = 0
+		local rEff: any
+		rEff = Flux.effect(function()
+			rRuns += 1
+			local v = rSig()
+			if v == 1 then
+				rSig:set(2)
+			end
+		end)
+		rEff:peek()
+		flush()
+		expect(rRuns == 2, "runEffectNow synchronous :peek() self-requeues on write-after-read")
+		rEff:Destroy()
+		rSig:Destroy()
+
+		-- trackSlow diverged dedup & nested divergence (freeNew == nil)
+		local divGate = Flux.signal(false)
+		local divA = Flux.signal(1)
+		local divB = Flux.signal(2)
+		local divC = Flux.signal(3)
+		local innerDiv = Flux.computed(function()
+			if not divGate() then
+				return divA()
+			end
+			return divC() + divC()
+		end)
+		local outerDiv = Flux.computed(function()
+			if not divGate() then
+				return divA()
+			end
+			local _ = divB() + divB()
+			return Flux.raw(innerDiv)
+		end)
+		local outerDivTap = Flux.effect(function()
+			local _ = outerDiv()
+		end)
+		local innerDivTap = Flux.effect(function()
+			local _ = innerDiv()
+		end)
+		flush()
+		divGate:set(true)
+		flush()
+		divC:set(10)
+		flush()
+		expect(
+			(divB :: any)[1][4] == 1 and (divC :: any)[1][4] == 1 and innerDiv:peek() == 20 and outerDiv:peek() == 6,
+			"trackSlow dedupes post-divergence reads and handles nested divergence when freeNew is nil"
+		)
+		innerDivTap:Destroy()
+		outerDivTap:Destroy()
+		outerDiv:Destroy()
+		innerDiv:Destroy()
+		divC:Destroy()
+		divB:Destroy()
+		divA:Destroy()
+		divGate:Destroy()
+
+		-- 9. updateNode (:update()), wrapComputedEquals stabilize error attribution, and runEffectNow (:peek()) edge paths
+		local uTbl = { count = 1 }
+		local uSig = Flux.signal(uTbl)
+		local uCompReads = 0
+		local uDead = Flux.computed(function()
+			uCompReads += 1
+			return uSig().count
+		end)
+		local uDeadDownRuns = 0
+		local uDeadDown = Flux.computed(function()
+			uDeadDownRuns += 1
+			return uDead() * 10
+		end)
+		expect(uDeadDown() == 10 and uCompReads == 1 and uDeadDownRuns == 1, "baseline dead computed chain")
+
+		-- Signal :update() inside running effect and inside computed that already read uSig
+		local uSelfEffRuns = 0
+		local uSelfEff = Flux.effect(function()
+			uSelfEffRuns += 1
+			local _ = uSig()
+			if uSelfEffRuns == 1 then
+				uTbl.count = 2
+				uSig:update()
+			end
+		end)
+		flush()
+		expect(uSelfEffRuns == 2, "signal :update() inside running effect requeues via markSelf")
+		uSelfEff:Destroy()
+
+		local uDeadUpd = Flux.computed(function()
+			local _ = uSig()
+			return uTbl.count
+		end)
+		expect(uDeadUpd() == 2)
+		uTbl.count = 3
+		uDeadUpd:update() -- update() on dead clean computed
+		-- Re-verify calling :update() on a dead computed inside a running effect that already read it
+		local uSelfCompRuns = 0
+		local uSelfComp = Flux.effect(function()
+			uSelfCompRuns += 1
+			local _ = uDead()
+			if uSelfCompRuns == 1 then
+				uDead:update() -- computed :update() inside running effect -> markSelf
+			end
+		end)
+		flush()
+		expect(uSelfCompRuns == 2, "computed :update() inside running effect requeues via markSelf")
+		uSelfComp:Destroy()
+
+		-- Dead dirty computed :update() bumps CHANGED so downstream dead computed recomputes on next read
+		local uSrc = Flux.signal(1)
+		local uMid = Flux.computed(function()
+			return uSrc() + 1
+		end)
+		local uDownRuns = 0
+		local uDown = Flux.computed(function()
+			uDownRuns += 1
+			return uMid() + 10
+		end)
+		expect(uDown() == 12 and uDownRuns == 1)
+		uSrc:set(2) -- uMid is dead & dirty
+		uMid:update() -- marks uMid STALE & bumps uMid[CHANGED]
+		expect(uDown() == 13 and uDownRuns == 2, "dead dirty computed :update() invalidates downstream dead reader")
+
+		-- Live dirty computed :update() called inside another effect pulls cleanly without subscribing caller to uSrc
+		local uLiveObsRuns = 0
+		local uLiveEff = Flux.effect(function()
+			uLiveObsRuns += 1
+			local _ = uMid()
+		end)
+		flush()
+		local callerTrig = Flux.signal(0)
+		local callerRuns = 0
+		local callerEff = Flux.effect(function()
+			callerRuns += 1
+			if callerTrig() == 1 then
+				uSrc:set(5) -- uMid is live dirty
+				uMid:update() -- pulls uMid (6) cleanly without leaking curNode to uSrc!
+			end
+		end)
+		flush()
+		callerTrig:set(1)
+		flush()
+		expect(uLiveObsRuns == 2 and uMid:peek() == 6 and callerRuns == 2, "live dirty :update() pulls & notifies")
+		uSrc:set(7) -- callerEff must NOT re-run since uMid:update() cleared curNode during pull
+		flush()
+		expect(callerRuns == 2, "live dirty :update() inside effect did not subscribe caller to upstream signal")
+		callerEff:Destroy()
+		callerTrig:Destroy()
+
+		-- Live clean computed :update() bumps CHANGED so dead downstream recomputes, and no-op on destroyed/effect/scope
+		local deadAfterCleanRuns = 0
+		local deadAfterClean = Flux.computed(function()
+			deadAfterCleanRuns += 1
+			return uMid() * 2
+		end)
+		expect(deadAfterClean() == 16 and deadAfterCleanRuns == 1)
+		uMid:update() -- live clean bump
+		flush()
+		expect(
+			deadAfterClean() == 16 and deadAfterCleanRuns == 2 and uLiveObsRuns == 4,
+			"live clean :update() wakes observers & bumps version"
+		)
+
+		local uNoopEff = Flux.effect(function() end)
+		local uNoopScope = Flux.scope(function() end)
+		uNoopEff:update()
+		uNoopScope:update()
+		uNoopEff:Destroy()
+		uNoopScope:Destroy()
+		uLiveEff:Destroy()
+		deadAfterClean:Destroy()
+		uMid:Destroy() -- destroyed computed :update() no-op
+		uMid:update()
+		uDown:Destroy()
+		uSrc:Destroy()
+		uDeadUpd:Destroy()
+		uDeadDown:Destroy()
+		uDead:Destroy()
+		uSig:Destroy()
+
+		-- wrapComputedEquals throwing error during stabilize() marks computed ERRORED cleanly
+		local eqErrSig = Flux.signal(1)
+		local eqErrComp = Flux.computed(function()
+			return eqErrSig() * 10
+		end, function(prev, nxt)
+			if nxt == 20 then
+				error("stab-eq-boom", 0)
+			end
+			return prev == nxt
+		end)
+		local eqErrOk, eqErrSeen = true, 0
+		local eqErrEff = Flux.effect(function()
+			eqErrOk, eqErrSeen = pcall(eqErrComp)
+		end)
+		sert.defer(function()
+			eqErrEff:Destroy()
+			eqErrComp:Destroy()
+			eqErrSig:Destroy()
+		end)
+		flush()
+		expect(eqErrOk and eqErrSeen == 10, "baseline eqErrComp")
+		eqErrSig:set(2)
+		env.warnings(flush)
+		local peekOk = pcall(eqErrComp.peek, eqErrComp)
+		expect(not peekOk and not eqErrOk, "wrapComputedEquals error during stabilize marks computed ERRORED")
+		eqErrSig:set(3)
+		flush()
+		expect(eqErrOk and eqErrSeen == 30, "eqErrComp heals cleanly on recovery")
+		eqErrEff:Destroy()
+		eqErrComp:Destroy()
+		eqErrSig:Destroy()
+
+		-- runEffectNow (:peek()) refreshes dirty computed dep and handles self-destruction mid-run
+		local rnSrc = Flux.signal(1)
+		local rnComp = Flux.computed(function()
+			return rnSrc() * 3
+		end)
+		local rnVal = 0
+		local rnClean = 0
+		local rnEff: any
+		rnEff = Flux.effect(function()
+			Flux.cleanup(function()
+				rnClean += 1
+			end)
+			rnVal = rnComp()
+			if rnVal == 9 then
+				rnEff:Destroy()
+			end
+		end)
+		flush()
+		rnSrc:set(3) -- rnComp is dirty before rnEff:peek()
+		rnEff:peek() -- runEffectNow refreshes rnComp -> 9 and rnEff destroys itself mid-run!
+		expect(
+			rnVal == 9 and rnClean == 2 and not Graph.isObserved(rnSrc),
+			"runEffectNow refreshes dep and self-disposes"
+		)
+		rnComp:Destroy()
+		rnSrc:Destroy()
+
+		inEffMark:Destroy()
+		mObs1Tap:Destroy()
+		mObsEff:Destroy()
+		mObs1:Destroy()
+		mMulti:Destroy()
+		cycYTapped:Destroy()
+		cycY:Destroy()
+		tailComp:Destroy()
+		mHead:Destroy()
+		mGate:Destroy()
+		s0:Destroy()
+		s1:Destroy()
+		s2:Destroy()
+		s3:Destroy()
+		s4:Destroy()
+		s5:Destroy()
+		s6:Destroy()
+	end
+)
+
+test("runEffectNow · clean skip, ownership, cleanup order, nested outerFrame & dep reconciliation", function()
+	local nodes: { any } = {}
+	local function trackNode<T>(x: T): T
+		table.insert(nodes, x)
+		return x
+	end
+	sert.defer(function()
+		for i = #nodes, 1, -1 do
+			(nodes[i] :: any):Destroy()
+		end
+	end)
+
+	-- 1. Clean e:peek() while unrelated computed is dirty before flush must NOT run e
+	local unSig = trackNode(Flux.signal(1))
+	local unComp = trackNode(Flux.computed(function()
+		return unSig() * 2
+	end))
+	local unObs = trackNode(Flux.effect(function()
+		local _ = unComp()
+	end))
+	local cSig = trackNode(Flux.signal(10))
+	local cRuns = 0
+	local cEff = trackNode(Flux.effect(function()
+		cRuns += 1
+		local _ = cSig()
+	end))
+	flush()
+	expect(cRuns == 1, "baseline clean effect run count")
+	unSig:set(2) -- leaves heapMin ~= INF while entering peek() -> pullValue calls runEffectNow(cEff)
+	cEff:peek()
+	expect(cRuns == 1 and unComp() == 4, "clean effect peek() during batch with unrelated dirty computed skips re-run")
+	flush()
+	unObs:Destroy()
+
+	-- 2. e:peek() inside Flux.withOwner(extOwner): prior cleanup fires BEFORE body, child owned by e, post-peek child by extOwner
+	local ownSig = trackNode(Flux.signal(1))
+	local phaseLog = {}
+	local ownChildClean = 0
+	local extChildClean = 0
+	local ownEff = trackNode(Flux.effect(function()
+		local v = ownSig()
+		Flux.cleanup(function()
+			table.insert(phaseLog, "cleanup:" .. v)
+		end)
+		local innerC = Flux.computed(function()
+			Flux.cleanup(function()
+				ownChildClean += 1
+			end)
+			return v * 3
+		end)
+		local _ = innerC()
+		table.insert(phaseLog, "body:" .. v)
+	end))
+	flush()
+	expect(#phaseLog == 1 and phaseLog[1] == "body:1", "initial run logged body")
+	table.clear(phaseLog)
+	ownSig:set(2)
+	local extOwner = trackNode(Flux.scope(function() end))
+	Flux.withOwner(extOwner, function()
+		ownEff:peek()
+		local postC = Flux.computed(function()
+			Flux.cleanup(function()
+				extChildClean += 1
+			end)
+			return 99
+		end)
+		local _ = postC()
+		Flux.cleanup(function()
+			extChildClean += 1
+		end)
+	end)
+	expect(
+		#phaseLog == 2 and phaseLog[1] == "cleanup:1" and phaseLog[2] == "body:2",
+		"runEffectNow disposes prior children/cleanups before running new body"
+	)
+	expect(ownChildClean == 1 and extChildClean == 0, "prior e-owned child disposed; new extOwner items alive")
+	extOwner:Destroy()
+	expect(ownChildClean == 1 and extChildClean == 2, "extOwner disposed post-peek child/cleanup, NOT e's owned child")
+	ownEff:Destroy()
+	expect(ownChildClean == 2, "e:Destroy() disposed e's own child")
+
+	-- 3a. Nested e2:peek() inside running e1 preserves selfWritten when inner effect doesn't write
+	local s1 = trackNode(Flux.signal(0))
+	local s2 = trackNode(Flux.signal(10))
+	local e2Runs = 0
+	local e2Seen = 0
+	local e2 = trackNode(Flux.effect(function()
+		e2Runs += 1
+		e2Seen = s2()
+	end))
+	local e1Runs = 0
+	local e1Seen = 0
+	local e1 = trackNode(Flux.effect(function()
+		e1Runs += 1
+		local v = s1()
+		e1Seen = v
+		if v == 2 then
+			s1:set(3)
+			s2:set(20)
+			e2:peek()
+		end
+	end))
+	flush()
+	expect(e1Runs == 1 and e2Runs == 1 and e2Seen == 10, "nested test baseline")
+	s1:set(2)
+	flush()
+	expect(e1Runs == 3 and e1Seen == 3 and e2Runs == 2 and e2Seen == 20, "outer selfWritten survived nested e2:peek()")
+
+	-- 3b. Nested e2b:peek() writes e1b's source -> outerFrame.written requeues e1b; subsequent top-level e3:peek() still works
+	local b1 = trackNode(Flux.signal(1))
+	local b2 = trackNode(Flux.signal(1))
+	local e2b = trackNode(Flux.effect(function()
+		local x = b2()
+		if x == 10 then
+			b1:set(3)
+		end
+	end))
+	local b1Runs, b1Seen = 0, 0
+	local e1b = trackNode(Flux.effect(function()
+		b1Runs += 1
+		b1Seen = b1()
+		if b1Seen == 2 then
+			b2:set(10)
+			e2b:peek()
+		end
+	end))
+	flush()
+	b1:set(2)
+	flush()
+	expect(b1Runs == 3 and b1Seen == 3, "outerFrame.written requeued outer effect after nested e2b:peek()")
+
+	local s3 = trackNode(Flux.signal(0))
+	local s3Runs, s3Seen = 0, 0
+	local e3 = trackNode(Flux.effect(function()
+		s3Runs += 1
+		s3Seen = s3()
+		if s3Seen == 1 then
+			s3:set(2)
+		end
+	end))
+	flush()
+	s3:set(1)
+	e3:peek()
+	flush()
+	expect(s3Runs == 3 and s3Seen == 2, "top-level e3:peek() after nested frame unwinds noEffect cleanly")
+
+	-- 4. e:peek() changing deps inside bare Flux.untrack() of outer effect clears curNew & restores suspRun
+	local uGate = trackNode(Flux.signal(true))
+	local ux1 = trackNode(Flux.signal(1))
+	local ux2 = trackNode(Flux.signal(2))
+	local uIn = trackNode(Flux.effect(function()
+		if uGate() then
+			local _ = ux1()
+		else
+			local _ = ux2()
+		end
+	end))
+	local oA = trackNode(Flux.signal(1))
+	local oB = trackNode(Flux.signal(10))
+	local oRuns, oVal = 0, 0
+	local oPhase = trackNode(Flux.signal(0))
+	local uOut = trackNode(Flux.effect(function()
+		oRuns += 1
+		local _ = oA()
+		if oPhase:peek() == 1 then
+			oPhase:set(2)
+			untrack()
+			uGate:set(false)
+			uIn:peek()
+			retrack()
+		end
+		oVal = oB()
+	end))
+	flush()
+	expect(Graph.isObserved(ux1) and not Graph.isObserved(ux2), "uIn initially tracks ux1")
+	oPhase:set(1)
+	oA:set(2)
+	flush()
+	expect(not Graph.isObserved(ux1) and Graph.isObserved(ux2), "uIn:peek() reconciled deps from ux1 to ux2")
+	expect(oVal == 10 and oRuns == 2, "outer effect completed run after retrack")
+	oB:set(99)
+	flush()
+	expect(oRuns == 3 and oVal == 99, "retrack after uIn:peek() restored suspRun and tracked oB")
+	e1b:Destroy()
+	e2b:Destroy()
+	e3:Destroy()
+	uOut:Destroy()
+	uIn:Destroy()
+	e1:Destroy()
+	e2:Destroy()
+	cEff:Destroy()
+end)
+
+test("updateNode · live/dead dirty & clean paths, self-marking and downstream invalidation", function()
+	local nodes: { any } = {}
+	local function trackNode<T>(x: T): T
+		table.insert(nodes, x)
+		return x
+	end
+	sert.defer(function()
+		for i = #nodes, 1, -1 do
+			(nodes[i] :: any):Destroy()
+		end
+	end)
+
+	-- 1. Live dirty comp:update() inside live computed reader pulls comp without subscribing reader to comp's upstream
+	local src = trackNode(Flux.signal(1))
+	local comp = trackNode(Flux.computed(function()
+		return { v = src() * 10 }
+	end))
+	local keepCompSeen = 0
+	local keepEff = trackNode(Flux.effect(function()
+		keepCompSeen = comp().v
+	end))
+	local sA = trackNode(Flux.signal(1))
+	local sB = trackNode(Flux.signal(100))
+	local readerRuns = 0
+	local reader = trackNode(Flux.computed(function()
+		readerRuns += 1
+		local a = sA()
+		comp:update()
+		local b = sB()
+		return a + b + comp:peek().v
+	end))
+	local readerEff = trackNode(Flux.effect(function()
+		local _ = reader()
+	end))
+	flush()
+	expect(keepCompSeen == 10 and readerRuns == 1, "baseline live updateNode")
+
+	src:set(2) -- comp is dirty before flush
+	sA:set(2)
+	flush()
+	expect(reader:peek() == 122 and readerRuns == 2 and keepCompSeen == 20, "comp:update() pulled dirty comp")
+	-- Modify src while sA/sB stay fixed: reader must NOT have subscribed to src
+	src:set(3)
+	flush()
+	expect(readerRuns == 2 and keepCompSeen == 30, "reader did not subscribe to comp's upstream src")
+	sB:set(200)
+	flush()
+	expect(readerRuns == 3 and reader:peek() == 232, "reader preserved trailing sB subscription")
+
+	-- 2. Live dirty comp:update() where pull(comp) destroys comp's sole observer (refreshes obs & st)
+	local dSrc = trackNode(Flux.signal(1))
+	local soleEff: any = nil
+	local dComp = trackNode(Flux.computed(function()
+		local v = dSrc()
+		if v == 2 and soleEff then
+			soleEff:Destroy()
+		end
+		return v * 5
+	end))
+	soleEff = trackNode(Flux.effect(function()
+		local _ = dComp()
+	end))
+	flush()
+	dSrc:set(2)
+	dComp:update() -- pulls dComp -> destroys soleEff -> comp becomes dead!
+	expect(dComp:peek() == 10 and not Graph.isObserved(dSrc), "pull during update() destroyed sole observer cleanly")
+	dSrc:set(4) -- while dead, dComp must not remain stamped with LIVE_BASE
+	expect(dComp() == 20, "subsequent read after dead transition recomputes instead of reading stale value")
+
+	-- 3. Dead dirty comp:update() stays STALE, bumps CHANGED/epoch, and markSelf works for computed & effect
+	local ddSrc = trackNode(Flux.signal(1))
+	local ddMidRuns = 0
+	local ddMid = trackNode(Flux.computed(function()
+		ddMidRuns += 1
+		return math.abs(ddSrc())
+	end))
+	local ddDownRuns = 0
+	local ddDown = trackNode(Flux.computed(function()
+		ddDownRuns += 1
+		return ddMid() + 100
+	end))
+	expect(ddDown() == 101 and ddMidRuns == 1 and ddDownRuns == 1, "baseline dead dirty")
+	ddSrc:set(2) -- marks ddMid STALE (dead)
+	ddMid:update() -- dead dirty branch (L3128-3134)
+	expect(ddMidRuns == 1, "dead dirty update() did not eagerly recompute ddMid")
+	expect(ddDown() == 102 and ddMidRuns == 2 and ddDownRuns == 2, "ddMid stayed STALE and ddDown recomputed")
+
+	-- Dead dirty inside computed (curNode ~= nil) and inside bare-untracked effect (curNode == nil, runningEffect ~= nil)
+	local msFlag = trackNode(Flux.signal(0))
+	local msSrc = trackNode(Flux.signal(1))
+	local msDead = trackNode(Flux.computed(function()
+		return msSrc()
+	end))
+	local msCompRuns = 0
+	local msComp = trackNode(Flux.computed(function()
+		msCompRuns += 1
+		local v = msDead()
+		if msFlag() == 1 then
+			msSrc:set(2)
+			msDead:update()
+			msFlag:set(0)
+		end
+		return v
+	end))
+	local msCompEff = trackNode(Flux.effect(function()
+		local _ = msComp()
+	end))
+	flush()
+	expect(msCompRuns == 1, "msComp baseline")
+	msFlag:set(1)
+	flush()
+	expect(msCompRuns == 3 and msComp:peek() == 2, "dead dirty update() marked active computed via markSelf")
+
+	local meFlag = trackNode(Flux.signal(0))
+	local meSrc = trackNode(Flux.signal(1))
+	local meDead = trackNode(Flux.computed(function()
+		return meSrc()
+	end))
+	local meRuns, meSeen = 0, 0
+	local meEff = trackNode(Flux.effect(function()
+		meRuns += 1
+		meSeen = meDead()
+		if meFlag() == 1 then
+			meFlag:set(0)
+			untrack()
+			meSrc:set(2)
+			meDead:update()
+		end
+	end))
+	flush()
+	expect(meRuns == 1 and meSeen == 1, "meEff baseline")
+	meFlag:set(1)
+	flush()
+	expect(meRuns == 3 and meSeen == 2, "dead dirty update() after bare untrack() marked runningEffect via markSelf")
+
+	-- 4. Dead clean comp:update(): does NOT recompute comp on next read, DOES recompute deadDown
+	local dcSrc = trackNode(Flux.signal(5))
+	local dcRuns = 0
+	local dcComp = trackNode(Flux.computed(function()
+		dcRuns += 1
+		return dcSrc() * 2
+	end))
+	local dcDownRuns = 0
+	local dcDown = trackNode(Flux.computed(function()
+		dcDownRuns += 1
+		return dcComp() + 1
+	end))
+	expect(dcDown() == 11 and dcRuns == 1 and dcDownRuns == 1, "dead clean baseline")
+	dcComp:update()
+	expect(dcComp() == 10 and dcRuns == 1, "dead clean update() keeps comp clean (does not mark STALE)")
+	expect(dcDown() == 11 and dcDownRuns == 2 and dcRuns == 1, "dead clean update() bumps CHANGED so dcDown recomputes")
+
+	-- 5. Live clean comp:update() inside computed & bare-untracked effect marks self
+	local lcSrc = trackNode(Flux.signal(1))
+	local lcLive = trackNode(Flux.computed(function()
+		return lcSrc()
+	end))
+	local lcGate = trackNode(Flux.signal(false))
+	local lcCompRuns = 0
+	local lcComp = trackNode(Flux.computed(function()
+		lcCompRuns += 1
+		local v = lcLive()
+		if lcGate() then
+			lcGate:set(false)
+			lcLive:update()
+		end
+		return v
+	end))
+	local lcKeep = trackNode(Flux.effect(function()
+		local _ = lcComp()
+	end))
+	flush()
+	lcGate:set(true)
+	flush()
+	expect(lcCompRuns == 3, "live clean update() marked active computed")
+
+	local leGate = trackNode(Flux.signal(false))
+	local leLive = trackNode(Flux.computed(function()
+		return lcSrc()
+	end))
+	local leRuns = 0
+	local leEff = trackNode(Flux.effect(function()
+		leRuns += 1
+		local _ = leLive()
+		if leGate() then
+			leGate:set(false)
+			untrack()
+			leLive:update()
+		end
+	end))
+	flush()
+	leGate:set(true)
+	flush()
+	expect(leRuns == 3, "live clean update() after bare untrack() marked runningEffect")
+
+	keepEff:Destroy()
+	readerEff:Destroy()
+	msCompEff:Destroy()
+	meEff:Destroy()
+	lcKeep:Destroy()
+	leEff:Destroy()
+end)
+
+test("getter · signal and computed slot hits, dedup and dead/dirty pulls", function()
+	local nodes: { any } = {}
+	local function trackNode<T>(x: T): T
+		table.insert(nodes, x)
+		return x
+	end
+	sert.defer(function()
+		for i = #nodes, 1, -1 do
+			(nodes[i] :: any):Destroy()
+		end
+	end)
+
+	-- 1. Signal getter advances curIdx on matching slot so dropping a trailing dep triggers reconcile properly
+	local s1 = trackNode(Flux.signal(1))
+	local s2 = trackNode(Flux.signal(10))
+	local drop2 = trackNode(Flux.signal(false))
+	local g1 = Flux.getter(s1)
+	local g2 = Flux.getter(s2)
+	local sgRuns, sgVal = 0, 0
+	local sgEff = trackNode(Flux.effect(function()
+		sgRuns += 1
+		sgVal = g1() + if drop2() then 0 else g2()
+	end))
+	flush()
+	expect(sgRuns == 1 and sgVal == 11, "signal getter initial")
+	drop2:set(true)
+	flush()
+	expect(sgRuns == 2 and sgVal == 1 and not Graph.isObserved(s2), "signal getter slot hit allowed trailing dep drop")
+	s1:set(5)
+	flush()
+	expect(sgRuns == 3 and sgVal == 5, "kept s1 getter triggers effect")
+
+	-- 2. Computed getter slot advance (L4119), dedup (L4128), dead clean skip (L4120/L4123), dead dirty pull (L4124)
+	local cBase = trackNode(Flux.signal(2))
+	local cRuns = 0
+	local comp = trackNode(Flux.computed(function()
+		cRuns += 1
+		return cBase() * 10
+	end))
+	local gc = Flux.getter(comp)
+
+	-- Live effect reads gc() twice (L4128 dedup) + s2 via g2, then drops g2
+	local cDrop = trackNode(Flux.signal(false))
+	local cgRuns, cgVal = 0, 0
+	local cgEff = trackNode(Flux.effect(function()
+		cgRuns += 1
+		cgVal = gc() + gc() + if cDrop() then 0 else g2()
+	end))
+	flush()
+	expect(cgRuns == 1 and cgVal == 50 and cRuns == 1, "computed getter live dedup initial")
+	cDrop:set(true)
+	flush()
+	expect(
+		cgRuns == 2 and cgVal == 40 and not Graph.isObserved(s2),
+		"computed getter slot hit allowed trailing dep drop"
+	)
+	cBase:set(3)
+	flush()
+	expect(cgRuns == 3 and cgVal == 60 and cRuns == 2, "computed getter tracked upstream changes")
+	cgEff:Destroy()
+	sgEff:Destroy()
+
+	-- Dead clean & dead dirty computed getter (also inside an outer effect with matching slot!)
+	local dSrc = trackNode(Flux.signal(4))
+	local dCompRuns = 0
+	local dComp = trackNode(Flux.computed(function()
+		dCompRuns += 1
+		return dSrc() * 3
+	end))
+	local gd = Flux.getter(dComp)
+	expect(gd() == 12 and dCompRuns == 1, "dead dirty getter evaluated dComp")
+	expect(gd() == 12 and dCompRuns == 1, "dead clean getter skipped memoSlow at current epoch")
+	dSrc:set(5)
+	expect(gd() == 15 and dCompRuns == 2, "dead dirty getter pulled updated dComp")
+
+	-- Same inside a reactive slot hit when dComp is temporarily dead vs live
+	local slotGate = trackNode(Flux.signal(true))
+	local slotRuns, slotVal = 0, 0
+	local slotEff = trackNode(Flux.effect(function()
+		slotRuns += 1
+		slotVal = gd()
+		if slotGate() then
+			local _ = g1()
+		end
+	end))
+	flush()
+	expect(slotRuns == 1 and slotVal == 15, "slotEff baseline")
+	slotGate:set(false)
+	flush()
+	expect(slotRuns == 2 and not Graph.isObserved(s1), "computed getter curIdx += 2 on matching slot")
+	dSrc:set(6)
+	expect(gd() == 18, "live computed getter reads fresh value")
+	flush()
+	expect(slotRuns == 3 and slotVal == 18, "slotEff ran on dComp update")
+	slotEff:Destroy()
+end)
+
+test("stabilize DEFERRED · single/multi-observer defer, clean/effect no-defer, and pull reset", function()
+	local nodes: { any } = {}
+	local function trackNode<T>(x: T): T
+		table.insert(nodes, x)
+		return x
+	end
+	sert.defer(function()
+		for i = #nodes, 1, -1 do
+			(nodes[i] :: any):Destroy()
+		end
+	end)
+
+	local cond = trackNode(Flux.signal(true))
+	local x = trackNode(Flux.signal(1))
+	local midRuns = 0
+	local mid = trackNode(Flux.computed(function()
+		midRuns += 1
+		return x() * 10
+	end))
+
+	-- Drop mid once & re-subscribe so mid[CHILDREN] == nil
+	local obs1 = trackNode(Flux.computed(function()
+		return if cond() then mid() else 0
+	end))
+	local obs2 = trackNode(Flux.computed(function()
+		return if cond() then mid() + 1 else 1
+	end))
+	local obsClean = trackNode(Flux.computed(function()
+		return mid() * 2
+	end))
+	local enableClean = trackNode(Flux.signal(false))
+	local e1 = trackNode(Flux.effect(function()
+		local _ = obs1()
+	end))
+	local e2 = trackNode(Flux.effect(function()
+		local _ = obs2()
+	end))
+	local cleanSeen = 0
+	local eClean = trackNode(Flux.effect(function()
+		if enableClean() then
+			cleanSeen = obsClean()
+		end
+	end))
+	flush()
+	expect(midRuns == 1, "initial midRuns")
+
+	cond:set(false)
+	flush() -- obs1 & obs2 drop mid -> mid[CHILDREN] = nil
+	cond:set(true)
+	flush() -- re-subscribe obs1 & obs2 (x unchanged so mid stayed cached); mid[CHILDREN] == nil
+	expect(midRuns == 1, "re-subscribed mid after drop")
+
+	-- Case A: multi-observer (obs1, obs2) both dirty computeds, neither reads mid when cond == false -> mid defers!
+	cond:set(false)
+	x:set(2)
+	flush()
+	expect(midRuns == 1, "Case A: 2 dirty computed observers allow mid to DEFER cleanly")
+
+	-- Re-subscribe for Case B (obs1 dirty, obsClean clean computed)
+	cond:set(true)
+	enableClean:set(true)
+	flush()
+	expect(midRuns == 2 and cleanSeen == 40, "Case B baseline")
+
+	cond:set(false)
+	x:set(3)
+	flush()
+	expect(midRuns == 3 and cleanSeen == 60, "Case B: clean computed observer prevents DEFER")
+
+	-- Case C1: 2 observers where obs[OBS1] is computed (dirty) and obs[OBS1+1] is dirty effect reading cond + mid:peek()
+	enableClean:set(false)
+	cond:set(false)
+	e2:Destroy()
+	flush() -- mid is now dead, mid[CHILDREN] == nil
+	cond:set(true)
+	flush() -- obs1 is sole observer (obs[OBS1])
+	local cEffSeen = 0
+	local obsEff = trackNode(Flux.effect(function()
+		local c = cond()
+		if c then
+			cEffSeen = mid()
+		else
+			cEffSeen = mid:peek()
+		end
+	end))
+	flush()
+	expect(midRuns == 3 and cEffSeen == 30, "Case C1 baseline")
+
+	cond:set(false)
+	x:set(4)
+	flush()
+	expect(
+		midRuns == 4 and cEffSeen == 40,
+		"Case C1: dirty effect as 2nd observer prevents DEFER so mid computes before effect runs"
+	)
+
+	-- Case C2: single observer is dirty effect (o1[HEIGHT] == INF) -> must NOT defer
+	obsEff:Destroy()
+	local s2Cond = trackNode(Flux.signal(true))
+	local s2x = trackNode(Flux.signal(1))
+	local s2MidRuns = 0
+	local s2Mid = trackNode(Flux.computed(function()
+		s2MidRuns += 1
+		return s2x() * 10
+	end))
+	local sEffSeen = 0
+	local sDropEff = trackNode(Flux.effect(function()
+		if s2Cond() then
+			local _ = s2Mid()
+		end
+	end))
+	flush()
+	s2Cond:set(false)
+	flush() -- drop s2Mid -> s2Mid[CHILDREN] = nil
+	sDropEff:Destroy()
+	s2Cond:set(true)
+	local singleEff = trackNode(Flux.effect(function()
+		if s2Cond() then
+			sEffSeen = s2Mid()
+		else
+			sEffSeen = s2Mid:peek()
+		end
+	end))
+	flush()
+	expect(s2MidRuns == 1 and sEffSeen == 10, "Case C2 baseline")
+	s2Cond:set(false)
+	s2x:set(5)
+	flush()
+	expect(s2MidRuns == 2 and sEffSeen == 50, "Case C2: single dirty effect observer prevents DEFER")
+	singleEff:Destroy()
+
+	-- Case D: pull(DEFERRED) resets mid[CHILDREN] = false so subsequent batch evaluates eagerly
+	local pCond = trackNode(Flux.signal(true))
+	local px = trackNode(Flux.signal(1))
+	local pMidRuns = 0
+	local pMid = trackNode(Flux.computed(function()
+		pMidRuns += 1
+		return px() * 10
+	end))
+	local pObsSeen = 0
+	local pObs = trackNode(Flux.computed(function()
+		return if pCond() then pMid() else -1
+	end))
+	local pEff = trackNode(Flux.effect(function()
+		pObsSeen = pObs()
+	end))
+	flush()
+	pCond:set(false)
+	flush() -- drop -> pMid[CHILDREN] = nil
+	pCond:set(true)
+	flush() -- pMidRuns == 1
+	expect(pMidRuns == 1 and pObsSeen == 10, "Case D baseline")
+
+	-- Batch 1: dirties pObs + px while pCond stays true -> pMid defers, pObs pulls pMid resetting CHILDREN = false
+	local trigPull = trackNode(Flux.signal(0))
+	local pObs2 = trackNode(Flux.computed(function()
+		local _ = trigPull()
+		return if pCond() then pMid() else -1
+	end))
+	e1:Destroy()
+	pEff:Destroy()
+	local pEff2 = trackNode(Flux.effect(function()
+		pObsSeen = pObs2()
+	end))
+	flush()
+	trigPull:set(1)
+	px:set(2)
+	flush()
+	expect(pMidRuns == 2 and pObsSeen == 20, "Case D Batch 1 pulled deferred pMid")
+	-- Batch 2: pCond false + px changed -> because Batch 1's pull reset CHILDREN = false, pMid now runs eagerly!
+	pCond:set(false)
+	px:set(3)
+	flush()
+	expect(pMidRuns == 3 and pObsSeen == -1, "Case D Batch 2 ran pMid eagerly after pull cleared nil predictor")
+
+	pEff2:Destroy()
+	eClean:Destroy()
+end)
+
+test("stabilize self-dispose · cleanup of curNew, curNode, VALUE and reap", function()
+	local hookLog = {}
+	local reactiveInHook = false
+	local s1 = Flux.signal(1)
+	local s2 = Flux.signal(10)
+	local sibSig = Flux.signal(1)
+	local c: any = nil
+	local cEff: any = nil
+	local sibVal = 0
+	local sibEff: any = nil
+	sert.defer(function()
+		if sibEff then
+			sibEff:Destroy()
+		end
+		if cEff then
+			cEff:Destroy()
+		end
+		if c then
+			c:Destroy()
+		end
+		sibSig:Destroy()
+		s1:Destroy()
+		s2:Destroy()
+	end)
+
+	s1:onUnobserved(function()
+		reactiveInHook = Flux.isReactive()
+		table.insert(hookLog, "off")
+	end)
+	c = Flux.computed(function()
+		local v = s1()
+		if v == 2 then
+			local _ = s2() -- diverges curNew ~= nil
+			c:Destroy()
+			return "never"
+		end
+		return "secret"
+	end)
+	local sib = Flux.computed(function()
+		return sibSig() * 7
+	end)
+	cEff = Flux.effect(function()
+		pcall(c)
+	end)
+	sibEff = Flux.effect(function()
+		sibVal = sib()
+	end)
+	flush()
+	expect(c:peek() == "secret" and sibVal == 7 and Graph.isObserved(s1), "self-dispose baseline")
+
+	s1:set(2)
+	sibSig:set(2)
+	flush()
+	expect(c:peek() == nil, "self-disposed computed cleared VALUE to nil")
+	expect(not Graph.isObserved(s1) and #hookLog == 1, "self-disposed computed reaped source subscriptions")
+	expect(not reactiveInHook, "unobserved hook ran with curNode cleared")
+	expect(sibVal == 14, "sibling computed ran cleanly after c self-disposed")
+
+	-- Confirm curNew did not leak into subsequent computed evaluation
+	sibSig:set(3)
+	flush()
+	expect(sibVal == 21 and Graph.isObserved(sibSig), "curNew was cleared after self-dispose")
+	sib:Destroy()
+end)
+
+test("error healing · finishErrored, unfail, healed, stabilizeSameSlow and runComputed", function()
+	local nodes: { any } = {}
+	local function trackNode<T>(x: T): T
+		table.insert(nodes, x)
+		return x
+	end
+	sert.defer(function()
+		for i = #nodes, 1, -1 do
+			(nodes[i] :: any):Destroy()
+		end
+	end)
+
+	-- 1. Live computed: value 10 -> throws on 0 -> throws again on -1 -> heals to SAME value 10 on 1
+	local s = trackNode(Flux.signal(1))
+	local c = trackNode(Flux.computed(function()
+		local v = s()
+		if v <= 0 then
+			error("boom-" .. v, 0)
+		end
+		return 10
+	end))
+	local dRuns, dVal, dOk = 0, 0, true
+	local d = trackNode(Flux.computed(function()
+		dRuns += 1
+		return c() + 1
+	end))
+	local e = trackNode(Flux.effect(function()
+		dOk, dVal = pcall(d)
+	end))
+	flush()
+	expect(dOk and dVal == 11 and dRuns == 1, "live heal baseline")
+
+	s:set(0)
+	env.warnings(flush)
+	expect(not dOk, "first error propagated")
+
+	s:set(-1) -- throws a second time while already in failed[]
+	env.warnings(flush)
+	expect(not dOk, "second error updated failed[node] epoch without double-counting nFailed")
+
+	s:set(1) -- returns 10 (identical to pre-error cached VALUE!) -> unfail() + healed()
+	flush()
+	expect(dOk and dVal == 11 and dRuns == 4, "live computed healed downstream back to 11 with same value")
+
+	-- 2. Dead computed fails twice then heals to same value 10
+	local ds = trackNode(Flux.signal(1))
+	local dc = trackNode(Flux.computed(function()
+		if ds() <= 0 then
+			error("dead-boom", 0)
+		end
+		return 10
+	end))
+	local ddRuns = 0
+	local dd = trackNode(Flux.computed(function()
+		ddRuns += 1
+		return dc() + 5
+	end))
+	expect(dd() == 15 and ddRuns == 1, "dead heal baseline")
+	ds:set(0)
+	expectError(function()
+		dd()
+	end, "dead-boom")
+	ds:set(-1)
+	expectError(function()
+		dd()
+	end, "dead-boom")
+	ds:set(1)
+	expect(dd() == 15 and ddRuns == 4, "dead computed healed dead downstream back to 15")
+
+	-- 3. Recover to DIFFERENT value leaves failed entry stale; next same-value run must NOT spuriously heal
+	-- Keep another errored computed live so nFailed > 0 during the check!
+	local otherS = trackNode(Flux.signal(0))
+	local otherErr = trackNode(Flux.computed(function()
+		if otherS() == 0 then
+			error("other-err", 0)
+		end
+		return 99
+	end))
+	local otherOk, otherVal = true, 0
+	local otherEff = trackNode(Flux.effect(function()
+		otherOk, otherVal = pcall(otherErr)
+	end))
+	env.warnings(flush)
+	expect(not otherOk, "otherErr active so nFailed > 0")
+
+	local s2 = trackNode(Flux.signal(1))
+	local c2 = trackNode(Flux.computed(function()
+		local v = s2()
+		if v == 0 then
+			error("c2-boom", 0)
+		end
+		return if v == 1 then 10 else 20
+	end))
+	local c2DownRuns, c2Seen, c2Ok = 0, 0, true
+	local c2Down = trackNode(Flux.computed(function()
+		c2DownRuns += 1
+		return c2() + 100
+	end))
+	local c2Eff = trackNode(Flux.effect(function()
+		c2Ok, c2Seen = pcall(c2Down)
+	end))
+	flush()
+	expect(c2Ok and c2Seen == 110 and c2DownRuns == 1, "c2 baseline")
+	s2:set(0)
+	env.warnings(flush)
+	expect(not c2Ok, "c2 errored")
+	s2:set(2) -- recovers to DIFFERENT value 20
+	flush()
+	expect(c2Ok and c2Seen == 120 and c2DownRuns == 3, "c2 recovered to different value")
+	s2:set(3) -- recomputes to 20 again while nFailed > 0 -> unfail returns false (at ~= CHANGED)
+	flush()
+	expect(c2DownRuns == 3 and c2Seen == 120, "stale failed[c2] did not spuriously re-trigger c2Down")
+
+	-- otherErr heals afterwards -> verifies nFailed wasn't corrupted when c2 unfailed
+	otherS:set(1)
+	flush()
+	expect(otherOk and otherVal == 99, "otherErr healed cleanly with slowCommit preserved")
+
+	-- 4. FORCE_COMMIT computed (equals = allowSame) fails then heals to same value 42 via stabilizeSameSlow -> unfail
+	local fs = trackNode(Flux.signal(1))
+	local allowSame = false
+	local fc = trackNode(Flux.computed(function()
+		if fs() == 0 then
+			error("fc-boom", 0)
+		end
+		return 42
+	end, function()
+		return allowSame
+	end))
+	local fcDownRuns, fcOk, fcVal = 0, true, 0
+	local fcDown = trackNode(Flux.computed(function()
+		fcDownRuns += 1
+		return fc() + 1
+	end))
+	local fcEff = trackNode(Flux.effect(function()
+		fcOk, fcVal = pcall(fcDown)
+	end))
+	flush()
+	expect(fcOk and fcVal == 43 and fcDownRuns == 1, "fc baseline")
+	fs:set(0)
+	env.warnings(flush)
+	expect(not fcOk, "fc errored")
+	fs:set(1) -- recovers to 42 with allowSame = false -> FORCE_COMMIT path calls unfail() & clears failed[fc]
+	flush()
+	expect(fcOk and fcVal == 43 and fcDownRuns == 3, "fc healed via FORCE_COMMIT")
+	local prevDown = fcDownRuns
+	allowSame = true
+	fs:set(2) -- equals=true returns 42 -> must NOT spuriously heal again
+	flush()
+	expect(fcDownRuns == prevDown, "FORCE_COMMIT unfail removed failed[fc] cleanly")
+
+	-- 5. NaN SAME_VALUE computed fails then recovers to NaN -> stabilizes via stabilizeSameSlow & heals
+	local ns = trackNode(Flux.signal(1))
+	local nc = trackNode(Flux.computed(function()
+		if ns() == 0 then
+			error("nan-boom", 0)
+		end
+		return 0 / 0
+	end, function(a, b)
+		return (a ~= a and b ~= b) or a == b
+	end))
+	local ncOk, ncIsNaN, ncRuns = true, false, 0
+	local ncEff = trackNode(Flux.effect(function()
+		ncRuns += 1
+		local ok, v = pcall(nc)
+		ncOk = ok
+		ncIsNaN = ok and v ~= v
+	end))
+	flush()
+	expect(ncOk and ncIsNaN and ncRuns == 1, "NaN heal baseline")
+	ns:set(0)
+	env.warnings(flush)
+	expect(not ncOk, "NaN computed errored")
+	ns:set(1)
+	flush()
+	expect(ncOk and ncIsNaN and ncRuns == 3, "NaN computed healed through stabilizeSameSlow")
+
+	e:Destroy()
+	otherEff:Destroy()
+	c2Eff:Destroy()
+	fcEff:Destroy()
+	ncEff:Destroy()
+end)
+
+test("notifyObservers · single and multi-observer with and without runningEffect", function()
+	local nodes: { any } = {}
+	local function trackNode<T>(x: T): T
+		table.insert(nodes, x)
+		return x
+	end
+	sert.defer(function()
+		for i = #nodes, 1, -1 do
+			(nodes[i] :: any):Destroy()
+		end
+	end)
+
+	-- 1. Single observer effect: untrack-peek dirty computed mid-effect BEFORE reading it -> deferSelf skips
+	local s = trackNode(Flux.signal(1))
+	local c = trackNode(Flux.computed(function()
+		return s() * 2
+	end))
+	local eRuns, eSeen = 0, 0
+	local e = trackNode(Flux.effect(function()
+		eRuns += 1
+		if eRuns == 1 then
+			local _ = c() -- subscribe
+			untrack(function()
+				s:set(2)
+				local _ = c:peek() -- notifyObservers(e, c) with x == e, readThisRun == false
+			end)
+			eSeen = 100
+			return
+		end
+		eSeen = c()
+	end))
+	flush()
+	expect(
+		eRuns == 1 and eSeen == 100 and c:peek() == 4,
+		"single observer untrack-peek before read did not self-requeue"
+	)
+
+	-- 2. Two observers o1, o2 with runningEffect == nil: pulling c inside o1 notifies o2 WITHOUT marking o1
+	local s2 = trackNode(Flux.signal(1))
+	local c2 = trackNode(Flux.computed(function()
+		return s2() * 10
+	end))
+	local trig = trackNode(Flux.signal(0))
+	local o1Runs, o2Runs, o2Seen = 0, 0, 0
+	local o1 = trackNode(Flux.computed(function()
+		o1Runs += 1
+		local t = trig()
+		if t == 1 then
+			s2:set(2)
+			return c2:peek()
+		elseif t == 2 then
+			return Flux.raw(function()
+				s2:set(3)
+				return c2:peek()
+			end)
+		end
+		return c2()
+	end))
+	local o2 = trackNode(Flux.computed(function()
+		o2Runs += 1
+		return c2() + 1
+	end))
+	local eo1 = trackNode(Flux.effect(function()
+		local _ = o1()
+	end))
+	local eo2 = trackNode(Flux.effect(function()
+		o2Seen = o2()
+	end))
+	flush()
+	expect(o1Runs == 1 and o2Runs == 1 and o2Seen == 11, "multi-observer no-effect baseline")
+
+	trig:set(1) -- inside o1 during stabilize(): curNode == o1, evalNode == o1, runningEffect == nil
+	flush()
+	expect(o1Runs == 2 and o2Runs == 2 and o2Seen == 21, "notifyObservers marked o2 but did not re-dirty curNode o1")
+
+	trig:set(2) -- inside Flux.raw in o1: curNode == nil, evalNode == o1, runningEffect == nil
+	flush()
+	expect(o1Runs == 3 and o2Runs == 3 and o2Seen == 31, "notifyObservers marked o2 but did not re-dirty evalNode o1")
+
+	-- 3. Two observers (eff, obsB) with runningEffect ~= nil: untrack-peek inside eff notifies obsB without self-requeue
+	local ms = trackNode(Flux.signal(1))
+	local mc = trackNode(Flux.computed(function()
+		return ms() * 5
+	end))
+	local obsBSeen = 0
+	local obsB = trackNode(Flux.effect(function()
+		obsBSeen = mc()
+	end))
+	local effRuns = 0
+	local eff = trackNode(Flux.effect(function()
+		effRuns += 1
+		if effRuns == 1 then
+			local _ = mc()
+			untrack(function()
+				ms:set(2)
+				local _ = mc:peek()
+			end)
+			return
+		end
+		local _ = mc()
+	end))
+	flush()
+	expect(effRuns == 1 and obsBSeen == 10, "multi-observer with runningEffect marked obsB without self-requeue")
+
+	e:Destroy()
+	eo1:Destroy()
+	eo2:Destroy()
+	obsB:Destroy()
+	eff:Destroy()
+end)
+
+test("ownSlow, reconcileEffect, rawFn & wrapComputedEquals evalNode", function()
+	local nodes: { any } = {}
+	local function trackNode<T>(x: T): T
+		table.insert(nodes, x)
+		return x
+	end
+	sert.defer(function()
+		for i = #nodes, 1, -1 do
+			(nodes[i] :: any):Destroy()
+		end
+	end)
+
+	local ctx = Flux.context("default")
+
+	-- 1. ownSlow effect wrapper creates child under ctxA outside ctxA & preserves caller ctxB across e:peek() and c:peek()
+	local effSig = trackNode(Flux.signal(1))
+	local effChildCtx = ""
+	local ctxEff: any = nil
+	local ctxComp: any = nil
+	ctx:provide("ctxA", function()
+		-- Signal with 2 observers inside ctx (tests L2742 h and h ~= SCOPE)
+		local s = trackNode(Flux.signal(42))
+		local c1 = trackNode(Flux.computed(function()
+			return s()
+		end))
+		expect(c1() == 42, "signal created inside ctx reads properly")
+
+		ctxEff = trackNode(Flux.effect(function()
+			local _ = effSig()
+			local child = trackNode(Flux.computed(function()
+				effChildCtx = ctx:get()
+				return 1
+			end))
+			child()
+		end))
+		ctxComp = trackNode(Flux.computed(function()
+			local _ = effSig()
+			return ctx:get()
+		end))
+	end)
+	flush()
+	expect(effChildCtx == "ctxA", "initial effect body saw ctxA")
+	effSig:set(2)
+	flush()
+	expect(effChildCtx == "ctxA", "re-run outside provide restored ctxA and ownExtra so child saw ctxA")
+
+	ctx:provide("ctxB", function()
+		effSig:set(3)
+		ctxEff:peek()
+		expect(ctx:get() == "ctxB", "after ctxEff:peek() outer ctxB was restored")
+		local innerCheck = trackNode(Flux.computed(function()
+			return ctx:get()
+		end))
+		expect(innerCheck() == "ctxB", "ownExtra after ctxEff:peek() remains true inside ctxB")
+
+		effSig:set(4)
+		expect(ctxComp:peek() == "ctxA" and ctx:get() == "ctxB", "ctxComp:peek() ran in ctxA and restored ctxB")
+	end)
+	ctxEff:Destroy()
+
+	-- 2. reconcileEffect paths: bare untrack drop, diverge-then-self-destroy, diverge-drop with sibling
+	local rHookCalls = 0
+	local rHookReactive = false
+	local rs1 = trackNode(Flux.signal(1))
+	rs1:onUnobserved(function()
+		rHookCalls += 1
+		rHookReactive = Flux.isReactive()
+	end)
+	local rs2 = trackNode(Flux.signal(2))
+	local rGate = trackNode(Flux.signal(0))
+	local re: any = nil
+	re = trackNode(Flux.effect(function()
+		local g = rGate()
+		if g == 0 then
+			local _ = rs1()
+		elseif g == 1 then
+			untrack() -- leaves curNode == nil while idx ~= last!
+		elseif g == 2 then
+			local _ = rs2() -- diverges curNew ~= nil then self-disposes
+			re:Destroy()
+		end
+	end))
+	local sibSig = trackNode(Flux.signal(1))
+	local sibSaw = 0
+	local sibEff = trackNode(Flux.effect(function()
+		sibSaw = sibSig()
+	end))
+	flush()
+	expect(Graph.isObserved(rs1), "rs1 initially observed")
+
+	rGate:set(1)
+	flush()
+	expect(
+		not Graph.isObserved(rs1) and rHookCalls == 1 and not rHookReactive,
+		"bare-untrack reconcile cleared curNode"
+	)
+
+	rGate:set(0)
+	flush()
+	expect(Graph.isObserved(rs1), "rs1 re-subscribed")
+
+	rGate:set(2) -- re diverges onto rs2 then calls re:Destroy()
+	sibSig:set(10)
+	flush()
+	expect(not Graph.isObserved(rs1) and not Graph.isObserved(rs2) and sibSaw == 10, "diverge + self-destroy reaped")
+	sibSig:set(11)
+	flush()
+	expect(sibSaw == 11, "curNew/evalNode clean after reconcileEffect self-dispose")
+
+	-- Diverge drop onto rs2 with sibling in same flush
+	local rdFlag = trackNode(Flux.signal(true))
+	local rda = trackNode(Flux.signal(1))
+	local rdb = trackNode(Flux.signal(2))
+	local rdaOff = false
+	rda:onUnobserved(function()
+		rdaOff = true
+	end)
+	local rdSaw = 0
+	local rdEff = trackNode(Flux.effect(function()
+		rdSaw = if rdFlag() then rda() else rdb()
+	end))
+	flush()
+	rdFlag:set(false)
+	sibSig:set(12)
+	flush()
+	expect(rdaOff and not Graph.isObserved(rda) and Graph.isObserved(rdb) and rdSaw == 2 and sibSaw == 12)
+
+	-- 3. rawFn active ~= runningEffect vs active == computed
+	local rawSig = trackNode(Flux.signal(1))
+	local rawGate = trackNode(Flux.signal(false))
+	local rawMid = trackNode(Flux.computed(function()
+		return rawSig() * 10
+	end))
+	local rawEffRuns, rawEffSeen = 0, 0
+	local rawEff = trackNode(Flux.effect(function()
+		rawEffRuns += 1
+		local g = rawGate()
+		rawEffSeen = rawMid()
+		if g and rawEffSeen == 10 then
+			Flux.raw(function()
+				rawSig:set(2)
+				rawMid:peek()
+			end)
+		end
+	end))
+	flush()
+	expect(rawEffRuns == 1 and rawEffSeen == 10, "raw() in effect baseline")
+	rawGate:set(true)
+	flush()
+	expect(rawEffRuns == 3 and rawEffSeen == 20, "raw() inside effect allows mid write to requeue runningEffect")
+
+	local rcSig = trackNode(Flux.signal(1))
+	local rcGate = trackNode(Flux.signal(false))
+	local rcMid = trackNode(Flux.computed(function()
+		return rcSig() * 10
+	end))
+	local rcCompRuns = 0
+	local rcComp = trackNode(Flux.computed(function()
+		rcCompRuns += 1
+		local g = rcGate()
+		local v = rcMid()
+		if g and v == 10 then
+			Flux.raw(function()
+				rcSig:set(2)
+				rcMid:peek()
+			end)
+		end
+		return v
+	end))
+	local rcKeep = trackNode(Flux.effect(function()
+		local _ = rcComp()
+	end))
+	flush()
+	expect(rcCompRuns == 1 and rcComp:peek() == 10, "raw() in computed baseline")
+	rcGate:set(true)
+	flush()
+	expect(rcCompRuns == 2 and rcComp:peek() == 10 and rcMid:peek() == 20, "raw() inside computed blocks self-dirtying")
+
+	-- 4. wrapComputedEquals evalNode during stabilize() equals(prev, v)
+	local eqSig = trackNode(Flux.signal(1))
+	local eqMid = trackNode(Flux.computed(function()
+		return eqSig() * 10
+	end))
+	local eqRuns = 0
+	local eqComp = trackNode(Flux.computed(function()
+		eqRuns += 1
+		return eqMid()
+	end, function(prev, nxt)
+		if nxt == 20 then
+			eqSig:set(3)
+			local _ = eqMid:peek()
+		end
+		return prev == nxt
+	end))
+	local eqKeep = trackNode(Flux.effect(function()
+		local _ = eqComp()
+	end))
+	flush()
+	eqSig:set(2)
+	flush()
+	expect(eqRuns == 2 and eqComp:peek() == 20 and eqMid:peek() == 30, "equals() in stabilize sets evalNode = node")
+
+	eqKeep:Destroy()
+	rcKeep:Destroy()
+	rawEff:Destroy()
+	rdEff:Destroy()
+	sibEff:Destroy()
+end)
+
+test("finishGoDead · live higher-height node going dead during active lower-height batch", function()
+	local nodes: { any } = {}
+	local function trackNode<T>(x: T): T
+		table.insert(nodes, x)
+		return x
+	end
+	sert.defer(function()
+		for i = #nodes, 1, -1 do
+			(nodes[i] :: any):Destroy()
+		end
+	end)
+
+	local s = trackNode(Flux.signal(1))
+	local u = trackNode(Flux.signal(1))
+	local lo = trackNode(Flux.computed(function()
+		return s() * 10
+	end))
+	local hiRuns = 0
+	local hi = trackNode(Flux.computed(function()
+		hiRuns += 1
+		return lo() + 1
+	end))
+	local other = trackNode(Flux.computed(function()
+		return math.abs(u()) * 2
+	end))
+	local hiEff = trackNode(Flux.effect(function()
+		local _ = hi()
+	end))
+	local otherEff = trackNode(Flux.effect(function()
+		local _ = other()
+	end))
+	flush()
+	expect(hiRuns == 1 and hi:peek() == 11, "finishGoDead baseline")
+
+	-- Case A: hi goes dead AFTER u:set(-1) (heapMin = 1 < hi HEIGHT 2) while hi was pulled before flush (STAMP == epoch)
+	u:set(-1) -- other (height 1) is dirty -> heapMin = 1
+	s:set(2)
+	expect(lo:peek() == 20 and hi:peek() == 21 and hiRuns == 2, "pulled hi inside active height-1 batch")
+	hiEff:Destroy()
+	flush()
+	s:set(3)
+	expect(hi() == 31 and hiRuns == 3, "Case A: dead hi recomputed cleanly after upstream write")
+
+	-- Case B1: st <= LIVE_MAX_IDLE (hi is LIVE CLEAN, height 2) goes dead during active height-1 batch; verify `epoch += 1` (L980)
+	local hiEff2 = trackNode(Flux.effect(function()
+		local _ = hi()
+	end))
+	flush() -- hi[HEIGHT] == 2, hi[STAMP] == 2 + LIVE_BASE
+	local deadSrc = trackNode(Flux.signal(1))
+	local deadXRuns = 0
+	local deadX = trackNode(Flux.computed(function()
+		deadXRuns += 1
+		return deadSrc() * 100
+	end))
+	u:set(1) -- other dirty at height 1 (`math.abs(1)*2 == 2` so batch flush won't bump epoch)
+	expect(deadX() == 100 and deadXRuns == 1, "deadX stamped at current epoch inside batch")
+	hiEff2:Destroy() -- finishGoDead(hi) sees 2 + LIVE_BASE > 1 + LIVE_BASE -> bumps epoch += 1, hi[STAMP] = epoch - 1
+	flush()
+	deadSrc:set(2)
+	expect(deadX() == 200 and deadXRuns == 2, "Case B1: finishGoDead epoch increment prevented stale epoch match")
+
+	-- Case B2: verify `node[STAMP] = epoch - 1` (L981) vs `epoch + 1` or deleted stamp assignment
+	local hiEff3 = trackNode(Flux.effect(function()
+		local _ = hi()
+	end))
+	flush()
+	expect(hiRuns == 3, "hi re-observed without recomputing")
+	u:set(-1) -- heapMin = 1, other still evaluates to same value 2
+	hiEff3:Destroy() -- finishGoDead(hi) bumps epoch and sets hi[STAMP] = epoch - 1
+	flush()
+	s:set(4) -- bumps epoch by 1: if hi[STAMP] had been `epoch + 1`, hi[STAMP] == epoch would skip pull!
+	expect(
+		hi() == 41 and hiRuns == 4,
+		"Case B2: finishGoDead stamped hi at epoch - 1 so next upstream write invalidates"
+	)
+
+	-- Case C: DEFERRED computed dropped cleanly during stabilize() evaluates fresh afterwards
+	local dCond = trackNode(Flux.signal(true))
+	local dx = trackNode(Flux.signal(1))
+	local dMid = trackNode(Flux.computed(function()
+		return dx() * 10
+	end))
+	local dObs = trackNode(Flux.computed(function()
+		return if dCond() then dMid() else 0
+	end))
+	local dKeep = trackNode(Flux.effect(function()
+		local _ = dObs()
+	end))
+	flush()
+	dCond:set(false)
+	flush() -- drop dMid once -> dMid[CHILDREN] = nil
+	dCond:set(true)
+	flush()
+	dCond:set(false)
+	dx:set(2)
+	flush()
+	expect(dMid() == 20, "Case C: dead computed after DEFERRED drop evaluates updated upstream")
+
+	hiEff:Destroy()
+	hiEff2:Destroy()
+	hiEff3:Destroy()
+	dKeep:Destroy()
+	otherEff:Destroy()
+end)
+
+test("flushRecoverFast, recover, runComputed & pull edge cases", function()
+	local nodes: { any } = {}
+	local function trackNode<T>(x: T): T
+		table.insert(nodes, x)
+		return x
+	end
+	sert.defer(function()
+		for i = #nodes, 1, -1 do
+			(nodes[i] :: any):Destroy()
+		end
+	end)
+
+	-- 1. flushRecoverFast clears anyReruns / passes when an effect runs > GUARD_PASSES (32) passes and then throws
+	local frCount = 0
+	local frMode = 0
+	local frSig = trackNode(Flux.signal(0))
+	local frEff = trackNode(Flux.effect(function()
+		local v = frSig()
+		if frMode == 1 then
+			if v < 35 then
+				frSig:set(v + 1)
+			elseif v == 35 then
+				error("fr-boom", 0)
+			end
+		elseif frMode == 2 then
+			frCount += 1
+			if v < 75 then
+				frSig:set(v + 1)
+			end
+		end
+	end))
+	flush()
+	frMode = 1
+	frSig:set(1)
+	env.warnings(flush) -- enters flushRecoverFast after passes > 32 set anyReruns = true and cycles[frEff] = 3
+
+	-- If flushRecoverFast did not reset passes = 0 / clearRerunState(), running 75 more passes hits GUARD_PASSES / RERUN_LIMIT sooner or carries stale cycles[frEff]
+	frMode = 2
+	frSig:set(0)
+	local warnings = env.warnings(flush)
+	expect(#warnings == 0 and frCount == 76, "flushRecoverFast reset anyReruns/cycles and passes")
+	frEff:Destroy()
+
+	-- 2. recover: bare untrack() throw, diverge-throw with sibling, live computed self-disposing sole obs then throw, ctx throw
+	local us = trackNode(Flux.signal(0))
+	local uEff = trackNode(Flux.effect(function()
+		if us() == 1 then
+			untrack()
+			error("untrack-throw", 0)
+		end
+	end))
+	flush()
+	us:set(1)
+	local uWarns = env.warnings(flush)
+	expect(#uWarns == 1, "recover captured error thrown after bare untrack()")
+	uEff:Destroy()
+
+	-- Diverge then throw alongside sibling effect
+	local ds1 = trackNode(Flux.signal(1))
+	local ds2 = trackNode(Flux.signal(2))
+	local dFlip = trackNode(Flux.signal(false))
+	local sibS = trackNode(Flux.signal(1))
+	local sibSeen = 0
+	local dErrEff = trackNode(Flux.effect(function()
+		if dFlip() then
+			local _ = ds2()
+			error("div-throw", 0)
+		end
+		local _ = ds1()
+	end))
+	local dSibEff = trackNode(Flux.effect(function()
+		sibSeen = sibS()
+	end))
+	flush()
+	dFlip:set(true)
+	sibS:set(9)
+	local divWarns = env.warnings(flush)
+	expect(
+		#divWarns == 1 and sibSeen == 9 and Graph.isObserved(ds2) and not Graph.isObserved(ds1),
+		"recover reconciled deps up to throw, cleared curNew & ran sibling"
+	)
+	dErrEff:Destroy()
+	sibS:set(10)
+	flush()
+	expect(sibSeen == 10 and Graph.isObserved(sibS), "curNew/state clean after recover")
+	dSibEff:Destroy()
+
+	-- Live computed destroys its own sole observer then throws during stabilize() -> warns as unhandled
+	local soTrig = trackNode(Flux.signal(false))
+	local soEff: any = nil
+	local soComp = trackNode(Flux.computed(function()
+		if soTrig() then
+			if soEff then
+				soEff:Destroy()
+			end
+			error("orphan-boom", 0)
+		end
+		return 1
+	end))
+	soEff = trackNode(Flux.effect(function()
+		pcall(soComp)
+	end))
+	flush()
+	soTrig:set(true)
+	local orphanWarns = env.warnings(flush)
+	expect(#orphanWarns >= 1, "recover warned when throwing computed had lost its observers")
+
+	-- Recover inside nested flush with Context preserves pCtx/pExtra for sibling effect
+	local ctx = Flux.context("def")
+	local innerFail = trackNode(Flux.signal(false))
+	local innerEff = trackNode(Flux.effect(function()
+		if innerFail() then
+			error("inner-ctx-boom", 0)
+		end
+	end))
+	local sibCtxSaw = ""
+	local sibTrig = trackNode(Flux.signal(0))
+	local sibCtxEff = trackNode(Flux.effect(function()
+		if sibTrig() == 1 then
+			sibCtxSaw = ctx:get()
+		end
+	end))
+	flush()
+	ctx:provide("outer", function()
+		innerFail:set(true)
+		sibTrig:set(1)
+		local cw = env.warnings(flush)
+		expect(#cw == 1, "nested flush error suppressed cleanly")
+		expect(ctx:get() == "outer", "nested flush preserved outer context")
+	end)
+	expect(sibCtxSaw == "outer", "sibling effect in flush after recover still saw outer context")
+	innerEff:Destroy()
+	sibCtxEff:Destroy()
+
+	-- 3. runComputed dead pull inside withOwner & bare untrack, plus ERRORED live computed inside bare untrack
+	local ext = trackNode(Flux.scope(function() end))
+	local rcDeadTrig = trackNode(Flux.signal(1))
+	local rcChildClean, rcPostClean = 0, 0
+	local rcDead = trackNode(Flux.computed(function()
+		local v = rcDeadTrig()
+		local rcChild = Flux.computed(function()
+			Flux.cleanup(function()
+				rcChildClean += 1
+			end)
+			return v
+		end)
+		local _ = rcChild()
+		return v * 2
+	end))
+	Flux.withOwner(ext, function()
+		expect(rcDead() == 2, "pulled dead computed inside withOwner")
+		Flux.cleanup(function()
+			rcPostClean += 1
+		end)
+	end)
+	expect(rcChildClean == 0 and rcPostClean == 0, "children alive initially")
+	ext:Destroy()
+	expect(rcPostClean == 1 and rcChildClean == 0, "withOwner cleanup belonged to ext, rcDead's child owned by rcDead")
+	rcDead:Destroy()
+	expect(rcChildClean == 1, "rcDead:Destroy() disposed rcDead's child")
+
+	-- Pull dead computed calling bare untrack() from top-level, then create child at top level -> susp cleared
+	local buTrig = trackNode(Flux.signal(1))
+	local buChildClean = 0
+	local buComp = trackNode(Flux.computed(function()
+		local v = buTrig()
+		untrack()
+		Flux.cleanup(function()
+			buChildClean += 1
+		end)
+		return v
+	end))
+	expect(buComp() == 1, "bare untrack inside top-level dead computed")
+	local afterChildClean = 0
+	expectError(function()
+		Flux.cleanup(function()
+			afterChildClean += 1
+		end)
+	end, "outside a reactive owner")
+	expect(buChildClean == 0 and afterChildClean == 0, "susp was cleared after top-level runComputed")
+	buComp:Destroy()
+	expect(buChildClean == 1, "buComp:Destroy() ran buComp's cleanup")
+
+	-- Live ERRORED computed read inside bare untrack() & raw() of effect must rethrow cached error without re-running
+	local leTrig = trackNode(Flux.signal(false))
+	local leRuns = 0
+	local leErrComp = trackNode(Flux.computed(function()
+		leRuns += 1
+		if leTrig() then
+			error("cached-err", 0)
+		end
+		return 7
+	end))
+	local leKeep = trackNode(Flux.effect(function()
+		pcall(leErrComp)
+	end))
+	flush() -- leErrComp is now live & observed by leKeep
+	leTrig:set(true)
+	env.warnings(flush) -- stabilize() marks live leErrComp ERRORED
+	local leRunsAfterErr = leRuns
+	local caughtMsg, caughtRawMsg = "", ""
+	local leReader = trackNode(Flux.effect(function()
+		Flux.raw(function()
+			local ok, err = pcall(leErrComp)
+			if not ok then
+				caughtRawMsg = tostring(err)
+			end
+		end)
+		untrack()
+		local ok, err = pcall(leErrComp)
+		if not ok then
+			caughtMsg = tostring(err)
+		end
+	end))
+	flush()
+	expect(
+		string.find(caughtRawMsg, "cached-err", 1, true) ~= nil
+			and string.find(caughtMsg, "cached-err", 1, true) ~= nil
+			and leRuns == leRunsAfterErr,
+		"reading live ERRORED computed inside flush raw/untrack rethrew cached error without re-running"
+	)
+	leKeep:Destroy()
+	leReader:Destroy()
+end)
+
+test("deep iterative traversals · pullDeadIter, settleIter, raiseVisit/raiseIter & goLiveIter", function()
+	local nodes: { any } = {}
+	local function trackNode<T>(x: T): T
+		table.insert(nodes, x)
+		return x
+	end
+	sert.defer(function()
+		for i = #nodes, 1, -1 do
+			(nodes[i] :: any):Destroy()
+		end
+	end)
+
+	-- 1. pullDeadIter (depth 138): math.abs head + extra trailing source s2 on top node
+	local s0 = trackNode(Flux.signal(1))
+	local s2 = trackNode(Flux.signal(10))
+	local headRuns = 0
+	local cur: any = trackNode(Flux.computed(function()
+		headRuns += 1
+		return math.abs(s0())
+	end))
+	for _ = 2, 137 do
+		local prev = cur
+		cur = trackNode(Flux.computed(function()
+			return prev() + 1
+		end))
+	end
+	local topDeadRuns = 0
+	local topPrev = cur
+	local topDead = trackNode(Flux.computed(function()
+		topDeadRuns += 1
+		return topPrev() + s2()
+	end))
+
+	-- Reader checks r1(), topDead(), r2() to verify pNode restoration (L1876)
+	local r1 = trackNode(Flux.signal(1))
+	local r2 = trackNode(Flux.signal(100))
+	local rCompRuns = 0
+	local rComp = trackNode(Flux.computed(function()
+		rCompRuns += 1
+		return r1() + topDead() + r2()
+	end))
+	local rEffSeen = 0
+	local rEff = trackNode(Flux.effect(function()
+		rEffSeen = rComp()
+	end))
+	flush()
+	expect(rEffSeen == (1 + 136 + 10) + 101 and topDeadRuns == 1 and rCompRuns == 1, "pullDeadIter baseline")
+
+	-- Unchanged head (s0: 1 -> -1) + changed source 2 (s2: 10 -> 20)
+	s0:set(-1)
+	s2:set(20)
+	expect(topDead() == (1 + 136 + 20) and topDeadRuns == 2, "pullDeadIter skipped unchanged chain and checked s2")
+	expect(topDead() == (1 + 136 + 20) and topDeadRuns == 2, "pullDeadIter stamped topDead at epoch cleanly")
+
+	-- Changed head (s0: -1 -> 5) propagates through stWaiting
+	s0:set(5)
+	expect(topDead() == (5 + 136 + 20) and topDeadRuns == 3, "pullDeadIter updated via stWaiting")
+
+	-- Reader still tracks r2 after pullDeadIter (L1876 curNode = pNode)
+	r2:set(200)
+	flush()
+	expect(rCompRuns == 2 and rEffSeen == 1 + (5 + 136 + 20) + 200, "rComp still tracked r2 after pullDeadIter")
+
+	-- Deep dead chain reading a LIVE dirty computed mid-batch (L1849 s[OBSERVERS])
+	local lmSig = trackNode(Flux.signal(1))
+	local lmLive = trackNode(Flux.computed(function()
+		return lmSig() * 10
+	end))
+	local lmKeep = trackNode(Flux.effect(function()
+		local _ = lmLive()
+	end))
+	local lmChain: any = lmLive
+	for _ = 1, 136 do
+		local prev = lmChain
+		lmChain = trackNode(Flux.computed(function()
+			return prev() + 1
+		end))
+	end
+	expect(lmChain() == 10 + 136, "live-mid deep dead chain baseline")
+	lmSig:set(3)
+	expect(lmChain() == 30 + 136, "pullDeadIter refreshed dirty live dependency inside batch")
+	flush()
+	rEff:Destroy()
+	lmKeep:Destroy()
+
+	-- 2. settleIter (depth 138 live chain): pNode restore & error propagation (st == ERRORED)
+	local ls = trackNode(Flux.signal(1))
+	local throwAt5 = trackNode(Flux.signal(false))
+	local lcur: any = trackNode(Flux.computed(function()
+		local v = ls()
+		if throwAt5() and v == 5 then
+			error("deep-live-err", 0)
+		end
+		return v
+	end))
+	for _ = 2, 138 do
+		local prev = lcur
+		lcur = trackNode(Flux.computed(function()
+			return prev() + 1
+		end))
+	end
+	local sr1 = trackNode(Flux.signal(1))
+	local sr2 = trackNode(Flux.signal(10))
+	local lKeepOk, lKeepVal = true, 0
+	local lKeep = trackNode(Flux.effect(function()
+		lKeepOk, lKeepVal = pcall(lcur)
+	end))
+	local srCompRuns = 0
+	local srComp = trackNode(Flux.computed(function()
+		srCompRuns += 1
+		return sr1() + lcur() + sr2()
+	end))
+	local srSeen = 0
+	local srKeep = trackNode(Flux.effect(function()
+		local ok, v = pcall(srComp)
+		if ok then
+			srSeen = v
+		end
+	end))
+	flush()
+	expect(lKeepOk and lKeepVal == 138 and srSeen == 1 + 138 + 10, "settleIter baseline")
+
+	ls:set(2)
+	sr1:set(2)
+	expect(srComp() == 2 + 139 + 10, "settleIter computed deep live chain inside batch")
+	flush()
+	sr2:set(20)
+	flush()
+	expect(srSeen == 2 + 139 + 20, "srComp preserved trailing sr2 dep after settleIter")
+
+	-- settleIter hitting ERRORED intermediate node inside batch
+	throwAt5:set(true)
+	ls:set(5)
+	env.warnings(flush)
+	expect(not lKeepOk, "deep live chain errored")
+	sr1:set(3) -- dirty srComp; reading srComp pulls lcur which is ERRORED
+	local okErr = pcall(srComp)
+	expect(not okErr, "settleIter preserved ERRORED error cleanly")
+	flush()
+	throwAt5:set(false)
+	ls:set(1)
+	flush()
+	expect(lKeepOk and lKeepVal == 138, "deep live chain healed")
+	lKeep:Destroy()
+	srKeep:Destroy()
+
+	-- 3. raiseVisit & raiseIter: single & multi-observer cycle cleanup + valid subsequent height raise + mid-batch stamp reset
+	local function testRaiseCase(deep: boolean)
+		local label = if deep then "deep" else "shallow"
+		local cycGate = trackNode(Flux.signal(0))
+		local base = trackNode(Flux.signal(1))
+		-- Build bottom chain of height `chainLen` so when cycHead subscribes to tail, tail triggers raiseVisit / raiseIter
+		local tail: any = trackNode(Flux.computed(function()
+			return base()
+		end))
+		local chainLen = if deep then 135 else 2
+		for _ = 2, chainLen do
+			local prev = tail
+			tail = trackNode(Flux.computed(function()
+				return prev() + 1
+			end))
+		end
+
+		local cycA: any = nil
+		local cycB: any = nil
+		cycA = trackNode(Flux.computed(function()
+			local g = cycGate()
+			if g == 1 then
+				return cycB() + 1
+			elseif g == 2 then
+				return tail() + 100
+			end
+			return 1
+		end))
+		local upChain: any = cycA
+		local upLen = if deep then 132 else 0
+		for _ = 1, upLen do
+			local prev = upChain
+			upChain = trackNode(Flux.computed(function()
+				return prev() + 1
+			end))
+		end
+		-- Give upChain BOTH a multi-observer branch (cycB, extraObs)
+		cycB = trackNode(Flux.computed(function()
+			return upChain() + 1
+		end))
+		local extraObs = trackNode(Flux.computed(function()
+			return upChain() + 2
+		end))
+		local topA = trackNode(Flux.computed(function()
+			return cycB() + extraObs()
+		end))
+		local topOk, topErr: any = true, nil
+		local eTop = trackNode(Flux.effect(function()
+			topOk, topErr = pcall(topA)
+		end))
+		flush()
+		expect(topOk, `{label} cycle test baseline`)
+
+		-- Multi-observer cycle (cycB + extraObs on upChain) -> must detect cycle and clean raiseActive
+		cycGate:set(1)
+		env.warnings(flush)
+		expect(
+			not topOk and string.find(tostring(topErr), "circular dependency", 1, true) ~= nil,
+			`{label} multi-observer cycle caught`
+		)
+
+		-- Immediately perform valid height raise on the same nodes (g == 2 -> reads tall chain tail) -> must succeed!
+		cycGate:set(2)
+		local okWarns = env.warnings(flush)
+		local expectedUp = 1 + (chainLen - 1) + 100 + upLen
+		expect(
+			#okWarns == 0 and topOk and topA() == (expectedUp + 1) + (expectedUp + 2),
+			`{label} raise succeeded after cycle cleanup`
+		)
+
+		-- Mid-batch height raise of a clean node (L518 / L580 node[STAMP] = h + LIVE_BASE):
+		-- Create fresh clean chain `x` (initially height 1 -> gate reads tall after raise) during a batch
+		eTop:Destroy()
+		local rSig = trackNode(Flux.signal(1))
+		local tall: any = trackNode(Flux.computed(function()
+			return rSig() * 10
+		end))
+		for _ = 2, (if deep then 136 else 4) do
+			local prev = tall
+			tall = trackNode(Flux.computed(function()
+				return prev() + 1
+			end))
+		end
+		local xGate = trackNode(Flux.signal(false))
+		local xMid = trackNode(Flux.computed(function()
+			return if xGate() then tall() else rSig()
+		end))
+		local xTop = trackNode(Flux.computed(function()
+			return xMid() + 1000
+		end))
+		local xKeep = trackNode(Flux.effect(function()
+			local _ = xTop()
+		end))
+		local tKeep = trackNode(Flux.effect(function()
+			local _ = tall()
+		end))
+		flush()
+
+		-- Step A: trigger raise in a batch (xGate -> true raises xMid & xTop height to >136), then BEFORE flush dirty tall and read xTop()!
+		xGate:set(true)
+		flush()
+		rSig:set(2)
+		local val = xTop()
+		expect(val == 20 + ((if deep then 136 else 4) - 1) + 1000, `{label} xTop settled cleanly after height raise`)
+		flush()
+		xKeep:Destroy()
+		tKeep:Destroy()
+	end
+	testRaiseCase(false)
+	testRaiseCase(true)
+
+	-- 4. goLiveIter (depth 138): signal hook firing + multi-source at depth 135 + height raise + goDead cleanup
+	local glSig = trackNode(Flux.signal(7))
+	local glSig2 = trackNode(Flux.signal(3))
+	local glHookLog = {}
+	glSig:onObserved(function()
+		table.insert(glHookLog, "on")
+	end)
+	glSig:onUnobserved(function()
+		table.insert(glHookLog, "off")
+	end)
+
+	-- Build two chains so combining them triggers subscribe + raise inside goLiveIter
+	local aChain: any = trackNode(Flux.computed(function()
+		return glSig()
+	end))
+	for _ = 2, 134 do
+		local prev = aChain
+		aChain = trackNode(Flux.computed(function()
+			return prev() + 1
+		end))
+	end
+	local bChain: any = trackNode(Flux.computed(function()
+		return glSig2()
+	end))
+	for _ = 2, 10 do
+		local prev = bChain
+		bChain = trackNode(Flux.computed(function()
+			return prev() + 1
+		end))
+	end
+	-- Multi-source dead computed combining bChain (low) then aChain (tall -> triggers sh >= p[HEIGHT] height raise!)
+	local combo = trackNode(Flux.computed(function()
+		return bChain() + aChain()
+	end))
+	local glCur: any = combo
+	for _ = 1, 5 do
+		local prev = glCur
+		glCur = trackNode(Flux.computed(function()
+			return prev() + 1
+		end))
+	end
+	expect(not Graph.isObserved(glSig) and #glHookLog == 0, "goLiveIter initially dead")
+	local glSeen = 0
+	local glEff = trackNode(Flux.effect(function()
+		glSeen = glCur()
+	end))
+	flush()
+	expect(
+		Graph.isObserved(glSig) and #glHookLog == 1 and glHookLog[1] == "on" and glSeen == (3 + 9) + (7 + 133) + 5,
+		"goLiveIter subscribed deep DAG, fired hook, and raised height"
+	)
+	glEff:Destroy()
+	expect(
+		not Graph.isObserved(glSig) and #glHookLog == 2 and glHookLog[2] == "off",
+		"goDeadIter unsubscribed deep DAG and fired unobserved hook"
+	)
+end)
