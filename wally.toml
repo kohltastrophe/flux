@@ -2,7 +2,7 @@
 name = "kohltastrophe/flux"
 description = "Reactive UI library for Luau."
 authors = ["Kohl <hi@kohl.gg>"]
-version = "0.5.1"
+version = "0.5.2"
 license = "MIT"
 registry = "https://github.com/UpliftGames/wally-index"
 realm = "shared"

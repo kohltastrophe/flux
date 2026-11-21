@@ -17,7 +17,7 @@ Add Flux to `[dependencies]` in `wally.toml` and run `wally install`:
 
 ```toml
 [dependencies]
-Flux = "kohltastrophe/flux@0.5.1"
+Flux = "kohltastrophe/flux@0.5.2"
 ```
 
 Flux installs as a `shared` dependency in `Packages`, available to both client and server scripts.
